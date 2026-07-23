@@ -151,7 +151,10 @@ export function Onboarding() {
         setBusy(false);
         return;
       }
-      // Project (and, ideally, the first run) now exist. Reveal the dashboard.
+      // The org (and, ideally, its first run) now exist and it's the active
+      // one. Land on the overview whether we came from first-run onboarding
+      // or from "New organization".
+      router.push("/dashboard");
       router.refresh();
     } catch {
       setError("Network error while starting your first search.");

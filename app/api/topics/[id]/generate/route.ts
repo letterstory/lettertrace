@@ -59,7 +59,7 @@ export async function POST(
   if (key.source === "exhausted") {
     return NextResponse.json(
       {
-        error: `You've used all ${key.limit?.toLocaleString()} free trial tokens. Add your own ${providerLabel} key in Settings to keep generating.`,
+        error: `You've used all ${key.limit ?? 0} free runs. Add your own ${providerLabel} key in Settings to keep generating.`,
         trialExhausted: true,
       },
       { status: 402 },

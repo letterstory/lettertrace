@@ -5,11 +5,47 @@ import type { Project, Provider, ProviderKeyPublic } from "@/lib/types";
 // Server-side data helpers shared across pages and route handlers.
 // All expect a Supabase client already scoped to the request (RLS).
 
-/** The user's active project (the earliest one they created), or null. */
+/** All of the user's projects (organizations), oldest first. */
+export async function getProjects(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<Project[]> {
+  const { data } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  return (data as Project[] | null) ?? [];
+}
+
+/**
+ * The user's active project (organization): the one selected via the org
+ * switcher (profiles.active_project_id), falling back to the earliest project
+ * they created. Null when they have no projects yet.
+ */
 export async function getProject(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project | null> {
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("active_project_id")
+    .eq("id", userId)
+    .maybeSingle();
+  const activeId = (profile as { active_project_id?: string | null } | null)
+    ?.active_project_id;
+
+  if (activeId) {
+    const { data } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", activeId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (data) return data as Project;
+    // Stale pointer (project deleted / not the user's): fall through.
+  }
+
   const { data } = await supabase
     .from("projects")
     .select("*")
@@ -18,6 +54,18 @@ export async function getProject(
     .limit(1)
     .maybeSingle();
   return (data as Project | null) ?? null;
+}
+
+/** Point the dashboard at another of the user's organizations. */
+export async function setActiveProject(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+): Promise<void> {
+  await supabase
+    .from("profiles")
+    .update({ active_project_id: projectId })
+    .eq("id", userId);
 }
 
 /** Safe (no ciphertext) list of the user's stored provider keys. */

@@ -51,10 +51,10 @@ export default async function SettingsPage() {
               <Building2 className="h-5 w-5" />
             </span>
             <div>
-              <h3 className="text-lg font-semibold text-ink">Brand &amp; project</h3>
+              <h3 className="text-lg font-semibold text-ink">Organization</h3>
               <p className="mt-1 text-sm text-ink-faint">
                 {project
-                  ? "Tune how we recognize your brand across AI answers."
+                  ? `Settings for ${project.brand_name}, the organization selected in the sidebar. Tune how we recognize this brand across AI answers.`
                   : "Fill this in to get started, it powers prompt generation and mention detection."}
               </p>
             </div>

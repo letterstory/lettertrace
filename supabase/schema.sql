@@ -50,6 +50,23 @@ as $$
     returning trial_tokens_used;
 $$;
 
+-- Free-trial gating is per RUN: monitoring runs executed on the operator's
+-- shared keys before the user brings their own (tokens above are still
+-- recorded so the operator can watch spend). Safe to re-run.
+alter table public.profiles
+  add column if not exists trial_runs_used integer not null default 0;
+
+create or replace function public.increment_trial_runs()
+returns integer
+language sql
+security definer set search_path = public
+as $$
+  update public.profiles
+    set trial_runs_used = trial_runs_used + 1
+    where id = auth.uid()
+    returning trial_runs_used;
+$$;
+
 -- ---------- provider_keys (BYOK, encrypted) -------------------------
 create table if not exists public.provider_keys (
   id uuid primary key default gen_random_uuid(),
@@ -78,6 +95,12 @@ create table if not exists public.projects (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Multi-org: which of the user's projects (organizations) the dashboard is
+-- currently showing. Falls back to the earliest project when unset. Safe to
+-- re-run; lives here because it references projects, created just above.
+alter table public.profiles
+  add column if not exists active_project_id uuid references public.projects (id) on delete set null;
 
 -- ---------- competitors ----------------------------------------------
 create table if not exists public.competitors (
