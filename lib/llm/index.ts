@@ -295,6 +295,96 @@ Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company
   }
 }
 
+const COMPETITOR_SYSTEM = `You identify direct competitors of a company for brand monitoring. You act as a strict judge: only name real companies/products you are confident exist and genuinely compete for the same buyers in the same category. Prefer well-known, currently active competitors over obscure or defunct ones.
+
+Rules:
+- Never include the company itself or anything on the already-tracked list.
+- "aliases": other names an AI assistant's answer might use for it (short name, product name, former name). Empty array if none.
+- "domain": its primary website domain, lowercase, no protocol/path. null if unsure.
+- "reason": one short sentence on why it is a direct competitor.
+- Fewer, correct suggestions beat a padded list. Return ONLY JSON.`;
+
+export interface CompetitorSuggestion {
+  name: string;
+  domain: string | null;
+  aliases: string[];
+  reason: string;
+}
+
+/**
+ * Suggest direct competitors for the monitored brand. Today the model proposes
+ * candidates from its own knowledge; when `candidates` is provided (e.g. from a
+ * search provider like Exa / you.com, planned) the model instead judges that
+ * list and keeps only genuine direct competitors.
+ */
+export async function suggestCompetitors(
+  opts: BaseCall & {
+    brandName: string;
+    brandDomain?: string | null;
+    description?: string | null;
+    topics: string[];
+    existing: string[];
+    count: number;
+    candidates?: string[];
+  },
+): Promise<{ suggestions: CompetitorSuggestion[]; tokens: number }> {
+  const lines = [
+    `Company: ${opts.brandName}${opts.brandDomain ? ` (${opts.brandDomain})` : ""}`,
+  ];
+  if (opts.description) lines.push(`What it does: ${opts.description}`);
+  if (opts.topics.length) lines.push(`Topics being monitored: ${opts.topics.join("; ")}`);
+  if (opts.existing.length) lines.push(`Already tracked (exclude these): ${opts.existing.join("; ")}`);
+  if (opts.candidates?.length) {
+    lines.push(
+      `Candidate companies found by search. Judge ONLY these; keep the genuine direct competitors and drop the rest:\n${opts.candidates
+        .map((c) => `- ${c}`)
+        .join("\n")}`,
+    );
+  } else {
+    lines.push(`Propose up to ${opts.count} direct competitors.`);
+  }
+  lines.push(
+    `Return a JSON object: { "competitors": [ { "name": string, "domain": string|null, "aliases": string[], "reason": string } ] }`,
+  );
+  const user = lines.join("\n\n");
+
+  const res =
+    opts.provider === "anthropic"
+      ? await anthropicChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
+      : await openaiChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
+
+  try {
+    let parsed: unknown = extractJson(res.text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      parsed = (parsed as { competitors?: unknown }).competitors ?? [];
+    }
+    const arr = Array.isArray(parsed) ? parsed : [];
+    const suggestions: CompetitorSuggestion[] = [];
+    for (const item of arr) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const name = typeof o.name === "string" ? o.name.trim() : "";
+      if (!name) continue;
+      suggestions.push({
+        name,
+        domain:
+          typeof o.domain === "string" && o.domain.trim().length > 0
+            ? o.domain.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0]
+            : null,
+        aliases: Array.isArray(o.aliases)
+          ? o.aliases
+              .map((a) => (typeof a === "string" ? a.trim() : ""))
+              .filter((a) => a.length > 0)
+          : [],
+        reason: typeof o.reason === "string" ? o.reason.trim() : "",
+      });
+    }
+    return { suggestions: suggestions.slice(0, opts.count), tokens: res.tokens };
+  } catch {
+    return { suggestions: [], tokens: res.tokens };
+  }
+}
+
 export function humanError(err: unknown): string {
   if (err instanceof Anthropic.APIError || err instanceof OpenAI.APIError) {
     if (err.status === 401) return "Invalid API key.";
