@@ -59,6 +59,34 @@
   }
 }
 
+/* Skeleton shimmer: warm ink-tint base with a soft light sweep. Rounded
+   corners come from the element's own radius (overflow hidden clips the sweep). */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(26, 25, 23, 0.05);
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.5) 45%,
+    rgba(255, 255, 255, 0.65) 50%,
+    rgba(255, 255, 255, 0.5) 55%,
+    transparent 100%
+  );
+  animation: shimmer-sweep 1.8s ease-in-out infinite;
+}
+@keyframes shimmer-sweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 /* Recharts: keep tooltips/axes on-brand. */
 .recharts-cartesian-axis-tick-value {
   fill: #7c786f;

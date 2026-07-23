@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 // dashboard bundle so first paint isn't blocked on chart code.
 
 function ChartSkeleton({ height }: { height: number }) {
-  return <div className="animate-pulse rounded-2xl bg-ink/[0.05]" style={{ height }} aria-hidden />;
+  return <div className="shimmer rounded-2xl" style={{ height }} aria-hidden />;
 }
 
 export const TrendChart = dynamic(() => import("./charts").then((m) => m.TrendChart), {
