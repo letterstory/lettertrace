@@ -80,7 +80,13 @@ openssl rand -hex 32      # -> CRON_SECRET
 
 ### 4. Install & run
 
+Use **Node 22 LTS** (see [`.nvmrc`](./.nvmrc)). Node 23+ has an `undici`
+regression that intermittently drops provider connections mid-response
+("Premature close"). With [nvm](https://github.com/nvm-sh/nvm):
+
 ```bash
+nvm install   # picks up .nvmrc (Node 22)
+nvm use
 npm install
 npm run dev
 ```
