@@ -227,8 +227,8 @@ async function anthropicWebSearch(
 }
 
 // OpenAI native web search via the Responses API. Uses raw fetch so it doesn't
-// depend on a newer SDK; retries a couple of transient failures. NOTE: not yet
-// live-verified (the trial OpenAI key was out of quota during development).
+// depend on a newer SDK; retries a couple of transient failures. The browse is
+// forced via tool_choice (see below) — verified live for gpt-4o / gpt-4o-mini.
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -243,6 +243,9 @@ async function openaiWebSearch(
         body: JSON.stringify({
           model,
           tools: [{ type: "web_search_preview" }],
+          // Force the browse; left to choose, the model often answers from
+          // memory and cites nothing.
+          tool_choice: { type: "web_search_preview" },
           input: prompt,
           max_output_tokens: ANSWER_MAX_TOKENS,
         }),
