@@ -1,10 +1,13 @@
+import { cache } from "react";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 // Server Supabase client bound to the request cookies (respects RLS as the
 // signed-in user). Use inside Server Components, Route Handlers, Server Actions.
-export function createClient() {
+// Wrapped in React cache() so the layout and page of one request share a single
+// client instance — which also lets the cached data helpers dedupe their reads.
+export const createClient = cache(function createClient() {
   const cookieStore = cookies();
 
   return createServerClient(
@@ -28,7 +31,7 @@ export function createClient() {
       },
     },
   );
-}
+});
 
 // Service-role client that bypasses RLS. Only for trusted server contexts such
 // as the cron endpoint, which must enumerate every user's due projects.
@@ -47,11 +50,11 @@ export function createServiceClient() {
   );
 }
 
-// Convenience: the signed-in user (or null).
-export async function getUser() {
+// Convenience: the signed-in user (or null). Deduped per request.
+export const getUser = cache(async function getUser() {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   return user;
-}
+});

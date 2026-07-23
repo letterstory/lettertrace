@@ -1,12 +1,15 @@
+import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret } from "@/lib/crypto";
 import type { Project, Provider, ProviderKeyPublic } from "@/lib/types";
 
 // Server-side data helpers shared across pages and route handlers.
 // All expect a Supabase client already scoped to the request (RLS).
+// Read helpers are wrapped in React cache() so the layout and page of a single
+// request (which pass the same cached client) each hit the database only once.
 
 /** All of the user's projects (organizations), oldest first. */
-export async function getProjects(
+export const getProjects = cache(async function getProjects(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project[]> {
@@ -16,14 +19,14 @@ export async function getProjects(
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
   return (data as Project[] | null) ?? [];
-}
+});
 
 /**
  * The user's active project (organization): the one selected via the org
  * switcher (profiles.active_project_id), falling back to the earliest project
  * they created. Null when they have no projects yet.
  */
-export async function getProject(
+export const getProject = cache(async function getProject(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project | null> {
@@ -54,7 +57,7 @@ export async function getProject(
     .limit(1)
     .maybeSingle();
   return (data as Project | null) ?? null;
-}
+});
 
 /** Point the dashboard at another of the user's organizations. */
 export async function setActiveProject(
@@ -69,7 +72,7 @@ export async function setActiveProject(
 }
 
 /** Safe (no ciphertext) list of the user's stored provider keys. */
-export async function getProviderKeysPublic(
+export const getProviderKeysPublic = cache(async function getProviderKeysPublic(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<ProviderKeyPublic[]> {
@@ -79,7 +82,7 @@ export async function getProviderKeysPublic(
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
   return (data as ProviderKeyPublic[] | null) ?? [];
-}
+});
 
 /** Which providers the user has a key for. */
 export async function getConfiguredProviders(

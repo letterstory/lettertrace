@@ -30,9 +30,11 @@ export default async function DashboardLayout({
   // shared keys (no own key for their default provider). Metered in free runs.
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled()) {
-    const providers = await getConfiguredProviders(supabase, user.id);
+    const [providers, used] = await Promise.all([
+      getConfiguredProviders(supabase, user.id),
+      getTrialRunsUsed(supabase, user.id),
+    ]);
     if (!providers.includes(project.default_provider)) {
-      const used = await getTrialRunsUsed(supabase, user.id);
       const limit = trialRunLimit();
       trial = { used, limit, exhausted: used >= limit };
     }
