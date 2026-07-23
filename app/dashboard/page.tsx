@@ -220,21 +220,24 @@ export default async function DashboardPage() {
   const latestRun = runs[0];
 
   // One batched fetch covers the latest run AND the 10-run trend: all mentions
-  // and responses for those runs in two IN queries, grouped in memory. This
-  // replaces ~2 queries per historical run (~20+ round trips).
+  // for those runs in a single IN query, grouped in memory, replacing ~2
+  // queries per historical run. Per-run answer counts come straight from
+  // runs.completed_count (set by the engine), so no response rows are fetched
+  // for counting — responses are only read for the latest run's topic split.
   const trendRuns = runs.slice(0, 10);
   const trendIds = trendRuns.map((r) => r.id);
 
-  const [mentionsResult, responsesResult, topicsList] = await Promise.all([
+  const [mentionsResult, latestResponsesResult, topicsList] = await Promise.all([
+    // NOTE: capped at 1000 rows by PostgREST; fine for 10 runs of mention rows
+    // (only detected entities produce rows). Revisit if trend depth grows.
     supabase.from("mentions").select("*").in("run_id", trendIds),
-    supabase.from("responses").select("id, run_id, topic_id").in("run_id", trendIds),
+    supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
     supabase.from("topics").select("*").eq("project_id", project.id),
   ]);
 
   const allMentions = (mentionsResult.data as Mention[] | null) ?? [];
-  const allResponses =
-    (responsesResult.data as { id: string; run_id: string; topic_id: string | null }[] | null) ??
-    [];
+  const latestResponses =
+    (latestResponsesResult.data as { topic_id: string | null }[] | null) ?? [];
 
   const mentionsByRun = new Map<string, Mention[]>();
   for (const m of allMentions) {
@@ -242,13 +245,12 @@ export default async function DashboardPage() {
     list.push(m);
     mentionsByRun.set(m.run_id, list);
   }
-  const responseCountByRun = new Map<string, number>();
-  for (const r of allResponses) {
-    responseCountByRun.set(r.run_id, (responseCountByRun.get(r.run_id) ?? 0) + 1);
-  }
+  const responseCountByRun = new Map<string, number>(
+    trendRuns.map((r) => [r.id, r.completed_count]),
+  );
 
   const latestMentions = mentionsByRun.get(latestRun.id) ?? [];
-  const totalResponses = responseCountByRun.get(latestRun.id) ?? 0;
+  const totalResponses = latestRun.completed_count;
 
   const stats = computeEntityStats(latestMentions, totalResponses);
   const brand = stats.find((s) => s.type === "brand");
@@ -291,8 +293,7 @@ export default async function DashboardPage() {
 
   // Per-topic breakdown (latest run only).
   const responsesByTopic = new Map<string | null, number>();
-  for (const row of allResponses) {
-    if (row.run_id !== latestRun.id) continue;
+  for (const row of latestResponses) {
     responsesByTopic.set(row.topic_id, (responsesByTopic.get(row.topic_id) ?? 0) + 1);
   }
   const topicStats = computeTopicStats(latestMentions, responsesByTopic);
