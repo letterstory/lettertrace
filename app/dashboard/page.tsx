@@ -17,7 +17,7 @@ import {
   SectionHeading,
   StatCard,
 } from "@/components/ui";
-import { ShareBars, SentimentDonut, TrendChart } from "@/components/dashboard/charts";
+import { ShareBars, SentimentDonut, TrendChart } from "@/components/dashboard/charts-lazy";
 import { Onboarding } from "./onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { getConfiguredProviders, getProject } from "@/lib/data";
@@ -219,45 +219,58 @@ export default async function DashboardPage() {
   // --------------------------------------------------------------
   const latestRun = runs[0];
 
-  const [latestMentionsResult, latestResponsesResult, latestTopicResponses, topicsList] =
-    await Promise.all([
-      supabase.from("mentions").select("*").eq("run_id", latestRun.id),
-      supabase
-        .from("responses")
-        .select("id", { count: "exact", head: true })
-        .eq("run_id", latestRun.id),
-      supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
-      supabase.from("topics").select("*").eq("project_id", project.id),
-    ]);
+  // One batched fetch covers the latest run AND the 10-run trend: all mentions
+  // for those runs in a single IN query, grouped in memory, replacing ~2
+  // queries per historical run. Per-run answer counts come straight from
+  // runs.completed_count (set by the engine), so no response rows are fetched
+  // for counting — responses are only read for the latest run's topic split.
+  const trendRuns = runs.slice(0, 10);
+  const trendIds = trendRuns.map((r) => r.id);
 
-  const latestMentions = (latestMentionsResult.data as Mention[] | null) ?? [];
-  const totalResponses = latestResponsesResult.count ?? 0;
+  const [mentionsResult, latestResponsesResult, topicsList] = await Promise.all([
+    // NOTE: capped at 1000 rows by PostgREST; fine for 10 runs of mention rows
+    // (only detected entities produce rows). Revisit if trend depth grows.
+    supabase.from("mentions").select("*").in("run_id", trendIds),
+    supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
+    supabase.from("topics").select("*").eq("project_id", project.id),
+  ]);
+
+  const allMentions = (mentionsResult.data as Mention[] | null) ?? [];
+  const latestResponses =
+    (latestResponsesResult.data as { topic_id: string | null }[] | null) ?? [];
+
+  const mentionsByRun = new Map<string, Mention[]>();
+  for (const m of allMentions) {
+    const list = mentionsByRun.get(m.run_id) ?? [];
+    list.push(m);
+    mentionsByRun.set(m.run_id, list);
+  }
+  const responseCountByRun = new Map<string, number>(
+    trendRuns.map((r) => [r.id, r.completed_count]),
+  );
+
+  const latestMentions = mentionsByRun.get(latestRun.id) ?? [];
+  const totalResponses = latestRun.completed_count;
 
   const stats = computeEntityStats(latestMentions, totalResponses);
   const brand = stats.find((s) => s.type === "brand");
   const summary = computeRunSummary(latestMentions, totalResponses);
 
   // Trend across the last 10 completed runs (chronological).
-  const trendRuns = runs.slice(0, 10).reverse();
-  const trendData = await Promise.all(
-    trendRuns.map(async (run) => {
-      const [mRes, rRes] = await Promise.all([
-        supabase.from("mentions").select("*").eq("run_id", run.id),
-        supabase
-          .from("responses")
-          .select("id", { count: "exact", head: true })
-          .eq("run_id", run.id),
-      ]);
-      const mentions = (mRes.data as Mention[] | null) ?? [];
-      const responses = rRes.count ?? 0;
-      const s = computeRunSummary(mentions, responses);
+  const trendData = trendRuns
+    .slice()
+    .reverse()
+    .map((run) => {
+      const s = computeRunSummary(
+        mentionsByRun.get(run.id) ?? [],
+        responseCountByRun.get(run.id) ?? 0,
+      );
       return {
         date: formatDate(run.created_at),
         visibility: Math.round(s.brandMentionRate * 100),
         share: Math.round(s.brandShareOfVoice * 100),
       };
-    }),
-  );
+    });
 
   // Share-of-voice leaderboard (brand + competitors, desc by share).
   const shareEntities: EntityStat[] = [...stats].sort(
@@ -278,10 +291,9 @@ export default async function DashboardPage() {
       ]
     : [];
 
-  // Per-topic breakdown.
+  // Per-topic breakdown (latest run only).
   const responsesByTopic = new Map<string | null, number>();
-  for (const row of (latestTopicResponses.data as { topic_id: string | null }[] | null) ??
-    []) {
+  for (const row of latestResponses) {
     responsesByTopic.set(row.topic_id, (responsesByTopic.get(row.topic_id) ?? 0) + 1);
   }
   const topicStats = computeTopicStats(latestMentions, responsesByTopic);

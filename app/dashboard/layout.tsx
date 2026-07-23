@@ -27,12 +27,15 @@ export default async function DashboardLayout({
   ]);
 
   // Trial banner state: only when a trial is offered and the user is relying on
-  // shared keys (no own key for their default provider). Metered in free runs.
+  // shared keys. Key resolution prefers the user's own key from EITHER
+  // provider, so any own key at all means they're never on the trial.
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled()) {
-    const providers = await getConfiguredProviders(supabase, user.id);
-    if (!providers.includes(project.default_provider)) {
-      const used = await getTrialRunsUsed(supabase, user.id);
+    const [providers, used] = await Promise.all([
+      getConfiguredProviders(supabase, user.id),
+      getTrialRunsUsed(supabase, user.id),
+    ]);
+    if (providers.length === 0) {
       const limit = trialRunLimit();
       trial = { used, limit, exhausted: used >= limit };
     }
