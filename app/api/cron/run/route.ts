@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { executeRun } from "@/lib/engine";
@@ -28,10 +29,16 @@ interface ProjectResult {
 
 // Scheduler entrypoint. Runs every due project. Supports POST (manual curl)
 // and GET (Vercel Cron, which sends the Authorization: Bearer $CRON_SECRET header).
+// Constant-time comparison so the secret can't be probed via response timing.
+function authorized(header: string | null, secret: string | undefined): boolean {
+  if (!header || !secret) return false;
+  const a = Buffer.from(header);
+  const b = Buffer.from(`Bearer ${secret}`);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 async function handle(request: Request) {
-  const auth = request.headers.get("authorization");
-  const secret = process.env.CRON_SECRET;
-  if (!secret || auth !== `Bearer ${secret}`) {
+  if (!authorized(request.headers.get("authorization"), process.env.CRON_SECRET)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

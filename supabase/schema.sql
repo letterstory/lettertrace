@@ -208,6 +208,15 @@ drop policy if exists "profiles_self" on public.profiles;
 create policy "profiles_self" on public.profiles
   for all using (id = auth.uid()) with check (id = auth.uid());
 
+-- Lock down direct writes to profiles: without this, a user could UPDATE (or
+-- delete + re-insert) their own row to reset trial_runs_used / trial_tokens_used
+-- and get unlimited free runs on the operator's keys. The trial counters may
+-- only move through the security-definer RPCs above (which run as the table
+-- owner and are unaffected), and the signup trigger likewise. The org switcher
+-- keeps the one column it legitimately writes. Safe to re-run.
+revoke insert, update, delete on table public.profiles from anon, authenticated;
+grant update (active_project_id) on table public.profiles to authenticated;
+
 -- provider_keys: owned by user.
 drop policy if exists "keys_owner" on public.provider_keys;
 create policy "keys_owner" on public.provider_keys
