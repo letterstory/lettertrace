@@ -48,17 +48,27 @@ export interface QueryResult extends ChatResult {
 // How many web searches a single monitored query may run.
 const WEB_SEARCH_MAX_USES = 5;
 
-// Pull the registrable host out of a URL, lowercased, no leading "www.".
-function domainOf(url: string): string {
+// Parse a citation URL, keeping only safe http(s) links (guards against a
+// model citing a javascript:/data: URL that would later render as an href).
+// Returns the cleaned url + its registrable host, or null to drop the source.
+export function safeSource(url: string, title: string | null, snippet: string | null): CitedSource | null {
+  let parsed: URL;
   try {
-    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+    parsed = new URL(url);
   } catch {
-    return "";
+    return null;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return {
+    url,
+    domain: parsed.hostname.replace(/^www\./i, "").toLowerCase(),
+    title,
+    snippet,
+  };
 }
 
 // Collapse cited sources to one row per URL, keeping the first title/snippet.
-function dedupeSources(raw: CitedSource[]): CitedSource[] {
+export function dedupeSources(raw: CitedSource[]): CitedSource[] {
   const seen = new Map<string, CitedSource>();
   for (const s of raw) {
     if (!s.url) continue;
@@ -199,31 +209,31 @@ async function anthropicWebSearch(
     content?: { url?: string; title?: string }[];
   };
   let text = "";
-  const raw: CitedSource[] = [];
+  const cited: CitedSource[] = [];
+  const retrieved: CitedSource[] = [];
   const blocks = (msg.content ?? []) as unknown as Block[];
   for (const block of blocks) {
     if (block.type === "text") {
       text += (text ? "\n" : "") + (block.text ?? "");
+      // Sources the answer actually cited — the primary signal.
       for (const c of block.citations ?? []) {
-        if (c.url) {
-          raw.push({
-            url: c.url,
-            domain: domainOf(c.url),
-            title: c.title ?? null,
-            snippet: c.cited_text ?? null,
-          });
-        }
+        const s = c.url ? safeSource(c.url, c.title ?? null, c.cited_text ?? null) : null;
+        if (s) cited.push(s);
       }
     } else if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
-      // Fallback: results retrieved even if not inline-cited.
+      // Retrieved but maybe not cited — used only as a fallback below.
       for (const r of block.content) {
-        if (r.url) raw.push({ url: r.url, domain: domainOf(r.url), title: r.title ?? null, snippet: null });
+        const s = r.url ? safeSource(r.url, r.title ?? null, null) : null;
+        if (s) retrieved.push(s);
       }
     }
   }
 
+  // Prefer inline citations (what the answer used); fall back to retrieved
+  // results only when the model searched but cited nothing inline.
+  const sources = dedupeSources(cited.length > 0 ? cited : retrieved);
   const tokens = (msg.usage?.input_tokens ?? 0) + (msg.usage?.output_tokens ?? 0);
-  return { text: text.trim(), tokens, sources: dedupeSources(raw) };
+  return { text: text.trim(), tokens, sources };
 }
 
 // OpenAI native web search via the Responses API. Uses raw fetch so it doesn't
@@ -267,7 +277,8 @@ async function openaiWebSearch(
         for (const c of item.content ?? []) {
           if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
           for (const a of c.annotations ?? []) {
-            if (a?.url) raw.push({ url: a.url, domain: domainOf(a.url), title: a.title ?? null, snippet: null });
+            const s = a?.url ? safeSource(a.url, a.title ?? null, null) : null;
+            if (s) raw.push(s);
           }
         }
       }

@@ -7,7 +7,7 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 const CONCURRENCY = 4;
 
 // The brand's registrable web host, e.g. "notion.so" from a messy brand_domain.
-function hostOf(domain: string | null): string {
+export function hostOf(domain: string | null): string {
   if (!domain) return "";
   return domain
     .replace(/^https?:\/\//i, "")
@@ -17,7 +17,7 @@ function hostOf(domain: string | null): string {
 }
 
 // A cited source is "owned" when its domain is, or is a subdomain of, the host.
-function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean {
+export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean {
   if (!ownedHost || !sourceDomain) return false;
   return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
 }
