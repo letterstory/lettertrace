@@ -149,7 +149,16 @@ export async function recordTrialUsage(
   await supabase.rpc("increment_trial_tokens", { amount: Math.round(tokens) });
 }
 
-/** Count one monitoring run against the caller's free-run allowance. */
-export async function recordTrialRun(supabase: SupabaseClient): Promise<void> {
-  await supabase.rpc("increment_trial_runs");
+/**
+ * Atomically take one free run if the caller is still under the allowance.
+ * Called BEFORE a trial run executes: a single UPDATE gates and counts in one
+ * step, so parallel requests can't all pass the check while the counter lags.
+ * Returns false when the allowance is spent (treat as exhausted).
+ */
+export async function consumeTrialRun(supabase: SupabaseClient): Promise<boolean> {
+  const { data, error } = await supabase.rpc("consume_trial_run", {
+    max_runs: trialRunLimit(),
+  });
+  if (error) return false;
+  return data === true;
 }

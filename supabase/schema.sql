@@ -67,6 +67,24 @@ as $$
     returning trial_runs_used;
 $$;
 
+-- Atomic check-and-consume: takes one free run IFF the caller is still under
+-- the limit, in a single UPDATE so parallel requests can't all slip past the
+-- gate. Returns whether a run was granted. Self-scoped via auth.uid(); calling
+-- it directly only ever spends the caller's own allowance.
+create or replace function public.consume_trial_run(max_runs integer)
+returns boolean
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+    set trial_runs_used = trial_runs_used + 1
+    where id = auth.uid()
+      and trial_runs_used < greatest(max_runs, 0);
+  return found;
+end;
+$$;
+
 -- ---------- provider_keys (BYOK, encrypted) -------------------------
 create table if not exists public.provider_keys (
   id uuid primary key default gen_random_uuid(),
