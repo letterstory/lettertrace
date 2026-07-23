@@ -5,18 +5,19 @@ import { defaultModelFor } from "@/lib/models";
 
 // ------------------------------------------------------------------
 // Free-trial layer. When the operator configures a shared (trial) key, users
-// who haven't added their own key may run against it until they cross a
-// CONFIGURABLE token threshold, after which they're prompted to bring their own
-// key to scale. With no trial keys set, the app is bring-your-own-key from the
-// start (the default).
+// who haven't added their own key get a CONFIGURABLE number of free monitoring
+// runs on it (default 5). After that, data collection stops until they bring
+// their own key. With no trial keys set, the app is bring-your-own-key from
+// the start (the default). Token usage is still recorded per user so the
+// operator can watch spend, but the gate is runs.
 // ------------------------------------------------------------------
 
-const DEFAULT_TRIAL_LIMIT = 100_000;
+const DEFAULT_TRIAL_RUN_LIMIT = 5;
 
-/** The configurable per-user trial token allowance (env: TRIAL_TOKEN_LIMIT). */
-export function trialTokenLimit(): number {
-  const raw = Number(process.env.TRIAL_TOKEN_LIMIT);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TRIAL_LIMIT;
+/** The configurable per-user free-run allowance (env: TRIAL_RUN_LIMIT). */
+export function trialRunLimit(): number {
+  const raw = Number(process.env.TRIAL_RUN_LIMIT);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TRIAL_RUN_LIMIT;
 }
 
 /** The operator's shared key for a provider, if configured. */
@@ -42,17 +43,17 @@ export function trialEnabled(): boolean {
   return Boolean(trialKeyFor("anthropic") || trialKeyFor("openai"));
 }
 
-/** How many trial tokens this user has already consumed. */
-export async function getTrialUsage(
+/** How many free trial runs this user has already consumed. */
+export async function getTrialRunsUsed(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<number> {
   const { data } = await supabase
     .from("profiles")
-    .select("trial_tokens_used")
+    .select("trial_runs_used")
     .eq("id", userId)
     .maybeSingle();
-  return Number((data as { trial_tokens_used?: number } | null)?.trial_tokens_used ?? 0);
+  return Number((data as { trial_runs_used?: number } | null)?.trial_runs_used ?? 0);
 }
 
 export type KeySource = "own" | "trial" | "none" | "exhausted";
@@ -62,8 +63,8 @@ export interface ResolvedKey {
   apiKey?: string;
   provider: Provider;
   model: string; // model to run with (own -> project model; trial -> trial override)
-  remaining?: number; // trial tokens left (for 'trial'/'exhausted')
-  limit?: number;
+  remaining?: number; // free runs left (for 'trial'/'exhausted')
+  limit?: number; // the free-run allowance
 }
 
 /** The provider new projects default to: one we can actually serve (has a trial key), else anthropic. */
@@ -80,11 +81,11 @@ const PROVIDER_ORDER: Record<Provider, Provider[]> = {
 
 /**
  * Resolve the best available key for a task, preferring `preferred` then falling
- * back to the other provider. Own key beats trial; trial requires being under the
- * token threshold. This is what lets users never pick a provider themselves.
+ * back to the other provider. Own key beats trial; trial requires free runs
+ * remaining. This is what lets users never pick a provider themselves.
  * - 'own'       the user's own key (unlimited by us)
- * - 'trial'     the operator's shared key, still under the token threshold
- * - 'exhausted' had trial access but crossed the threshold -> must add own key
+ * - 'trial'     the operator's shared key, free runs still remaining
+ * - 'exhausted' had trial access but used up their free runs -> must add own key
  * - 'none'      no own key and no trial configured -> must add own key
  */
 export async function resolveKey(
@@ -103,9 +104,9 @@ export async function resolveKey(
     if (own) return { source: "own", apiKey: own, provider: p, model: modelFor(p) };
   }
 
-  // 2. A trial key, if still under the token threshold.
-  const limit = trialTokenLimit();
-  const used = await getTrialUsage(supabase, userId);
+  // 2. A trial key, if free runs remain.
+  const limit = trialRunLimit();
+  const used = await getTrialRunsUsed(supabase, userId);
   let trialConfigured = false;
   for (const p of order) {
     const tk = trialKeyFor(p);
@@ -138,11 +139,17 @@ export async function resolveRunKey(
   return resolveKey(supabase, userId, project.default_provider, project.default_model);
 }
 
-/** Add consumed tokens to the caller's trial tally (atomic, self-scoped rpc). */
+/** Add consumed tokens to the caller's trial tally (atomic, self-scoped rpc).
+ * Recording only; the free tier is gated on runs, not tokens. */
 export async function recordTrialUsage(
   supabase: SupabaseClient,
   tokens: number,
 ): Promise<void> {
   if (!tokens || tokens <= 0) return;
   await supabase.rpc("increment_trial_tokens", { amount: Math.round(tokens) });
+}
+
+/** Count one monitoring run against the caller's free-run allowance. */
+export async function recordTrialRun(supabase: SupabaseClient): Promise<void> {
+  await supabase.rpc("increment_trial_runs");
 }

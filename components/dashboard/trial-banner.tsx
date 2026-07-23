@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 // Shown in the dashboard when a user is running on the operator's shared (trial)
 // keys instead of their own. Nudges them toward BYOK, and hard-stops the message
-// once they've crossed the configurable token threshold.
+// once their free runs are used up. `used`/`limit` are monitoring runs.
 export function TrialBanner({
   used,
   limit,
@@ -15,48 +15,74 @@ export function TrialBanner({
   exhausted: boolean;
 }) {
   const remaining = Math.max(0, limit - used);
-  const pctUsed = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+  // Optional walkthrough explaining the BYOK model, shown once the free runs
+  // are gone. Any embeddable player URL (e.g. a YouTube embed link).
+  const videoUrl = process.env.NEXT_PUBLIC_BYOK_VIDEO_URL;
 
   return (
     <div
       className={cn(
-        "mb-6 flex flex-col gap-3 rounded-2xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
+        "mb-6 rounded-2xl border px-5 py-4",
         exhausted ? "border-terracotta/30 bg-terracotta/[0.07]" : "border-teal/25 bg-teal/[0.06]",
       )}
     >
-      <div className="flex items-start gap-3">
-        <span
-          className={cn(
-            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-            exhausted ? "bg-terracotta/15 text-terracotta-dark" : "bg-teal/15 text-teal-900",
-          )}
-        >
-          {exhausted ? <KeyRound className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-        </span>
-        <div>
-          <p className="text-sm font-medium text-ink">
-            {exhausted ? "Free trial used up" : "You're on the free trial"}
-          </p>
-          <p className="mt-0.5 text-xs text-ink-faint">
-            {exhausted
-              ? "Add your own API key to keep running searches and generating variations."
-              : `Running on shared keys. ${remaining.toLocaleString()} of ${limit.toLocaleString()} trial tokens left. Add your own key to scale.`}
-          </p>
-          {!exhausted && (
-            <div className="mt-2 h-1.5 w-48 max-w-full overflow-hidden rounded-full bg-ink/[0.08]">
-              <div className="h-full rounded-full bg-teal" style={{ width: `${pctUsed}%` }} />
-            </div>
-          )}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span
+            className={cn(
+              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+              exhausted ? "bg-terracotta/15 text-terracotta-dark" : "bg-teal/15 text-teal-900",
+            )}
+          >
+            {exhausted ? <KeyRound className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+          </span>
+          <div>
+            <p className="text-sm font-medium text-ink">
+              {exhausted ? "Your free runs are used up" : "You're on the free trial"}
+            </p>
+            <p className="mt-0.5 text-xs text-ink-faint">
+              {exhausted
+                ? "Monitoring is paused. Add your own API key to keep collecting data."
+                : `Running on our keys, on the house. ${remaining} of ${limit} free ${
+                    limit === 1 ? "run" : "runs"
+                  } left, then you bring your own key.`}
+            </p>
+            {!exhausted && limit <= 12 && (
+              <div className="mt-2 flex items-center gap-1.5">
+                {Array.from({ length: limit }, (_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1.5 w-6 rounded-full",
+                      i < used ? "bg-teal" : "bg-ink/[0.08]",
+                    )}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+        <Button
+          href="/dashboard/settings"
+          size="sm"
+          variant={exhausted ? "primary" : "secondary"}
+          className="shrink-0"
+        >
+          Add your key
+        </Button>
       </div>
-      <Button
-        href="/dashboard/settings"
-        size="sm"
-        variant={exhausted ? "primary" : "secondary"}
-        className="shrink-0"
-      >
-        Add your key
-      </Button>
+
+      {exhausted && videoUrl && (
+        <div className="mt-4 overflow-hidden rounded-xl border border-ink/10">
+          <iframe
+            src={videoUrl}
+            title="Why you bring your own key"
+            className="aspect-video w-full"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      )}
     </div>
   );
 }

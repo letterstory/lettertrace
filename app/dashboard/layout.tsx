@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
 import { DashboardNav } from "@/components/dashboard/nav";
+import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { createClient } from "@/lib/supabase/server";
-import { getProject, getConfiguredProviders } from "@/lib/data";
-import { trialEnabled, trialTokenLimit, getTrialUsage } from "@/lib/trial";
+import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
+import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
 
 export const dynamic = "force-dynamic";
 
@@ -20,16 +21,19 @@ export default async function DashboardLayout({
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const project = await getProject(supabase, user.id);
+  const [project, projects] = await Promise.all([
+    getProject(supabase, user.id),
+    getProjects(supabase, user.id),
+  ]);
 
   // Trial banner state: only when a trial is offered and the user is relying on
-  // shared keys (no own key for their default provider).
+  // shared keys (no own key for their default provider). Metered in free runs.
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled()) {
     const providers = await getConfiguredProviders(supabase, user.id);
     if (!providers.includes(project.default_provider)) {
-      const used = await getTrialUsage(supabase, user.id);
-      const limit = trialTokenLimit();
+      const used = await getTrialRunsUsed(supabase, user.id);
+      const limit = trialRunLimit();
       trial = { used, limit, exhausted: used >= limit };
     }
   }
@@ -40,20 +44,20 @@ export default async function DashboardLayout({
         <div className="flex flex-col gap-6 px-5 py-6 md:h-full">
           <Logo />
 
-          <div className="rounded-2xl border border-ink/10 bg-paper-shade/50 px-4 py-3">
-            {project ? (
-              <>
-                <p className="truncate font-serif text-sm font-semibold text-ink">
-                  {project.brand_name}
-                </p>
-                <p className="mt-0.5 truncate text-xs text-ink-faint">
-                  {project.name}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm text-ink-faint">No project yet</p>
-            )}
-          </div>
+          {project ? (
+            <OrgSwitcher
+              orgs={projects.map((p) => ({
+                id: p.id,
+                name: p.name,
+                brandName: p.brand_name,
+              }))}
+              activeId={project.id}
+            />
+          ) : (
+            <div className="rounded-2xl border border-ink/10 bg-paper-shade/50 px-4 py-3">
+              <p className="text-sm text-ink-faint">No organization yet</p>
+            </div>
+          )}
 
           <DashboardNav />
 

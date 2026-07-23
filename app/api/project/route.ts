@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getProject } from "@/lib/data";
+import { getProject, setActiveProject } from "@/lib/data";
 import { isProvider, defaultModelFor } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
@@ -127,6 +127,7 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
     }
+    await setActiveProject(supabase, user.id, (data as { id: string }).id);
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

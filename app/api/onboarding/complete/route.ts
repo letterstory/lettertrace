@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getProject } from "@/lib/data";
+import { setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
-import { resolveRunKey, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
+import { resolveRunKey, recordTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
 import type { Project } from "@/lib/types";
 
@@ -29,19 +29,15 @@ function toStringArray(value: unknown): string[] {
 }
 
 // POST /api/onboarding/complete
-// Creates the project + topics + prompts, then immediately runs the first
-// monitor so the user lands on results. Returns { projectId, ran, runId }.
+// Creates an organization (project) + topics + prompts, makes it the active
+// one, then immediately runs the first monitor so the user lands on results.
+// Also used to add additional organizations. Returns { projectId, ran, runId }.
 export async function POST(request: Request) {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  // Never create a second project for a user.
-  if (await getProject(supabase, user.id)) {
-    return NextResponse.json({ error: "You already have a project." }, { status: 400 });
-  }
 
   let body: Record<string, unknown> = {};
   try {
@@ -105,6 +101,9 @@ export async function POST(request: Request) {
   }
   const project = projRow as Project;
 
+  // The freshly created organization becomes the one the dashboard shows.
+  await setActiveProject(supabase, user.id, project.id);
+
   // Persist topics + their prompts.
   for (const topic of topics) {
     const { data: topicRow } = await supabase
@@ -141,7 +140,10 @@ export async function POST(request: Request) {
       model: key.model,
       apiKey: key.apiKey,
     });
-    if (key.source === "trial") await recordTrialUsage(supabase, result.tokensUsed);
+    if (key.source === "trial") {
+      await recordTrialUsage(supabase, result.tokensUsed);
+      if (result.status === "completed") await recordTrialRun(supabase);
+    }
     return NextResponse.json({
       projectId: project.id,
       ran: true,

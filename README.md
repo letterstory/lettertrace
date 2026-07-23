@@ -17,13 +17,14 @@ Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps,
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
+- 🏢 **Multiple organizations**, one account can track many brands/domains and switch between them from the sidebar.
 - ⏱️ **Scheduled monitoring**, daily/weekly runs via a cron endpoint.
 
 ## Core concepts
 
 | Concept | What it is |
 |---|---|
-| **Project** | Your brand's workspace: brand name, aliases, domain, default model, schedule. |
+| **Organization (project)** | A brand's workspace: brand name, aliases, domain, default model, schedule. An account can have several, the sidebar selector switches the whole dashboard between them, and **＋ New organization** re-opens the setup wizard. |
 | **Competitors** | Brands you benchmark against (name + aliases). |
 | **Topics** | Subjects you want to monitor (e.g. "project management software"). |
 | **Prompts (variations)** | Natural questions generated for a topic, the queries actually sent to the model. |
@@ -109,17 +110,18 @@ The endpoint uses the Supabase **service role** to find due projects across all 
 
 ## Free trial (optional)
 
-By default Lettertrace is bring-your-own-key: a user must add a key before running anything. You can optionally let people try it on **your** shared keys first, then prompt them to add their own once they cross a configurable token threshold.
+By default Lettertrace is bring-your-own-key: a user must add a key before running anything. You can optionally let people try it on **your** shared keys first — a configurable number of free monitoring runs (default **5**) — then prompt them to add their own.
 
 Set in your environment:
 
 - `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
-- `TRIAL_TOKEN_LIMIT`: per-user token allowance before they must add their own key (default `100000`). **This is the configurable threshold.**
+- `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** Failed runs don't count against it.
 - `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
+- `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
-While a user is under the threshold and has no key of their own, runs and variation generation use the shared key, and their token usage is metered on `profiles.trial_tokens_used`. A banner in the dashboard shows how much of the trial is left; once it's used up they're blocked with a clear prompt to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
+While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
 
-> After upgrading, re-run `supabase/schema.sql`. It adds the `trial_tokens_used` column and the `increment_trial_tokens` function (safe to re-run).
+> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, and the multi-organization column `profiles.active_project_id` (all safe to re-run).
 
 ## Deployment
 
