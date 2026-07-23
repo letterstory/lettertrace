@@ -4,7 +4,7 @@ import { getProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveRunKey, recordTrialRun, recordTrialUsage } from "@/lib/trial";
+import { resolveRunKey, consumeTrialRun, recordTrialUsage } from "@/lib/trial";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -44,6 +44,19 @@ export async function POST() {
     );
   }
 
+  // Atomically consume a free run BEFORE executing, so concurrent requests
+  // can't all slip past the gate while the counter lags. A consumed run
+  // counts even if it later fails.
+  if (key.source === "trial" && !(await consumeTrialRun(supabase))) {
+    return NextResponse.json(
+      {
+        error: `You've used all ${key.limit ?? 0} free runs. Add your own ${providerLabel} key in Settings to keep monitoring.`,
+        trialExhausted: true,
+      },
+      { status: 402 },
+    );
+  }
+
   try {
     const result = await executeRun({
       supabase,
@@ -53,12 +66,9 @@ export async function POST() {
       apiKey: key.apiKey!,
     });
 
-    // Meter trial usage against the operator's shared key. Only a run that
-    // actually completed burns one of the free runs; tokens are recorded
-    // either way so the operator can watch spend.
+    // Record token spend against the operator's shared key for cost visibility.
     if (key.source === "trial") {
       await recordTrialUsage(supabase, result.tokensUsed);
-      if (result.status === "completed") await recordTrialRun(supabase);
     }
 
     return NextResponse.json({ ...result, keySource: key.source });

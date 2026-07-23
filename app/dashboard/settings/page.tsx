@@ -33,14 +33,15 @@ export default async function SettingsPage() {
               <KeyRound className="h-5 w-5" />
             </span>
             <div>
-              <h3 className="text-lg font-semibold text-ink">API keys</h3>
+              <h3 className="text-lg font-semibold text-ink">Your model keys</h3>
               <p className="mt-1 text-sm text-ink-faint">
-                Lettertrace never stores your keys in plaintext, they&apos;re
-                encrypted at rest and only used to run your monitoring.
+                Claude and ChatGPT are the assistants Lettertrace queries. Bring a
+                key for each one you want to monitor with, they&apos;re encrypted at
+                rest and never leave your server.
               </p>
             </div>
           </div>
-          <KeysManager keys={keys} />
+          <KeysManager keys={keys} defaultProvider={project?.default_provider} />
         </CardBody>
       </Card>
 

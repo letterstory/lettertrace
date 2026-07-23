@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
-import { resolveRunKey, recordTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
+import { resolveRunKey, consumeTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
 import type { Project } from "@/lib/types";
 
@@ -132,6 +132,15 @@ export async function POST(request: Request) {
     });
   }
 
+  // Atomically consume a free run before executing (see /api/runs).
+  if (key.source === "trial" && !(await consumeTrialRun(supabase))) {
+    return NextResponse.json({
+      projectId: project.id,
+      ran: false,
+      needsKey: "exhausted",
+    });
+  }
+
   try {
     const result = await executeRun({
       supabase,
@@ -142,7 +151,6 @@ export async function POST(request: Request) {
     });
     if (key.source === "trial") {
       await recordTrialUsage(supabase, result.tokensUsed);
-      if (result.status === "completed") await recordTrialRun(supabase);
     }
     return NextResponse.json({
       projectId: project.id,

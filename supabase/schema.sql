@@ -67,6 +67,24 @@ as $$
     returning trial_runs_used;
 $$;
 
+-- Atomic check-and-consume: takes one free run IFF the caller is still under
+-- the limit, in a single UPDATE so parallel requests can't all slip past the
+-- gate. Returns whether a run was granted. Self-scoped via auth.uid(); calling
+-- it directly only ever spends the caller's own allowance.
+create or replace function public.consume_trial_run(max_runs integer)
+returns boolean
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+    set trial_runs_used = trial_runs_used + 1
+    where id = auth.uid()
+      and trial_runs_used < greatest(max_runs, 0);
+  return found;
+end;
+$$;
+
 -- ---------- provider_keys (BYOK, encrypted) -------------------------
 create table if not exists public.provider_keys (
   id uuid primary key default gen_random_uuid(),
@@ -207,6 +225,54 @@ alter table public.mentions       enable row level security;
 drop policy if exists "profiles_self" on public.profiles;
 create policy "profiles_self" on public.profiles
   for all using (id = auth.uid()) with check (id = auth.uid());
+
+-- Lock down direct writes to profiles: without this, a user could UPDATE (or
+-- delete + re-insert) their own row to reset trial_runs_used / trial_tokens_used
+-- and get unlimited free runs on the operator's keys.
+--
+-- GRANT/REVOKE alone is NOT reliable here: Supabase re-grants table privileges
+-- to the `authenticated` role, so a REVOKE can silently be undone. The
+-- authoritative guard is a trigger that runs for every write and can't be
+-- re-granted around. We still narrow the grants as defence-in-depth.
+revoke insert, update, delete on table public.profiles from anon, authenticated;
+grant update (active_project_id) on table public.profiles to authenticated;
+
+-- Trigger guard. Runs as the invoker (NOT security definer), so current_user
+-- reflects who is really writing: 'authenticated'/'anon' for a client request,
+-- but the table owner for our security-definer functions (signup trigger + the
+-- trial RPCs), which therefore pass straight through. Clients may not delete a
+-- profile row or move the trial meters; everything else (e.g. active_project_id)
+-- is allowed. Safe to re-run.
+create or replace function public.guard_profiles()
+returns trigger
+language plpgsql
+as $$
+begin
+  -- Not a direct client session (security-definer RPC, service role, admin):
+  -- allow unchanged.
+  if current_user not in ('authenticated', 'anon') then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_op = 'DELETE' then
+    raise exception 'profiles rows cannot be deleted by clients';
+  end if;
+  if tg_op = 'INSERT' then
+    raise exception 'profiles rows are created by the signup trigger only';
+  end if;
+
+  -- UPDATE from a client: trial meters are immutable, force them back to the
+  -- stored values regardless of what was submitted.
+  new.trial_runs_used := old.trial_runs_used;
+  new.trial_tokens_used := old.trial_tokens_used;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_profiles_write on public.profiles;
+create trigger guard_profiles_write
+  before insert or update or delete on public.profiles
+  for each row execute function public.guard_profiles();
 
 -- provider_keys: owned by user.
 drop policy if exists "keys_owner" on public.provider_keys;

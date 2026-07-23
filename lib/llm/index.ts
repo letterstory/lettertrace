@@ -14,6 +14,12 @@ import type { Provider, Sentiment } from "@/lib/types";
 const ANSWER_MAX_TOKENS = 1200;
 const UTILITY_MAX_TOKENS = 1500;
 
+// Provider APIs occasionally drop a keep-alive connection mid-response
+// ("Premature close" / "socket hang up"), especially under Node's fetch. Both
+// SDKs retry such transient connection errors with backoff; we raise the count
+// above the default (2) and set an explicit ceiling so a call can't hang.
+const CLIENT_OPTS = { maxRetries: 4, timeout: 60_000 } as const;
+
 interface BaseCall {
   provider: Provider;
   model: string;
@@ -36,7 +42,7 @@ async function anthropicChat(
   user: string,
   maxTokens: number,
 ): Promise<ChatResult> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
   const msg = await client.messages.create({
     model,
     max_tokens: maxTokens,
@@ -60,7 +66,7 @@ async function openaiChat(
   maxTokens: number,
   json = false,
 ): Promise<ChatResult> {
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey, ...CLIENT_OPTS });
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: user });
@@ -386,12 +392,23 @@ export async function suggestCompetitors(
 }
 
 export function humanError(err: unknown): string {
+  // Transient connection drops (surface as APIConnectionError with no status)
+  // are worth a distinct, retry-friendly message rather than a raw SDK string.
+  if (err instanceof Anthropic.APIConnectionError || err instanceof OpenAI.APIConnectionError) {
+    return "Couldn't reach the AI provider (connection dropped). Please try again.";
+  }
   if (err instanceof Anthropic.APIError || err instanceof OpenAI.APIError) {
     if (err.status === 401) return "Invalid API key.";
     if (err.status === 429) return "Rate limited by the provider.";
     if (err.status === 403) return "This key lacks access to the requested model.";
+    if (err.status && err.status >= 500) return "The AI provider had a temporary error. Please try again.";
     return err.message || `Provider error (${err.status}).`;
   }
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    if (/premature close|socket hang up|ECONNRESET|terminated|fetch failed/i.test(err.message)) {
+      return "Couldn't reach the AI provider (connection dropped). Please try again.";
+    }
+    return err.message;
+  }
   return "Unknown error.";
 }

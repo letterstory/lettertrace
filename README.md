@@ -80,7 +80,13 @@ openssl rand -hex 32      # -> CRON_SECRET
 
 ### 4. Install & run
 
+Use **Node 22 LTS** (see [`.nvmrc`](./.nvmrc)). Node 23+ has an `undici`
+regression that intermittently drops provider connections mid-response
+("Premature close"). With [nvm](https://github.com/nvm-sh/nvm):
+
 ```bash
+nvm install   # picks up .nvmrc (Node 22)
+nvm use
 npm install
 npm run dev
 ```
@@ -115,7 +121,7 @@ By default Lettertrace is bring-your-own-key: a user must add a key before runni
 Set in your environment:
 
 - `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
-- `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** Failed runs don't count against it.
+- `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap).
 - `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
 - `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
