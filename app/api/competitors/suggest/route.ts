@@ -65,10 +65,14 @@ export async function POST() {
 
     if (key.source === "trial") await recordTrialUsage(supabase, tokens);
 
-    // Belt-and-braces: drop the brand itself and anything already tracked.
+    // Belt-and-braces: drop the brand itself and anything already tracked,
+    // including tracked competitors' aliases (e.g. "Monday" vs "Monday.com").
+    const competitorAliases = ((competitorRows ?? []) as Competitor[]).flatMap(
+      (c) => c.aliases,
+    );
     const taken = new Set(
-      [project.brand_name, ...project.brand_aliases, ...existing].map((n) =>
-        n.trim().toLowerCase(),
+      [project.brand_name, ...project.brand_aliases, ...existing, ...competitorAliases].map(
+        (n) => n.trim().toLowerCase(),
       ),
     );
     const fresh = suggestions.filter((s) => !taken.has(s.name.trim().toLowerCase()));
