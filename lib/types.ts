@@ -49,6 +49,7 @@ export interface Project {
   default_provider: Provider;
   default_model: string;
   schedule: Schedule;
+  use_web_search: boolean;
   last_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -104,6 +105,22 @@ export interface Response {
   provider: Provider;
   model: string;
   response_text: string;
+  created_at: string;
+}
+
+// A web source the model cited while answering a monitored prompt (native
+// provider web search). `is_owned` marks sources on the brand's own domain, so
+// you can see when your site influences an answer even without a mention.
+export interface Source {
+  id: string;
+  response_id: string;
+  run_id: string;
+  project_id: string;
+  url: string;
+  domain: string;
+  title: string | null;
+  snippet: string | null;
+  is_owned: boolean;
   created_at: string;
 }
 

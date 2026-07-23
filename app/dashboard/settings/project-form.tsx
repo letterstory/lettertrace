@@ -23,6 +23,7 @@ export default function ProjectForm({ project }: { project: Project | null }) {
   const [brandDomain, setBrandDomain] = useState(project?.brand_domain ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
   const [schedule, setSchedule] = useState<Schedule>(project?.schedule ?? "off");
+  const [useWebSearch, setUseWebSearch] = useState(project?.use_web_search ?? true);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -49,6 +50,7 @@ export default function ProjectForm({ project }: { project: Project | null }) {
           brand_domain: brandDomain,
           description,
           schedule,
+          use_web_search: useWebSearch,
         }),
       });
       const data = await res.json();
@@ -156,6 +158,40 @@ export default function ProjectForm({ project }: { project: Project | null }) {
           placeholder="What does your brand do? This helps generate better monitoring prompts."
         />
       </div>
+
+      <label
+        htmlFor="p-websearch"
+        className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-ink/10 bg-paper-shade/40 p-4"
+      >
+        <span>
+          <span className="text-sm font-medium text-ink">Web search</span>
+          <span className="mt-0.5 block text-xs text-ink-faint">
+            Query the models with their native web search on and capture the sources they
+            cite. More realistic answers and source attribution; costs a bit more per run.
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          id="p-websearch"
+          aria-checked={useWebSearch}
+          onClick={() => {
+            setUseWebSearch((v) => !v);
+            setSaved(false);
+          }}
+          className={
+            "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition " +
+            (useWebSearch ? "bg-terracotta" : "bg-ink/15")
+          }
+        >
+          <span
+            className={
+              "inline-block h-4 w-4 transform rounded-full bg-white transition " +
+              (useWebSearch ? "translate-x-6" : "translate-x-1")
+            }
+          />
+        </button>
+      </label>
 
       {error && <p className="text-sm text-terracotta">{error}</p>}
 
