@@ -1,0 +1,156 @@
+<div align="center">
+
+<img src="./public/images/logo_black.png" alt="Lettertrace" width="320" />
+
+**Open-source, bring-your-own-key monitoring for how your brand shows up in AI assistant answers.**
+
+Track topics · auto-generate the questions people actually ask AI · watch trends over time · benchmark competitors' share of voice.
+
+</div>
+
+---
+
+Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
+
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI keys. They're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic) and ChatGPT (OpenAI). Add more providers easily.
+- 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
+- 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
+- ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
+- ⏱️ **Scheduled monitoring**, daily/weekly runs via a cron endpoint.
+
+## Core concepts
+
+| Concept | What it is |
+|---|---|
+| **Project** | Your brand's workspace: brand name, aliases, domain, default model, schedule. |
+| **Competitors** | Brands you benchmark against (name + aliases). |
+| **Topics** | Subjects you want to monitor (e.g. "project management software"). |
+| **Prompts (variations)** | Natural questions generated for a topic, the queries actually sent to the model. |
+| **Runs** | One execution: every active prompt → the model → detect mentions → store. |
+| **Mentions** | A detected reference to your brand/competitor in an answer, with count, prominence, sentiment, and whether it was recommended. |
+
+## How mention detection works
+
+For each answer the model returns, Lettertrace:
+
+1. **Deterministic detection**, matches your brand's and each competitor's name + aliases (word-boundary, case-insensitive), recording occurrence count and first position (prominence).
+2. **LLM enrichment**, for the entities that were mentioned, a structured call classifies **sentiment** and whether the answer **recommended** them.
+3. **Aggregation**, visibility (mention rate), **share of voice**, average prominence, and sentiment are computed per run and trended over time.
+
+## Tech stack
+
+- **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
+- **Supabase**, Postgres, Auth, and Row Level Security
+- **BYOK** provider keys encrypted with **AES-256-GCM** at rest
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) adapters
+
+## Getting started
+
+### 1. Create a Supabase project
+
+At [supabase.com](https://supabase.com), create a project. From **Settings → API** grab:
+
+- `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
+- `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (only needed for scheduled runs)
+
+### 2. Apply the database schema
+
+Open the Supabase **SQL Editor** and run the contents of [`supabase/schema.sql`](./supabase/schema.sql). It creates all tables, indexes, Row Level Security policies, and a trigger that auto-creates a profile on sign-up. It's safe to re-run.
+
+> **Email confirmation:** for the smoothest local experience, disable "Confirm email" under **Authentication → Providers → Email**, or confirm via the link (handled by `/auth/callback`).
+
+### 3. Configure environment
+
+```bash
+cp .env.example .env.local
+```
+
+Fill in Supabase values and generate secrets:
+
+```bash
+# 32-byte key that encrypts BYOK provider keys at rest
+openssl rand -base64 32   # -> ENCRYPTION_KEY
+
+# shared secret for the scheduled-run endpoint
+openssl rand -hex 32      # -> CRON_SECRET
+```
+
+### 4. Install & run
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000), create an account, and you'll land on the dashboard.
+
+### 5. First monitor
+
+1. **Settings** → add your Anthropic and/or OpenAI API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, default model).
+2. **Competitors** → add the brands you want to benchmark against.
+3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
+4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.
+
+## Scheduled monitoring
+
+Set a project's schedule to **Daily** or **Weekly** in Settings, then hit the cron endpoint on an interval:
+
+```bash
+curl -X POST https://your-app.com/api/cron/run \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+The endpoint uses the Supabase **service role** to find due projects across all users, decrypts each owner's key, and runs them. Only requests with the correct `CRON_SECRET` are accepted.
+
+- **Vercel:** [`vercel.json`](./vercel.json) registers a daily cron. Set `CRON_SECRET` in your Vercel env, Vercel automatically sends it as the `Authorization` bearer.
+- **Anything else:** a system crontab, GitHub Actions, or any scheduler that can send an authenticated HTTP request works.
+
+## Free trial (optional)
+
+By default Lettertrace is bring-your-own-key: a user must add a key before running anything. You can optionally let people try it on **your** shared keys first, then prompt them to add their own once they cross a configurable token threshold.
+
+Set in your environment:
+
+- `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
+- `TRIAL_TOKEN_LIMIT`: per-user token allowance before they must add their own key (default `100000`). **This is the configurable threshold.**
+- `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
+
+While a user is under the threshold and has no key of their own, runs and variation generation use the shared key, and their token usage is metered on `profiles.trial_tokens_used`. A banner in the dashboard shows how much of the trial is left; once it's used up they're blocked with a clear prompt to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
+
+> After upgrading, re-run `supabase/schema.sql`. It adds the `trial_tokens_used` column and the `increment_trial_tokens` function (safe to re-run).
+
+## Deployment
+
+Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env vars from `.env.example`, and deploy. Runs execute synchronously inside the API route, so for large prompt sets prefer a Node server or bump the function's `maxDuration`.
+
+## Security notes
+
+- Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to the browser (only a masked hint like `sk-ant-…4a9c`).
+- All data is isolated per user by **Postgres Row Level Security**. The service-role key is used only by the cron endpoint.
+- Nothing is sent to any third party except the AI providers **you** configure, using **your** keys.
+
+## Project structure
+
+```
+app/                     Next.js App Router
+  page.tsx               Landing page
+  login/                 Auth
+  dashboard/             Overview, topics, competitors, runs, settings
+  api/                   Route handlers (keys, project, topics, prompts, competitors, runs, cron)
+components/              UI primitives, logo, dashboard nav + charts
+lib/
+  supabase/              Server / browser / middleware clients
+  llm/                   Anthropic + OpenAI adapters (query, variations, sentiment)
+  engine.ts              Run orchestration (query → detect → analyze → store)
+  mentions.ts            Deterministic mention detection
+  metrics.ts             Visibility / share-of-voice / sentiment aggregation
+  crypto.ts              AES-256-GCM for BYOK keys
+  data.ts, types.ts, models.ts, utils.ts
+supabase/schema.sql      Postgres schema + RLS
+```
+
+## License
+
+[MIT](./LICENSE) © The Letter Company

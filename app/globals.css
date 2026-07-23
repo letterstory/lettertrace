@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-paper text-ink font-sans;
+  }
+
+  ::selection {
+    background-color: #a8f0dc;
+    color: #1a1917;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-serif;
+    letter-spacing: -0.015em;
+  }
+}
+
+@layer components {
+  /* Fine engineering grid, the light-mode take on phantom's dark canvas. */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(20, 20, 24, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(20, 20, 24, 0.05) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  .bg-dotted {
+    background-image: radial-gradient(rgba(20, 20, 24, 0.06) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Soft pastel glow blob for hero / CTA backgrounds. */
+  .glow-blob {
+    filter: blur(64px);
+    opacity: 0.55;
+  }
+
+  .rule {
+    @apply border-t border-ink/10;
+  }
+
+  /* Small mono label / eyebrow, e.g. "01 · TRACK". */
+  .mono-eyebrow {
+    @apply font-mono text-xs uppercase tracking-[0.2em] text-ink-faint;
+  }
+}
+
+/* Recharts: keep tooltips/axes on-brand. */
+.recharts-cartesian-axis-tick-value {
+  fill: #7c786f;
+  font-size: 12px;
+}
+.recharts-default-tooltip {
+  border-radius: 12px !important;
+  border: 1px solid rgba(20, 20, 24, 0.1) !important;
+  box-shadow: 0 8px 24px rgba(20, 20, 24, 0.08) !important;
+  font-family: var(--font-dm-sans), sans-serif !important;
+}
+.recharts-legend-item-text {
+  color: #45423c !important;
+  font-size: 13px;
+}

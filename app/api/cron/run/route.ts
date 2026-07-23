@@ -1,0 +1,101 @@
+import { NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { executeRun } from "@/lib/engine";
+import { decryptSecret } from "@/lib/crypto";
+import type { Project } from "@/lib/types";
+
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+function isDue(project: Project, now: number): boolean {
+  if (project.schedule === "off") return false;
+  if (!project.last_run_at) return true;
+  const last = new Date(project.last_run_at).getTime();
+  const interval = project.schedule === "weekly" ? WEEK_MS : DAY_MS;
+  return now - last >= interval;
+}
+
+interface ProjectResult {
+  projectId: string;
+  status: "completed" | "failed" | "skipped";
+  reason?: string;
+  runId?: string;
+  totalResponses?: number;
+}
+
+// Scheduler entrypoint. Runs every due project. Supports POST (manual curl)
+// and GET (Vercel Cron, which sends the Authorization: Bearer $CRON_SECRET header).
+async function handle(request: Request) {
+  const auth = request.headers.get("authorization");
+  const secret = process.env.CRON_SECRET;
+  if (!secret || auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const supabase = createServiceClient();
+
+  const { data: projectRows, error: projErr } = await supabase
+    .from("projects")
+    .select("*")
+    .neq("schedule", "off");
+
+  if (projErr) {
+    return NextResponse.json({ error: projErr.message }, { status: 500 });
+  }
+
+  const projects = (projectRows ?? []) as Project[];
+  const now = Date.now();
+  const results: ProjectResult[] = [];
+
+  for (const project of projects) {
+    if (!isDue(project, now)) continue;
+
+    try {
+      const { data: keyRow } = await supabase
+        .from("provider_keys")
+        .select("encrypted_key")
+        .eq("user_id", project.user_id)
+        .eq("provider", project.default_provider)
+        .maybeSingle();
+
+      if (!keyRow?.encrypted_key) {
+        results.push({ projectId: project.id, status: "skipped", reason: "no key" });
+        continue;
+      }
+
+      const apiKey = decryptSecret(keyRow.encrypted_key as string);
+      const result = await executeRun({
+        supabase,
+        project,
+        provider: project.default_provider,
+        model: project.default_model,
+        apiKey,
+      });
+      results.push({
+        projectId: project.id,
+        status: result.status,
+        runId: result.runId,
+        totalResponses: result.totalResponses,
+      });
+    } catch (e) {
+      results.push({
+        projectId: project.id,
+        status: "failed",
+        reason: e instanceof Error ? e.message : "unknown error",
+      });
+    }
+  }
+
+  return NextResponse.json({ processed: results });
+}
+
+export async function POST(request: Request) {
+  return handle(request);
+}
+
+export async function GET(request: Request) {
+  return handle(request);
+}
