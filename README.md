@@ -130,6 +130,44 @@ While a user has free runs left and no key of their own, monitoring runs and var
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, and the multi-organization column `profiles.active_project_id` (all safe to re-run).
 
+## Programmatic access (REST API + MCP)
+
+Create an API key in **Settings → API & MCP access** (shown once, stored hashed) and send it as a bearer token.
+
+**REST v1:**
+
+```bash
+# List your organizations
+curl https://your-app.com/api/v1/projects \
+  -H "Authorization: Bearer lt_live_..."
+
+# Recent runs for a project / trigger a run now
+curl https://your-app.com/api/v1/projects/<project-id>/runs \
+  -H "Authorization: Bearer lt_live_..."
+curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
+  -H "Authorization: Bearer lt_live_..."
+
+# Share-of-voice report for a run
+curl https://your-app.com/api/v1/runs/<run-id> \
+  -H "Authorization: Bearer lt_live_..."
+```
+
+**MCP:** Lettertrace exposes a [Model Context Protocol](https://modelcontextprotocol.io) server (Streamable HTTP) so Claude and other MCP clients can query your share-of-voice data conversationally:
+
+```bash
+claude mcp add --transport http lettertrace https://your-app.com/api/mcp/mcp \
+  -H "Authorization: Bearer lt_live_..."
+```
+
+Tools: `list_projects`, `list_runs`, `get_share_of_voice_report`, `trigger_run`.
+
+Notes:
+
+- API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only.
+- API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
+- Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
+- Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table (safe to re-run).
+
 ## Deployment
 
 Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env vars from `.env.example`, and deploy. Runs execute synchronously inside the API route, so for large prompt sets prefer a Node server or bump the function's `maxDuration`.
@@ -137,7 +175,8 @@ Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env v
 ## Security notes
 
 - Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to the browser (only a masked hint like `sk-ant-…4a9c`).
-- All data is isolated per user by **Postgres Row Level Security**. The service-role key is used only by the cron endpoint.
+- All data is isolated per user by **Postgres Row Level Security**. The service-role key is used only by the cron endpoint and the API-key-authenticated surface (`/api/v1`, `/api/mcp`), where every query is scoped to the key's owner.
+- Lettertrace API keys are stored as **SHA-256 hashes** (never recoverable); the plaintext is shown once at creation.
 - Nothing is sent to any third party except the AI providers **you** configure, using **your** keys.
 
 ## Project structure
