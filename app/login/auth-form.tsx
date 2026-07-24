@@ -74,7 +74,7 @@ export function AuthForm({ next, mode }: { next?: string; mode?: string }) {
   if (confirmSent) {
     return (
       <div className="space-y-5 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-mint/50 text-emerald-800">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-mint-tint text-mint-ink">
           <CheckCircle2 className="h-6 w-6" aria-hidden />
         </div>
         <div>

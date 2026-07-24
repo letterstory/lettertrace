@@ -202,7 +202,7 @@ export default function ProjectForm({ project }: { project: Project | null }) {
         </Button>
         {saved && !saving && (
           <span className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
-            <Check className="h-4 w-4 text-emerald-600" />
+            <Check className="h-4 w-4 text-teal-dark" />
             Saved
           </span>
         )}

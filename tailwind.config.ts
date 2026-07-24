@@ -11,39 +11,58 @@ const config: Config = {
       colors: {
         // Lettertrace palette, resampled directly from the brand mark:
         // cream #F5F4F0, aqua-mint petals #A8F0DC, terracotta petal #E07850.
+        //
+        // Every token resolves to a CSS variable (an "R G B" triple) so the
+        // whole UI can flip between the dark default and the light theme by
+        // swapping the variables in globals.css. `<alpha-value>` keeps Tailwind
+        // opacity modifiers (e.g. `text-ink/60`) working.
         ink: {
-          DEFAULT: "#1A1917", // warm near-black (wordmark)
-          soft: "#45423C",
-          faint: "#7C786F",
+          DEFAULT: "rgb(var(--c-ink) / <alpha-value>)", // primary text
+          soft: "rgb(var(--c-ink-soft) / <alpha-value>)",
+          faint: "rgb(var(--c-ink-faint) / <alpha-value>)",
         },
         paper: {
-          DEFAULT: "#F5F4F0", // sampled cream background
-          shade: "#EDEAE1",
-          deep: "#E1DDD1",
+          DEFAULT: "rgb(var(--c-paper) / <alpha-value>)", // page background
+          shade: "rgb(var(--c-paper-shade) / <alpha-value>)",
+          deep: "rgb(var(--c-paper-deep) / <alpha-value>)",
         },
-        surface: "#FFFFFF",
-        // Brand accent (the standout petal).
+        surface: "rgb(var(--c-surface) / <alpha-value>)", // cards / raised
+        // Brand accent (the standout petal). `dark` is the text-on-tint role:
+        // a deep shade in light mode, a light shade in dark mode.
         terracotta: {
-          DEFAULT: "#E07850",
-          dark: "#B9552F",
-          soft: "#F0AD90",
+          DEFAULT: "rgb(var(--c-terracotta) / <alpha-value>)",
+          dark: "rgb(var(--c-terracotta-ink) / <alpha-value>)",
+          soft: "rgb(var(--c-terracotta-soft) / <alpha-value>)",
         },
         // Deep aqua, the readable sibling of the mint petals.
         teal: {
-          DEFAULT: "#129C82",
-          dark: "#0C6E5B",
-          soft: "#74C9B7",
+          DEFAULT: "rgb(var(--c-teal) / <alpha-value>)",
+          dark: "rgb(var(--c-teal-ink) / <alpha-value>)",
+          soft: "rgb(var(--c-teal-soft) / <alpha-value>)",
         },
         // The mint petal itself (fills, positive sentiment, glows).
+        // `tint` is a solid chip background, `ink` the paired text role.
         mint: {
-          DEFAULT: "#A8F0DC",
-          bright: "#82EAD1",
-          soft: "#D6F6EE",
+          DEFAULT: "rgb(var(--c-mint) / <alpha-value>)",
+          bright: "rgb(var(--c-mint-bright) / <alpha-value>)",
+          soft: "rgb(var(--c-mint-soft) / <alpha-value>)",
+          tint: "rgb(var(--c-mint-tint) / <alpha-value>)",
+          ink: "rgb(var(--c-mint-ink) / <alpha-value>)",
         },
-        butter: "#E8C67C", // warm amber support
+        butter: {
+          DEFAULT: "rgb(var(--c-butter) / <alpha-value>)", // warm amber support
+          tint: "rgb(var(--c-butter-tint) / <alpha-value>)",
+          ink: "rgb(var(--c-butter-ink) / <alpha-value>)",
+        },
         sand: {
-          DEFAULT: "#CBB9A0", // warm neutral
-          soft: "#E4DAC9",
+          DEFAULT: "rgb(var(--c-sand) / <alpha-value>)", // warm neutral
+          soft: "rgb(var(--c-sand-soft) / <alpha-value>)",
+          tint: "rgb(var(--c-sand-tint) / <alpha-value>)",
+        },
+        // Always-dark code/terminal surface (kept dark in both themes).
+        terminal: {
+          DEFAULT: "rgb(var(--c-terminal) / <alpha-value>)",
+          ink: "rgb(var(--c-terminal-ink) / <alpha-value>)",
         },
       },
       fontFamily: {

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, DM_Mono, Ibarra_Real_Nova } from "next/font/google";
 import "./globals.css";
+import { ThemeProvider, themeInitScript } from "@/components/theme";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -60,8 +61,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${dmSans.variable} ${dmMono.variable} ${ibarra.variable}`}>
-      <body>{children}</body>
+    <html
+      lang="en"
+      data-theme="dark"
+      className={`${dmSans.variable} ${dmMono.variable} ${ibarra.variable}`}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Applies the saved theme before first paint to avoid a flash. */}
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }
