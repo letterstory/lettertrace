@@ -53,6 +53,22 @@ export function decryptSecret(payload: string): string {
   return plaintext.toString("utf8");
 }
 
+// ------------------------------------------------------------------
+// Lettertrace API keys (programmatic REST/MCP access). Unlike provider keys we
+// never need the plaintext back, so these are hashed, not encrypted: the
+// plaintext is shown once at creation and only the SHA-256 digest is stored.
+// ------------------------------------------------------------------
+
+const API_KEY_PREFIX = "lt_live_";
+
+export function generateApiKey(): string {
+  return `${API_KEY_PREFIX}${crypto.randomBytes(24).toString("base64url")}`;
+}
+
+export function hashApiKey(plaintext: string): string {
+  return crypto.createHash("sha256").update(plaintext.trim()).digest("hex");
+}
+
 // A non-reversible hint so users can recognize which key is stored, e.g. "sk-ant-…4a9c".
 export function keyHint(plaintext: string): string {
   const trimmed = plaintext.trim();
