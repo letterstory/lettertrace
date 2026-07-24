@@ -29,6 +29,16 @@ export interface ProviderKey {
   created_at: string;
 }
 
+// Lettertrace API key for programmatic access (REST v1 + MCP). Only the hash
+// is stored; this is the safe shape returned to the browser.
+export interface ApiKeyPublic {
+  id: string;
+  name: string;
+  key_hint: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
 // Safe shape returned to the browser (no ciphertext).
 export interface ProviderKeyPublic {
   id: string;

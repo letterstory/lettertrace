@@ -1,7 +1,8 @@
 import { cache } from "react";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+
+export { createServiceClient } from "./service";
 
 // Server Supabase client bound to the request cookies (respects RLS as the
 // signed-in user). Use inside Server Components, Route Handlers, Server Actions.
@@ -14,6 +15,14 @@ export const createClient = cache(function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: {
+        // Next.js patches global fetch and can serve repeated GETs from its
+        // data cache (observed with the service client — see lib/supabase/
+        // service.ts). Supabase queries must always hit Postgres; per-request
+        // dedupe is handled by React cache() in the data helpers instead.
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, cache: "no-store" }),
+      },
       cookies: {
         getAll() {
           return cookieStore.getAll();
@@ -32,23 +41,6 @@ export const createClient = cache(function createClient() {
     },
   );
 });
-
-// Service-role client that bypasses RLS. Only for trusted server contexts such
-// as the cron endpoint, which must enumerate every user's due projects.
-// Requires SUPABASE_SERVICE_ROLE_KEY.
-export function createServiceClient() {
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is not set. It is required for scheduled runs.",
-    );
-  }
-  return createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceKey,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-}
 
 // Convenience: the signed-in user (or null). Deduped per request.
 export const getUser = cache(async function getUser() {

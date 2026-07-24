@@ -348,3 +348,27 @@ create policy "sources_owner" on public.sources
 
 -- NOTE: the service-role key (used by /api/cron/run) bypasses RLS entirely,
 -- which is what lets the scheduler read due projects across all users.
+
+-- ---------- api_keys (programmatic access: REST v1 + MCP) ------------
+-- Lettertrace API keys let users query their own data (and trigger runs)
+-- from scripts and MCP clients. Only a SHA-256 hash is stored; the plaintext
+-- is shown once at creation. Lookups by hash happen through the service-role
+-- client (/api/v1 and /api/mcp requests carry no Supabase session).
+create table if not exists public.api_keys (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  name text not null,
+  key_hash text not null unique,
+  key_hint text not null,
+  last_used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists api_keys_user_idx on public.api_keys (user_id);
+
+alter table public.api_keys enable row level security;
+
+drop policy if exists "api_keys_owner" on public.api_keys;
+create policy "api_keys_owner" on public.api_keys
+  for all using (user_id = auth.uid())
+  with check (user_id = auth.uid());
