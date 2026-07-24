@@ -114,6 +114,11 @@ create table if not exists public.projects (
   updated_at timestamptz not null default now()
 );
 
+-- Query the models with their native web search on, so we can capture the
+-- sources they cite. Default on. Safe to re-run.
+alter table public.projects
+  add column if not exists use_web_search boolean not null default true;
+
 -- Multi-org: which of the user's projects (organizations) the dashboard is
 -- currently showing. Falls back to the earliest project when unset. Safe to
 -- re-run; lives here because it references projects, created just above.
@@ -196,6 +201,20 @@ create table if not exists public.mentions (
   created_at timestamptz not null default now()
 );
 
+-- ---------- sources (web citations behind an answer) -----------------
+create table if not exists public.sources (
+  id uuid primary key default gen_random_uuid(),
+  response_id uuid not null references public.responses (id) on delete cascade,
+  run_id uuid not null references public.runs (id) on delete cascade,
+  project_id uuid not null references public.projects (id) on delete cascade,
+  url text not null,
+  domain text not null,
+  title text,
+  snippet text,
+  is_owned boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
 -- ---------- indexes --------------------------------------------------
 create index if not exists idx_projects_user on public.projects (user_id);
 create index if not exists idx_competitors_project on public.competitors (project_id);
@@ -207,6 +226,9 @@ create index if not exists idx_responses_run on public.responses (run_id);
 create index if not exists idx_mentions_project on public.mentions (project_id);
 create index if not exists idx_mentions_run on public.mentions (run_id);
 create index if not exists idx_mentions_response on public.mentions (response_id);
+create index if not exists idx_sources_response on public.sources (response_id);
+create index if not exists idx_sources_run on public.sources (run_id);
+create index if not exists idx_sources_project on public.sources (project_id);
 
 -- ==================================================================
 -- Row Level Security
@@ -220,6 +242,7 @@ alter table public.prompts        enable row level security;
 alter table public.runs           enable row level security;
 alter table public.responses      enable row level security;
 alter table public.mentions       enable row level security;
+alter table public.sources        enable row level security;
 
 -- profiles: a user sees/edits only their own row.
 drop policy if exists "profiles_self" on public.profiles;
@@ -315,6 +338,11 @@ create policy "responses_owner" on public.responses
 
 drop policy if exists "mentions_owner" on public.mentions;
 create policy "mentions_owner" on public.mentions
+  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
+  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+
+drop policy if exists "sources_owner" on public.sources;
+create policy "sources_owner" on public.sources
   for all using (project_id in (select id from public.projects where user_id = auth.uid()))
   with check (project_id in (select id from public.projects where user_id = auth.uid()));
 

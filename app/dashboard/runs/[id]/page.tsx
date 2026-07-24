@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink, Globe } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { modelLabel } from "@/lib/models";
 import { pct, timeAgo } from "@/lib/utils";
 import { computeEntityStats, SENTIMENT_COLORS } from "@/lib/metrics";
-import type { Mention, Prompt, Response, Run, RunStatus, Sentiment } from "@/lib/types";
+import type { Mention, Prompt, Response, Run, RunStatus, Sentiment, Source } from "@/lib/types";
 import {
   Card,
   CardBody,
@@ -74,6 +74,12 @@ export default async function RunDetailPage({ params }: { params: { id: string }
     .eq("run_id", run.id);
   const mentions = (mentionRows ?? []) as Mention[];
 
+  const { data: sourceRows } = await supabase
+    .from("sources")
+    .select("*")
+    .eq("run_id", run.id);
+  const sources = (sourceRows ?? []) as Source[];
+
   const { data: promptRows } = await supabase
     .from("prompts")
     .select("*")
@@ -88,9 +94,20 @@ export default async function RunDetailPage({ params }: { params: { id: string }
     mentionsByResponse.set(m.response_id, list);
   }
 
+  const sourcesByResponse = new Map<string, Source[]>();
+  for (const s of sources) {
+    const list = sourcesByResponse.get(s.response_id) ?? [];
+    list.push(s);
+    sourcesByResponse.set(s.response_id, list);
+  }
+
   const stats = computeEntityStats(mentions, responses.length);
   const brand = stats.find((s) => s.type === "brand");
   const topCompetitor = stats.find((s) => s.type === "competitor");
+
+  // Was the brand's own site cited? A leading indicator independent of mentions.
+  const ownedResponseIds = new Set(sources.filter((s) => s.is_owned).map((s) => s.response_id));
+  const anySources = sources.length > 0;
 
   return (
     <div className="space-y-8">
@@ -136,6 +153,26 @@ export default async function RunDetailPage({ params }: { params: { id: string }
         />
       </div>
 
+      {anySources && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink/10 bg-paper-shade/50 px-5 py-4 text-sm">
+          <Globe className="h-4 w-4 text-ink-faint" />
+          {ownedResponseIds.size > 0 ? (
+            <p className="text-ink">
+              Your site was cited in{" "}
+              <span className="font-semibold text-terracotta-dark">
+                {ownedResponseIds.size} of {responses.length}
+              </span>{" "}
+              answers, even where you weren&apos;t named.
+            </p>
+          ) : (
+            <p className="text-ink-faint">
+              Your site wasn&apos;t cited as a source in this run. {sources.length} sources were
+              pulled across {responses.length} answers.
+            </p>
+          )}
+        </div>
+      )}
+
       {responses.length === 0 ? (
         <EmptyState
           title="No answers recorded"
@@ -147,6 +184,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
           {responses.map((response) => {
             const question = promptText.get(response.prompt_id) ?? "(prompt removed)";
             const rMentions = mentionsByResponse.get(response.id) ?? [];
+            const rSources = sourcesByResponse.get(response.id) ?? [];
             return (
               <Card key={response.id}>
                 <CardBody className="space-y-4">
@@ -186,6 +224,39 @@ export default async function RunDetailPage({ params }: { params: { id: string }
                       </div>
                     )}
                   </div>
+
+                  {rSources.length > 0 && (
+                    <div className="border-t border-ink/10 pt-4">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-faint">
+                        Sources cited ({rSources.length})
+                      </p>
+                      <ul className="space-y-1.5">
+                        {rSources.map((s) => (
+                          <li key={s.id} className="flex items-start gap-2 text-sm">
+                            <Globe
+                              className={
+                                "mt-0.5 h-3.5 w-3.5 shrink-0 " +
+                                (s.is_owned ? "text-terracotta" : "text-ink-faint")
+                              }
+                            />
+                            <span className="min-w-0">
+                              <a
+                                href={s.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 font-medium text-ink hover:text-terracotta-dark"
+                              >
+                                <span className="truncate">{s.title || s.domain}</span>
+                                <ExternalLink className="h-3 w-3 shrink-0 text-ink-faint" />
+                              </a>
+                              {s.is_owned && <Badge tone="terracotta">Your site</Badge>}
+                              <span className="ml-1 text-xs text-ink-faint">{s.domain}</span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </CardBody>
               </Card>
             );

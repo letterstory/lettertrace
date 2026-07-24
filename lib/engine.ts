@@ -6,6 +6,22 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 // Run at most this many queries at once to stay under provider rate limits.
 const CONCURRENCY = 4;
 
+// The brand's registrable web host, e.g. "notion.so" from a messy brand_domain.
+export function hostOf(domain: string | null): string {
+  if (!domain) return "";
+  return domain
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .replace(/^www\./i, "")
+    .toLowerCase();
+}
+
+// A cited source is "owned" when its domain is, or is a subdomain of, the host.
+export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean {
+  if (!ownedHost || !sourceDomain) return false;
+  return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
+}
+
 async function mapPool<T, R>(
   items: T[],
   limit: number,
@@ -87,6 +103,8 @@ export async function executeRun(params: {
   }
 
   const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domain);
+  // The brand's own web host, for flagging cited sources as "yours".
+  const ownedHost = hostOf(project.brand_domain);
   let processed = 0; // prompts attempted (success or failure)
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
@@ -94,11 +112,12 @@ export async function executeRun(params: {
 
   await mapPool(prompts, CONCURRENCY, async (prompt) => {
     try {
-      const { text: answer, tokens: qTokens } = await runQuery({
+      const { text: answer, tokens: qTokens, sources } = await runQuery({
         provider,
         model,
         apiKey,
         prompt: prompt.text,
+        webSearch: project.use_web_search,
       });
       tokensUsed += qTokens;
 
@@ -119,6 +138,21 @@ export async function executeRun(params: {
       if (!respRow) return;
       const responseId = respRow.id as string;
       succeeded++;
+
+      // Store the web sources the model cited (native web search).
+      if (sources.length > 0) {
+        const sourceRows = sources.map((s) => ({
+          response_id: responseId,
+          run_id: runId,
+          project_id: project.id,
+          url: s.url,
+          domain: s.domain,
+          title: s.title,
+          snippet: s.snippet,
+          is_owned: isOwnedDomain(s.domain, ownedHost),
+        }));
+        await supabase.from("sources").insert(sourceRows);
+      }
 
       // Deterministic detection: brand + each competitor.
       const detected: {

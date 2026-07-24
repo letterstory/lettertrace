@@ -83,6 +83,7 @@ export async function POST(request: Request) {
     brand_domain: toNullableString(b.brand_domain),
     description: toNullableString(b.description),
     schedule,
+    ...(typeof b.use_web_search === "boolean" ? { use_web_search: b.use_web_search } : {}),
   };
 
   try {

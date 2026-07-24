@@ -33,6 +33,52 @@ export interface ChatResult {
   tokens: number;
 }
 
+// A web source the model cited while answering (native provider web search).
+export interface CitedSource {
+  url: string;
+  domain: string;
+  title: string | null;
+  snippet: string | null;
+}
+
+export interface QueryResult extends ChatResult {
+  sources: CitedSource[];
+}
+
+// How many web searches a single monitored query may run.
+const WEB_SEARCH_MAX_USES = 5;
+
+// Parse a citation URL, keeping only safe http(s) links (guards against a
+// model citing a javascript:/data: URL that would later render as an href).
+// Returns the cleaned url + its registrable host, or null to drop the source.
+export function safeSource(url: string, title: string | null, snippet: string | null): CitedSource | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return {
+    url,
+    domain: parsed.hostname.replace(/^www\./i, "").toLowerCase(),
+    title,
+    snippet,
+  };
+}
+
+// Collapse cited sources to one row per URL, keeping the first title/snippet.
+export function dedupeSources(raw: CitedSource[]): CitedSource[] {
+  const seen = new Map<string, CitedSource>();
+  for (const s of raw) {
+    if (!s.url) continue;
+    const existing = seen.get(s.url);
+    if (!existing) seen.set(s.url, s);
+    else if (!existing.snippet && s.snippet) existing.snippet = s.snippet;
+  }
+  return Array.from(seen.values());
+}
+
 // --- Low-level chat helpers -----------------------------------------------
 
 async function anthropicChat(
@@ -113,12 +159,139 @@ export async function verifyKey(
   }
 }
 
-/** Ask the model a monitored question and return its natural answer + token usage. */
-export async function runQuery(opts: BaseCall & { prompt: string }): Promise<ChatResult> {
-  if (opts.provider === "anthropic") {
-    return anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS);
+/**
+ * Ask the model a monitored question and return its natural answer, token
+ * usage, and (when `webSearch` is on) the web sources it cited. Web search uses
+ * each provider's NATIVE browsing via the user's own key — no third-party
+ * search service — so it stays fully self-hostable.
+ */
+export async function runQuery(
+  opts: BaseCall & { prompt: string; webSearch?: boolean },
+): Promise<QueryResult> {
+  if (!opts.webSearch) {
+    const res =
+      opts.provider === "anthropic"
+        ? await anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS)
+        : await openaiChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS);
+    return { ...res, sources: [] };
   }
-  return openaiChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS);
+  return opts.provider === "anthropic"
+    ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt)
+    : openaiWebSearch(opts.apiKey, opts.model, opts.prompt);
+}
+
+// --- Native web-search query paths ---------------------------------------
+
+async function anthropicWebSearch(
+  apiKey: string,
+  model: string,
+  prompt: string,
+): Promise<QueryResult> {
+  const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
+  // web_search is a server-side tool not in older SDK typings; cast the params.
+  const params = {
+    model,
+    max_tokens: ANSWER_MAX_TOKENS,
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }],
+    messages: [{ role: "user", content: prompt }],
+  };
+  const msg = await client.messages.create(
+    params as unknown as Anthropic.MessageCreateParamsNonStreaming,
+  );
+
+  // The web_search block/citation shapes aren't in older SDK types; read them
+  // structurally.
+  type Cite = { url?: string; title?: string; cited_text?: string };
+  type Block = {
+    type?: string;
+    text?: string;
+    citations?: Cite[];
+    content?: { url?: string; title?: string }[];
+  };
+  let text = "";
+  const cited: CitedSource[] = [];
+  const retrieved: CitedSource[] = [];
+  const blocks = (msg.content ?? []) as unknown as Block[];
+  for (const block of blocks) {
+    if (block.type === "text") {
+      text += (text ? "\n" : "") + (block.text ?? "");
+      // Sources the answer actually cited — the primary signal.
+      for (const c of block.citations ?? []) {
+        const s = c.url ? safeSource(c.url, c.title ?? null, c.cited_text ?? null) : null;
+        if (s) cited.push(s);
+      }
+    } else if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      // Retrieved but maybe not cited — used only as a fallback below.
+      for (const r of block.content) {
+        const s = r.url ? safeSource(r.url, r.title ?? null, null) : null;
+        if (s) retrieved.push(s);
+      }
+    }
+  }
+
+  // Prefer inline citations (what the answer used); fall back to retrieved
+  // results only when the model searched but cited nothing inline.
+  const sources = dedupeSources(cited.length > 0 ? cited : retrieved);
+  const tokens = (msg.usage?.input_tokens ?? 0) + (msg.usage?.output_tokens ?? 0);
+  return { text: text.trim(), tokens, sources };
+}
+
+// OpenAI native web search via the Responses API. Uses raw fetch so it doesn't
+// depend on a newer SDK; retries a couple of transient failures. The browse is
+// forced via tool_choice (see below) — verified live for gpt-4o / gpt-4o-mini.
+async function openaiWebSearch(
+  apiKey: string,
+  model: string,
+  prompt: string,
+): Promise<QueryResult> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model,
+          tools: [{ type: "web_search_preview" }],
+          // Force the browse; left to choose, the model often answers from
+          // memory and cites nothing.
+          tool_choice: { type: "web_search_preview" },
+          input: prompt,
+          max_output_tokens: ANSWER_MAX_TOKENS,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err = new OpenAI.APIError(res.status, body, undefined, undefined);
+        // Retry transient server errors; surface auth/quota immediately.
+        if (res.status >= 500) { lastErr = err; continue; }
+        throw err;
+      }
+      const j = (await res.json()) as {
+        output?: { content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
+        usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
+      };
+      let text = "";
+      const raw: CitedSource[] = [];
+      for (const item of j.output ?? []) {
+        for (const c of item.content ?? []) {
+          if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+          for (const a of c.annotations ?? []) {
+            const s = a?.url ? safeSource(a.url, a.title ?? null, null) : null;
+            if (s) raw.push(s);
+          }
+        }
+      }
+      const tokens =
+        j.usage?.total_tokens ??
+        (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
+      return { text: text.trim(), tokens, sources: dedupeSources(raw) };
+    } catch (err) {
+      lastErr = err;
+      if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
+    }
+  }
+  throw lastErr ?? new Error("OpenAI web search failed.");
 }
 
 const VARIATION_SYSTEM = `You generate realistic search-style questions that a real person would type into an AI assistant (like ChatGPT or Claude) when researching a topic. The questions should be the kind of prompt where an AI assistant might naturally recommend, compare, or mention specific brands, products, or tools.

@@ -18,6 +18,7 @@ Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps,
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
 - 🏢 **Multiple organizations**, one account can track many brands/domains and switch between them from the sidebar.
+- 🔎 **Web search + source attribution**, query the models with their native web search on and capture the exact sources they cite, so you can see which posts drove an answer, and whether your own site is being used, even when you aren't named.
 - ⏱️ **Scheduled monitoring**, daily/weekly runs via a cron endpoint.
 
 ## Core concepts
