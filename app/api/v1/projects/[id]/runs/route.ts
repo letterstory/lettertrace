@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
 import { listRuns, triggerRunForProject } from "@/lib/api-service";
+import { isProvider, PROVIDERS } from "@/lib/models";
 import { humanError } from "@/lib/llm";
+import type { Provider } from "@/lib/types";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -30,6 +32,8 @@ export async function GET(
 }
 
 // POST /api/v1/projects/:id/runs — execute a monitoring run now (BYOK-only).
+// Optional body { provider?, model? } overrides the project default for this
+// run; no body keeps the default.
 export async function POST(
   request: Request,
   { params }: { params: { id: string } },
@@ -44,11 +48,38 @@ export async function POST(
     );
   }
 
+  // An absent (or empty) body is the common case and must keep working.
+  const options: { provider?: Provider; model?: string } = {};
+  let raw: unknown = null;
+  try {
+    raw = await request.json();
+  } catch {
+    // No JSON body: run with the project's default provider/model.
+  }
+  if (raw && typeof raw === "object") {
+    const b = raw as Record<string, unknown>;
+    if (typeof b.provider === "string" && b.provider.length > 0) {
+      if (!isProvider(b.provider)) {
+        return NextResponse.json(
+          {
+            error: `Unknown provider "${b.provider}". Use one of: ${Object.keys(PROVIDERS).join(", ")}.`,
+          },
+          { status: 400 },
+        );
+      }
+      options.provider = b.provider;
+    }
+    if (typeof b.model === "string" && b.model.trim().length > 0) {
+      options.model = b.model.trim();
+    }
+  }
+
   try {
     const outcome = await triggerRunForProject(
       auth.supabase,
       auth.userId,
       params.id,
+      options,
     );
     if (!outcome.ok) {
       return NextResponse.json(

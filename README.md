@@ -137,11 +137,27 @@ Create an API key in **Settings → API & MCP access** (shown once, stored hashe
 **REST v1:**
 
 ```bash
-# List your organizations
+# List your organizations / create one
 curl https://your-app.com/api/v1/projects \
   -H "Authorization: Bearer lt_live_..."
+curl -X POST https://your-app.com/api/v1/projects \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"name": "Acme", "brand_name": "Acme", "brand_domain": "acme.io"}'
+
+# A project's prompts / bulk-add prompts (topics are get-or-created by name)
+curl https://your-app.com/api/v1/projects/<project-id>/prompts \
+  -H "Authorization: Bearer lt_live_..."
+curl -X POST https://your-app.com/api/v1/projects/<project-id>/prompts \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"prompts": [{"text": "best crm for startups", "topic": "CRM"}]}'
+
+# Toggle a prompt on or off
+curl -X PATCH https://your-app.com/api/v1/prompts/<prompt-id> \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"is_active": false}'
 
 # Recent runs for a project / trigger a run now
+# (optional body {"provider", "model"} overrides the project default for that run)
 curl https://your-app.com/api/v1/projects/<project-id>/runs \
   -H "Authorization: Bearer lt_live_..."
 curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
@@ -149,6 +165,10 @@ curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
 
 # Share-of-voice report for a run
 curl https://your-app.com/api/v1/runs/<run-id> \
+  -H "Authorization: Bearer lt_live_..."
+
+# Raw artifacts for a run: each response's full text + cited sources + mentions
+curl https://your-app.com/api/v1/runs/<run-id>/responses \
   -H "Authorization: Bearer lt_live_..."
 ```
 
@@ -159,11 +179,12 @@ claude mcp add --transport http lettertrace https://your-app.com/api/mcp/mcp \
   -H "Authorization: Bearer lt_live_..."
 ```
 
-Tools: `list_projects`, `list_runs`, `get_share_of_voice_report`, `trigger_run`.
+Tools: `list_projects`, `list_runs`, `get_share_of_voice_report`, `trigger_run`. (The write endpoints above are REST-only for now.)
 
 Notes:
 
 - API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only.
+- Projects created via the API start with `schedule: "off"` — trigger runs explicitly (or flip the schedule in the dashboard).
 - API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
 - Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
 - Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table (safe to re-run).
