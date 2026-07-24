@@ -1,17 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mention, Project, Run } from "@/lib/types";
 import {
+  createProject,
+  createPrompts,
   getOwnedProject,
   getRunReport,
+  getRunResponses,
   latestCompletedRun,
+  listProjectPrompts,
   listRuns,
   projectSummary,
+  setPromptActive,
   triggerRunForProject,
 } from "@/lib/api-service";
-import { resolveRunKey } from "@/lib/trial";
+import { pickDefaultProvider, resolveKey, resolveRunKey } from "@/lib/trial";
 import { executeRun } from "@/lib/engine";
 
-vi.mock("@/lib/trial", () => ({ resolveRunKey: vi.fn() }));
+vi.mock("@/lib/trial", () => ({
+  pickDefaultProvider: vi.fn(),
+  resolveKey: vi.fn(),
+  resolveRunKey: vi.fn(),
+}));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 
 // ------------------------------------------------------------------
@@ -42,6 +51,14 @@ function fakeDb(handlers: Record<string, Handler>) {
       const result = () => ({ data: null, error: null, count: undefined, ...handlers[table]?.(q) });
       const proxy = {
         select: () => proxy,
+        insert: (values: unknown) => {
+          q.modifiers.push(["insert", values]);
+          return proxy;
+        },
+        update: (values: unknown) => {
+          q.modifiers.push(["update", values]);
+          return proxy;
+        },
         eq: (...args: unknown[]) => {
           q.filters.push(["eq", ...args]);
           return proxy;
@@ -54,6 +71,7 @@ function fakeDb(handlers: Record<string, Handler>) {
           q.modifiers.push(["limit", ...args]);
           return proxy;
         },
+        single: async () => result(),
         maybeSingle: async () => result(),
         then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
           Promise.resolve(result()).then(resolve, reject),
@@ -119,9 +137,19 @@ function makeMention(overrides: Partial<Mention>): Mention {
 }
 
 beforeEach(() => {
+  vi.mocked(pickDefaultProvider).mockReset().mockReturnValue("anthropic");
+  vi.mocked(resolveKey).mockReset();
   vi.mocked(resolveRunKey).mockReset();
   vi.mocked(executeRun).mockReset();
 });
+
+/** The values handed to .insert() on the first matching recorded query. */
+function insertedValues(db: { queries: RecordedQuery[] }, table: string): unknown {
+  const q = db.queries.find(
+    (query) => query.table === table && query.modifiers.some((m) => m[0] === "insert"),
+  );
+  return q?.modifiers.find((m) => m[0] === "insert")?.[1];
+}
 
 describe("projectSummary", () => {
   it("exposes only the public fields (no user_id)", () => {
@@ -290,5 +318,354 @@ describe("triggerRunForProject", () => {
         apiKey: "sk-ant-user-key",
       }),
     );
+  });
+
+  it("resolves a caller-sent provider/model with resolveKey, not the project default", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveKey).mockResolvedValue({
+      source: "own",
+      apiKey: "sk-user-openai-key",
+      provider: "openai",
+      model: "gpt-4o-mini",
+    });
+    vi.mocked(executeRun).mockResolvedValue({
+      runId: "run-10",
+      status: "completed",
+      totalResponses: 4,
+      tokensUsed: 1234,
+    });
+
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
+      provider: "openai",
+      model: "gpt-4o-mini",
+    });
+    expect(outcome).toMatchObject({ ok: true, result: { runId: "run-10" } });
+    expect(resolveRunKey).not.toHaveBeenCalled();
+    expect(resolveKey).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o-mini");
+    expect(executeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4o-mini",
+        apiKey: "sk-user-openai-key",
+      }),
+    );
+  });
+
+  it("names the requested provider when an override has no own key", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveKey).mockResolvedValue({
+      source: "none",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
+      provider: "openai",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "no_key" });
+    expect((outcome as { message: string }).message).toContain("OpenAI");
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("createProject", () => {
+  it("requires a name and a brand name", async () => {
+    const db = fakeDb({});
+    expect(
+      await createProject(db as never, "user-1", { brand_name: "Acme" }),
+    ).toMatchObject({ ok: false, code: "invalid" });
+    expect(
+      await createProject(db as never, "user-1", { name: "Acme", brand_name: "  " }),
+    ).toMatchObject({ ok: false, code: "invalid" });
+    expect(db.queries).toHaveLength(0);
+  });
+
+  it("rejects an unknown default_provider", async () => {
+    const db = fakeDb({});
+    const outcome = await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+      default_provider: "gemini",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "invalid" });
+    expect(db.queries).toHaveLength(0);
+  });
+
+  it("inserts with the dashboard defaults, tied to the caller", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    const outcome = await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+    });
+    expect(outcome).toMatchObject({ ok: true, project: { id: "proj-1" } });
+    expect(insertedValues(db, "projects")).toMatchObject({
+      name: "Acme",
+      brand_name: "Acme",
+      brand_aliases: [],
+      brand_domain: null,
+      description: null,
+      default_provider: "anthropic",
+      default_model: "claude-opus-4-8", // defaultModelFor("anthropic")
+      schedule: "off", // API callers orchestrate their own cadence
+      user_id: "user-1",
+    });
+  });
+
+  it("honors an explicit provider, model, aliases and web-search flag", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+      brand_aliases: ["Acme Inc", " acme.io "],
+      brand_domain: "acme.io",
+      default_provider: "openai",
+      default_model: "gpt-4o-mini",
+      use_web_search: false,
+    });
+    expect(insertedValues(db, "projects")).toMatchObject({
+      brand_aliases: ["Acme Inc", "acme.io"],
+      brand_domain: "acme.io",
+      default_provider: "openai",
+      default_model: "gpt-4o-mini",
+      use_web_search: false,
+    });
+  });
+});
+
+describe("listProjectPrompts", () => {
+  it("returns null when the project isn't the user's", async () => {
+    const db = fakeDb({ projects: () => ({ data: null }) });
+    expect(await listProjectPrompts(db as never, "user-2", "proj-1")).toBeNull();
+  });
+
+  it("flattens the embedded topic name", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      prompts: () => ({
+        data: [
+          {
+            id: "prompt-1",
+            text: "best crm for startups",
+            source: "manual",
+            is_active: true,
+            created_at: "2026-07-02T00:00:00Z",
+            topics: { name: "CRM" },
+          },
+        ],
+      }),
+    });
+    const prompts = await listProjectPrompts(db as never, "user-1", "proj-1");
+    expect(prompts).toEqual([
+      {
+        id: "prompt-1",
+        text: "best crm for startups",
+        topic: "CRM",
+        source: "manual",
+        is_active: true,
+        created_at: "2026-07-02T00:00:00Z",
+      },
+    ]);
+  });
+});
+
+describe("createPrompts", () => {
+  it("404s for a project the user doesn't own", async () => {
+    const db = fakeDb({ projects: () => ({ data: null }) });
+    const outcome = await createPrompts(db as never, "user-2", "proj-1", [
+      { text: "hi", topic: "CRM" },
+    ]);
+    expect(outcome).toMatchObject({ ok: false, code: "not_found" });
+  });
+
+  it("rejects entries with empty text or topic, naming the indexes", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    const outcome = await createPrompts(db as never, "user-1", "proj-1", [
+      { text: "ok", topic: "CRM" },
+      { text: "  ", topic: "CRM" },
+      { text: "ok too" },
+    ]);
+    expect(outcome).toMatchObject({ ok: false, code: "invalid" });
+    expect((outcome as { message: string }).message).toContain("1, 2");
+  });
+
+  it("get-or-creates topics by name and skips duplicate texts", async () => {
+    let promptInsertRows: Record<string, unknown>[] = [];
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      topics: (q) => {
+        const insert = q.modifiers.find((m) => m[0] === "insert");
+        if (!insert) return { data: [{ id: "topic-crm", name: "CRM" }] };
+        return {
+          data: (insert[1] as { name: string }[]).map((row, i) => ({
+            id: `topic-new-${i}`,
+            name: row.name,
+          })),
+        };
+      },
+      prompts: (q) => {
+        const insert = q.modifiers.find((m) => m[0] === "insert");
+        if (!insert) return { data: [{ text: "Existing prompt" }] };
+        promptInsertRows = insert[1] as Record<string, unknown>[];
+        return {
+          data: promptInsertRows.map((row, i) => ({
+            ...row,
+            id: `prompt-${i}`,
+            created_at: "2026-07-03T00:00:00Z",
+          })),
+        };
+      },
+    });
+
+    const outcome = await createPrompts(db as never, "user-1", "proj-1", [
+      { text: "existing PROMPT", topic: "CRM" }, // already in the project
+      { text: "best crm for startups", topic: "crm" }, // existing topic, other case
+      { text: "how much does acme cost", topic: "Pricing" }, // new topic
+      { text: "Best CRM for startups", topic: "CRM" }, // repeat within the batch
+    ]);
+
+    expect(outcome).toMatchObject({ ok: true, skipped: 2 });
+    const created = (outcome as { created: { text: string; topic: string | null }[] })
+      .created;
+    expect(created).toHaveLength(2);
+    expect(created[0]).toMatchObject({ text: "best crm for startups", topic: "CRM" });
+    expect(created[1]).toMatchObject({ text: "how much does acme cost", topic: "Pricing" });
+
+    // Only the genuinely new topic name is created.
+    expect(insertedValues(db, "topics")).toEqual([
+      { project_id: "proj-1", name: "Pricing" },
+    ]);
+    expect(promptInsertRows).toEqual([
+      expect.objectContaining({
+        project_id: "proj-1",
+        topic_id: "topic-crm",
+        source: "manual",
+        is_active: true,
+      }),
+      expect.objectContaining({ topic_id: "topic-new-0" }),
+    ]);
+  });
+});
+
+describe("setPromptActive", () => {
+  const PROMPT_ROW = {
+    id: "prompt-1",
+    project_id: "proj-1",
+    text: "best crm for startups",
+    source: "manual",
+    is_active: true,
+    created_at: "2026-07-02T00:00:00Z",
+    topics: { name: "CRM" },
+  };
+
+  it("returns null for an unknown prompt", async () => {
+    const db = fakeDb({ prompts: () => ({ data: null }) });
+    expect(await setPromptActive(db as never, "user-1", "prompt-1", false)).toBeNull();
+  });
+
+  it("returns null when the prompt's project isn't the user's", async () => {
+    const db = fakeDb({
+      prompts: () => ({ data: PROMPT_ROW }),
+      projects: () => ({ data: null }),
+    });
+    expect(await setPromptActive(db as never, "user-2", "prompt-1", false)).toBeNull();
+  });
+
+  it("updates scoped by prompt AND project id", async () => {
+    const db = fakeDb({
+      prompts: () => ({ data: PROMPT_ROW }),
+      projects: () => ({ data: PROJECT }),
+    });
+    const prompt = await setPromptActive(db as never, "user-1", "prompt-1", false);
+    expect(prompt).toMatchObject({ id: "prompt-1", topic: "CRM", is_active: false });
+
+    const updateQuery = db.queries.find((q) =>
+      q.modifiers.some((m) => m[0] === "update"),
+    )!;
+    expect(updateQuery.modifiers).toContainEqual(["update", { is_active: false }]);
+    expect(updateQuery.filters).toEqual([
+      ["eq", "id", "prompt-1"],
+      ["eq", "project_id", "proj-1"],
+    ]);
+  });
+});
+
+describe("getRunResponses", () => {
+  it("returns null for a run the user doesn't own", async () => {
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({}) }),
+      projects: () => ({ data: null }),
+    });
+    expect(await getRunResponses(db as never, "user-2", "run-1")).toBeNull();
+  });
+
+  it("groups each response's text with its sources and mentions", async () => {
+    // prompt_id is null when the prompt was deleted after the run.
+    const responses = [
+      {
+        id: "resp-1",
+        prompt_id: "prompt-1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        response_text: "Credal is a strong option…",
+      },
+      {
+        id: "resp-2",
+        prompt_id: null,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        response_text: "Several tools compete here…",
+      },
+    ];
+    const sources = [
+      {
+        id: "src-1",
+        response_id: "resp-1",
+        url: "https://credal.ai/blog/post",
+        domain: "credal.ai",
+        title: "Post",
+        snippet: "…",
+        is_owned: true,
+        created_at: "2026-07-02T00:00:00Z",
+      },
+    ];
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({}) }),
+      projects: () => ({ data: PROJECT }),
+      responses: () => ({ data: responses }),
+      sources: () => ({ data: sources }),
+      mentions: () => ({ data: [makeMention({ response_id: "resp-1" })] }),
+      prompts: () => ({ data: [{ id: "prompt-1", text: "best crm for startups" }] }),
+    });
+
+    const result = await getRunResponses(db as never, "user-1", "run-1");
+    expect(result).not.toBeNull();
+    expect(result!.run.id).toBe("run-1");
+    expect(result!.responses).toHaveLength(2);
+
+    const [first, second] = result!.responses;
+    expect(first).toMatchObject({
+      id: "resp-1",
+      prompt_text: "best crm for startups",
+      response_text: "Credal is a strong option…",
+    });
+    expect(first.sources).toEqual([
+      {
+        url: "https://credal.ai/blog/post",
+        domain: "credal.ai",
+        title: "Post",
+        snippet: "…",
+        is_owned: true,
+      },
+    ]);
+    expect(first.mentions).toEqual([
+      {
+        entity_type: "brand",
+        entity_name: "Credal",
+        mention_count: 1,
+        first_position: 0.1,
+        sentiment: "positive",
+        recommended: false,
+      },
+    ]);
+    expect(second).toMatchObject({ prompt_text: null, sources: [], mentions: [] });
   });
 });
