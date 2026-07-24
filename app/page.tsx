@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme";
 
 const GITHUB_URL = "https://github.com";
 
@@ -33,7 +34,7 @@ function TerminalDots() {
 
 function Terminal() {
   return (
-    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-ink text-paper shadow-lift">
+    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <TerminalDots />
         <span className="font-mono text-[11px] text-white/40">lettertrace · monitor</span>
@@ -64,7 +65,7 @@ function Terminal() {
         </p>
         <p className="pt-1 text-white/40">
           <span className="text-mint-bright">$</span>{" "}
-          <span className="inline-block h-4 w-2 translate-y-0.5 animate-blink bg-paper/80" />
+          <span className="inline-block h-4 w-2 translate-y-0.5 animate-blink bg-terminal-ink/80" />
         </p>
       </div>
     </div>
@@ -139,10 +140,10 @@ const FEATURES = [
 
 const toneBg: Record<string, string> = {
   terracotta: "bg-terracotta/12 text-terracotta-dark",
-  teal: "bg-teal/20 text-teal-900",
-  sand: "bg-sand/40 text-ink-soft",
-  mint: "bg-mint/60 text-emerald-800",
-  butter: "bg-butter/60 text-yellow-900",
+  teal: "bg-teal/20 text-teal-dark",
+  sand: "bg-sand-tint text-ink-soft",
+  mint: "bg-mint-tint text-mint-ink",
+  butter: "bg-butter-tint text-butter-ink",
 };
 
 export default function LandingPage() {
@@ -158,6 +159,7 @@ export default function LandingPage() {
             <a href="#open-source" className="transition hover:text-ink">Open source</a>
           </nav>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Button href="/login" variant="ghost" size="sm">Sign in</Button>
             <Button href="/login" size="sm">Start free</Button>
           </div>
@@ -308,7 +310,7 @@ export default function LandingPage() {
               <OSPoint icon={Layers}>Your data lives in your own Supabase, no vendor lock-in.</OSPoint>
             </ul>
           </div>
-          <div className="overflow-hidden rounded-2xl border border-ink/10 bg-ink text-paper shadow-lift">
+          <div className="overflow-hidden rounded-2xl border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
             <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
               <TerminalDots />
               <span className="ml-2 font-mono text-[11px] text-white/40">self-host</span>
@@ -371,7 +373,8 @@ export default function LandingPage() {
 // --- tiny local components ---------------------------------------
 
 function Mark({ children }: { children: React.ReactNode }) {
-  return <mark className="rounded bg-butter px-1 text-ink">{children}</mark>;
+  // butter is a light amber in both themes, so the highlight text stays dark.
+  return <mark className="rounded bg-butter px-1 text-[#1A1917]">{children}</mark>;
 }
 
 function PreviewStat({ label, value, dot }: { label: string; value: string; dot: string }) {
@@ -404,7 +407,7 @@ function ShareRow({ name, pct, brand = false }: { name: string; pct: number; bra
 function OSPoint({ icon: Icon, children }: { icon: typeof ShieldCheck; children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-3">
-      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-mint/60 text-emerald-800">
+      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-mint-tint text-mint-ink">
         <Icon className="h-3.5 w-3.5" />
       </span>
       <span className="text-sm">{children}</span>

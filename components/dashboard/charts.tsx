@@ -17,29 +17,55 @@ import {
 } from "recharts";
 import { SENTIMENT_COLORS } from "@/lib/metrics";
 import type { Sentiment } from "@/lib/types";
+import { useTheme } from "@/components/theme";
 
 // ------------------------------------------------------------------
 // Recharts wrappers for the overview dashboard. All numeric inputs are
 // plain values already scaled 0..100 where noted. Each chart degrades to
 // a muted placeholder instead of crashing on empty data.
+//
+// Recharts takes colors as literal props/attributes (CSS variables don't
+// resolve inside SVG presentation attributes), so we resolve the palette
+// from the active theme here and re-render when the user flips it.
 // ------------------------------------------------------------------
 
-const INK = "#1A1917";
-const INK_FAINT = "#7C786F";
-const GRID = "rgba(26,25,23,0.08)";
-const BRAND = "#E07850"; // terracotta (you)
+const BRAND = "#E07850"; // terracotta (you) — pops on both themes
 const TEAL = "#129C82"; // aqua (share / competitors)
 
-const axisTick = { fill: INK_FAINT, fontSize: 12 };
-
-const tooltipStyle = {
-  borderRadius: 12,
-  border: "1px solid rgba(26,25,23,0.10)",
-  background: "#FFFFFF",
-  boxShadow: "0 8px 24px rgba(26,25,23,0.10)",
-  fontSize: 12,
-  color: INK,
+const PALETTE = {
+  light: {
+    ink: "#1A1917",
+    faint: "#7C786F",
+    grid: "rgba(26,25,23,0.08)",
+    surface: "#FFFFFF",
+    cursor: "rgba(26,25,23,0.04)",
+  },
+  dark: {
+    ink: "#F4F3EF",
+    faint: "#8A867D",
+    grid: "rgba(255,255,255,0.10)",
+    surface: "#1F1D1A",
+    cursor: "rgba(255,255,255,0.05)",
+  },
 } as const;
+
+function useChartTheme() {
+  const { theme } = useTheme();
+  const p = PALETTE[theme];
+  return {
+    ...p,
+    axisTick: { fill: p.faint, fontSize: 12 },
+    tooltipStyle: {
+      borderRadius: 12,
+      border: `1px solid ${p.grid}`,
+      background: p.surface,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+      fontSize: 12,
+      color: p.ink,
+    } as const,
+    legendStyle: { fontSize: 12, color: p.faint },
+  };
+}
 
 function Placeholder({ label, height }: { label: string; height: number }) {
   return (
@@ -57,24 +83,25 @@ export function TrendChart({
 }: {
   data: { date: string; visibility: number; share: number }[];
 }) {
+  const t = useChartTheme();
   if (!data || data.length === 0) {
     return <Placeholder label="No runs to chart yet" height={280} />;
   }
   return (
     <ResponsiveContainer width="100%" height={280}>
       <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
-        <CartesianGrid stroke={GRID} vertical={false} />
-        <XAxis dataKey="date" tick={axisTick} tickLine={false} axisLine={{ stroke: GRID }} />
+        <CartesianGrid stroke={t.grid} vertical={false} />
+        <XAxis dataKey="date" tick={t.axisTick} tickLine={false} axisLine={{ stroke: t.grid }} />
         <YAxis
           domain={[0, 100]}
-          tick={axisTick}
+          tick={t.axisTick}
           tickLine={false}
           axisLine={false}
           tickFormatter={(v: number) => `${v}%`}
           width={44}
         />
         <Tooltip
-          contentStyle={tooltipStyle}
+          contentStyle={t.tooltipStyle}
           formatter={(value: number, name: string) => [
             `${Math.round(value)}%`,
             name === "visibility" ? "Visibility" : "Share of voice",
@@ -82,7 +109,7 @@ export function TrendChart({
         />
         <Legend
           iconType="plainline"
-          wrapperStyle={{ fontSize: 12, color: INK_FAINT }}
+          wrapperStyle={t.legendStyle}
           formatter={(value: string) =>
             value === "visibility" ? "Visibility" : "Share of voice"
           }
@@ -113,6 +140,7 @@ export function ShareBars({
 }: {
   data: { name: string; value: number; isBrand: boolean }[];
 }) {
+  const t = useChartTheme();
   if (!data || data.length === 0) {
     return <Placeholder label="No share of voice yet" height={180} />;
   }
@@ -125,26 +153,26 @@ export function ShareBars({
         margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
         barCategoryGap={12}
       >
-        <CartesianGrid stroke={GRID} horizontal={false} />
+        <CartesianGrid stroke={t.grid} horizontal={false} />
         <XAxis
           type="number"
           domain={[0, 100]}
-          tick={axisTick}
+          tick={t.axisTick}
           tickLine={false}
-          axisLine={{ stroke: GRID }}
+          axisLine={{ stroke: t.grid }}
           tickFormatter={(v: number) => `${v}%`}
         />
         <YAxis
           type="category"
           dataKey="name"
-          tick={axisTick}
+          tick={t.axisTick}
           tickLine={false}
           axisLine={false}
           width={110}
         />
         <Tooltip
-          cursor={{ fill: "rgba(26,25,23,0.04)" }}
-          contentStyle={tooltipStyle}
+          cursor={{ fill: t.cursor }}
+          contentStyle={t.tooltipStyle}
           formatter={(value: number) => [`${Math.round(value)}%`, "Share of voice"]}
         />
         <Bar dataKey="value" radius={[0, 8, 8, 0]}>
@@ -162,13 +190,14 @@ export function SentimentDonut({
 }: {
   data: { name: string; value: number }[];
 }) {
+  const t = useChartTheme();
   const total = (data ?? []).reduce((s, d) => s + (d.value || 0), 0);
   if (total === 0) {
     return <Placeholder label="No sentiment yet" height={240} />;
   }
   const colorFor = (name: string): string => {
     const key = name.toLowerCase() as Sentiment;
-    return SENTIMENT_COLORS[key] ?? INK_FAINT;
+    return SENTIMENT_COLORS[key] ?? t.faint;
   };
   return (
     <ResponsiveContainer width="100%" height={240}>
@@ -182,7 +211,7 @@ export function SentimentDonut({
           innerRadius={54}
           outerRadius={84}
           paddingAngle={2}
-          stroke="#FFFFFF"
+          stroke={t.surface}
           strokeWidth={2}
         >
           {data.map((entry, i) => (
@@ -190,12 +219,12 @@ export function SentimentDonut({
           ))}
         </Pie>
         <Tooltip
-          contentStyle={tooltipStyle}
+          contentStyle={t.tooltipStyle}
           formatter={(value: number, name: string) => [`${value}`, name]}
         />
         <Legend
           iconType="circle"
-          wrapperStyle={{ fontSize: 12, color: INK_FAINT }}
+          wrapperStyle={t.legendStyle}
         />
       </PieChart>
     </ResponsiveContainer>

@@ -33,7 +33,7 @@ const PROVIDER_STYLE: Record<
     title: "ChatGPT",
     subtitle: "OpenAI API key",
     mark: "G",
-    markClass: "bg-teal/15 text-teal-900",
+    markClass: "bg-teal/15 text-teal-dark",
   },
 };
 

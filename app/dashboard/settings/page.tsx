@@ -1,7 +1,8 @@
-import { KeyRound, Building2, Plug } from "lucide-react";
+import { KeyRound, Building2, Palette, Plug } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getProject, getProviderKeysPublic } from "@/lib/data";
 import { Card, CardBody, SectionHeading } from "@/components/ui";
+import { ThemeSwitch } from "@/components/theme";
 import KeysManager from "./keys-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
@@ -37,7 +38,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-mint/50 p-2 text-emerald-800">
+            <span className="mt-0.5 rounded-xl bg-mint-tint p-2 text-mint-ink">
               <KeyRound className="h-5 w-5" />
             </span>
             <div>
@@ -56,7 +57,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-butter/60 p-2 text-yellow-900">
+            <span className="mt-0.5 rounded-xl bg-butter-tint p-2 text-butter-ink">
               <Building2 className="h-5 w-5" />
             </span>
             <div>
@@ -75,7 +76,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-teal/15 p-2 text-teal-900">
+            <span className="mt-0.5 rounded-xl bg-teal/15 p-2 text-teal-dark">
               <Plug className="h-5 w-5" />
             </span>
             <div>
@@ -90,6 +91,26 @@ export default async function SettingsPage() {
             </div>
           </div>
           <ApiKeysManager keys={apiKeys} />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardBody className="space-y-5">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 rounded-xl bg-sand-tint p-2 text-ink-soft">
+              <Palette className="h-5 w-5" />
+            </span>
+            <div>
+              <h3 className="text-lg font-semibold text-ink">Appearance</h3>
+              <p className="mt-1 text-sm text-ink-faint">
+                Lettertrace defaults to dark. Switch to light if you prefer, your
+                choice is remembered on this device.
+              </p>
+            </div>
+          </div>
+          <div className="max-w-xs">
+            <ThemeSwitch />
+          </div>
         </CardBody>
       </Card>
     </div>

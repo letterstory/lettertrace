@@ -31,7 +31,7 @@ export function TrialBanner({
           <span
             className={cn(
               "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-              exhausted ? "bg-terracotta/15 text-terracotta-dark" : "bg-teal/15 text-teal-900",
+              exhausted ? "bg-terracotta/15 text-terracotta-dark" : "bg-teal/15 text-teal-dark",
             )}
           >
             {exhausted ? <KeyRound className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}

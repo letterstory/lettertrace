@@ -2,16 +2,18 @@ import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 // The Lettertrace brand lockup. Real brand assets live in /public/images.
-// Every in-app placement sits on a light surface, so the black wordmark is the
-// default; pass variant="light" on dark backgrounds. showWord={false} renders
-// just the petal mark.
+// By default the wordmark follows the active theme: the black lockup shows in
+// light mode, the white lockup in dark mode. The swap is pure CSS keyed off
+// html[data-theme] (see the .logo-for-* rules in globals.css), so it reacts to
+// the runtime toggle with no flash and no client JS. Pass an explicit
+// variant to pin one asset. showWord={false} renders just the petal mark.
 //
 // The <Image> is wrapped in an inline-flex, width-fit span so it never gets
 // stretched when it's a direct flex child (e.g. the flex-col dashboard sidebar,
 // where align-items:stretch would otherwise distort a w-auto image).
 export function Logo({
   className,
-  variant = "dark",
+  variant,
   showWord = true,
 }: {
   className?: string;
@@ -26,15 +28,32 @@ export function Logo({
     );
   }
 
-  const src = variant === "light" ? "/images/logo_white.png" : "/images/logo_black.png";
+  // Explicit override: render a single asset.
+  if (variant) {
+    const src = variant === "light" ? "/images/logo_white.png" : "/images/logo_black.png";
+    return (
+      <span className={cn("inline-flex w-fit shrink-0", className)}>
+        <Image src={src} alt="Lettertrace" width={705} height={138} className="h-7 w-auto" />
+      </span>
+    );
+  }
+
+  // Auto (default): render both; CSS reveals the one matching the theme.
   return (
     <span className={cn("inline-flex w-fit shrink-0", className)}>
       <Image
-        src={src}
+        src="/images/logo_black.png"
         alt="Lettertrace"
         width={705}
         height={138}
-        className="h-7 w-auto"
+        className="logo-for-light h-7 w-auto"
+      />
+      <Image
+        src="/images/logo_white.png"
+        alt="Lettertrace"
+        width={705}
+        height={138}
+        className="logo-for-dark h-7 w-auto"
       />
     </span>
   );

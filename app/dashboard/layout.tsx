@@ -4,6 +4,7 @@ import { DashboardNav } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
+import { ThemeSwitch, ThemeToggle } from "@/components/theme";
 import { createClient } from "@/lib/supabase/server";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
@@ -64,7 +65,8 @@ export default async function DashboardLayout({
 
           <DashboardNav />
 
-          <div className="mt-auto hidden flex-col gap-2 border-t border-ink/10 pt-4 md:flex">
+          <div className="mt-auto hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
+            <ThemeSwitch />
             <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
               {user.email}
             </p>
@@ -75,7 +77,10 @@ export default async function DashboardLayout({
             <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
               {user.email}
             </p>
-            <SignOutButton />
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <SignOutButton />
+            </div>
           </div>
         </div>
       </aside>

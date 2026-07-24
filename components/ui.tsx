@@ -105,10 +105,10 @@ type BadgeTone = "neutral" | "terracotta" | "mint" | "teal" | "butter" | "sand";
 const badgeTones: Record<BadgeTone, string> = {
   neutral: "bg-ink/[0.06] text-ink-soft",
   terracotta: "bg-terracotta/15 text-terracotta-dark",
-  mint: "bg-mint/60 text-emerald-800",
-  teal: "bg-teal/15 text-teal-900",
-  butter: "bg-butter/50 text-yellow-900",
-  sand: "bg-sand/40 text-ink-soft",
+  mint: "bg-mint-tint text-mint-ink",
+  teal: "bg-teal/15 text-teal-dark",
+  butter: "bg-butter-tint text-butter-ink",
+  sand: "bg-sand-tint text-ink-soft",
 };
 
 export function Badge({
