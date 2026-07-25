@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { hostOf, isOwnedDomain } from "@/lib/engine";
 
 describe("hostOf", () => {
-  it("normalizes a messy brand_domain to a registrable host", () => {
+  it("normalizes a messy domain entry to a registrable host", () => {
     expect(hostOf("https://www.notion.so/pricing")).toBe("notion.so");
     expect(hostOf("Notion.so")).toBe("notion.so");
     expect(hostOf("http://acme.co.uk/path?x=1")).toBe("acme.co.uk");

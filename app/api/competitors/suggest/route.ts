@@ -56,7 +56,7 @@ export async function POST() {
       model: key.model,
       apiKey: key.apiKey!,
       brandName: project.brand_name,
-      brandDomain: project.brand_domain,
+      brandDomain: project.brand_domains[0] ?? null,
       description: project.description,
       topics,
       existing,

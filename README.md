@@ -142,7 +142,7 @@ curl https://your-app.com/api/v1/projects \
   -H "Authorization: Bearer lt_live_..."
 curl -X POST https://your-app.com/api/v1/projects \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
-  -d '{"name": "Acme", "brand_name": "Acme", "brand_domain": "acme.io"}'
+  -d '{"name": "Acme", "brand_name": "Acme", "brand_domains": ["acme.io"]}'
 
 # A project's prompts / bulk-add prompts (topics are get-or-created by name)
 curl https://your-app.com/api/v1/projects/<project-id>/prompts \
