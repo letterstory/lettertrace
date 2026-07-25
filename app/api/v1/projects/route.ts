@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 }
 
 // POST /api/v1/projects — create an organization for the caller.
-// Body: { name, brand_name, brand_aliases?, brand_domain?, description?,
+// Body: { name, brand_name, brand_aliases?, brand_domains?, description?,
 //         default_provider?, default_model?, use_web_search? }
 export async function POST(request: Request) {
   const auth = await authenticateApiKey(

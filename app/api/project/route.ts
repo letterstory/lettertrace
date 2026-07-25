@@ -26,6 +26,18 @@ function toNullableString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// Brand domains, first = primary. Accepts an array or a comma-separated
+// string; deduped case-insensitively, order preserved.
+function toDomains(value: unknown): string[] {
+  const seen = new Set<string>();
+  return toAliases(value).filter((d) => {
+    const key = d.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function POST(request: Request) {
   const supabase = createClient();
   const {
@@ -80,7 +92,7 @@ export async function POST(request: Request) {
     name,
     brand_name,
     brand_aliases: toAliases(b.brand_aliases),
-    brand_domain: toNullableString(b.brand_domain),
+    brand_domains: toDomains(b.brand_domains),
     description: toNullableString(b.description),
     schedule,
     ...(typeof b.use_web_search === "boolean" ? { use_web_search: b.use_web_search } : {}),

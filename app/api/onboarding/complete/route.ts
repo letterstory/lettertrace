@@ -52,10 +52,8 @@ export async function POST(request: Request) {
   }
   const name =
     typeof body.name === "string" && body.name.trim() ? body.name.trim() : brand_name;
-  const brand_domain =
-    typeof body.brand_domain === "string" && body.brand_domain.trim()
-      ? body.brand_domain.trim()
-      : null;
+  // First entry = primary domain; the rest are phantom sites for the brand.
+  const brand_domains = toStringArray(body.brand_domains);
   const description =
     typeof body.description === "string" && body.description.trim()
       ? body.description.trim()
@@ -84,7 +82,7 @@ export async function POST(request: Request) {
       name,
       brand_name,
       brand_aliases,
-      brand_domain,
+      brand_domains,
       description,
       default_provider: provider,
       default_model: model,
