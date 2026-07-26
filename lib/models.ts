@@ -1,5 +1,12 @@
 import type { Provider } from "./types";
 
+// Google AI Overviews is exposed as a distinct answer engine, but it runs on
+// the same Google (Gemini) key: it is a pseudo-model under the `google`
+// provider that always grounds in Google Search and answers in the terse,
+// synthesized style Google shows at the top of a results page. The adapter
+// (lib/llm) maps this id onto a real Gemini model for the actual API call.
+export const GOOGLE_AI_OVERVIEWS_MODEL = "google-ai-overviews";
+
 export interface ModelOption {
   id: string;
   label: string;
@@ -41,12 +48,28 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
       { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
     ],
   },
+  google: {
+    id: "google",
+    label: "Google (Gemini)",
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyPrefix: "AIza",
+    models: [
+      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", note: "Most capable" },
+      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Balanced" },
+      { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", note: "Fast & cheap" },
+      {
+        id: GOOGLE_AI_OVERVIEWS_MODEL,
+        label: "Google AI Overviews",
+        note: "AI Overview-style, grounded in Search",
+      },
+    ],
+  },
 };
 
 export const PROVIDER_LIST: ProviderInfo[] = Object.values(PROVIDERS);
 
 export function isProvider(value: string): value is Provider {
-  return value === "anthropic" || value === "openai";
+  return value === "anthropic" || value === "openai" || value === "google";
 }
 
 export function defaultModelFor(provider: Provider): string {

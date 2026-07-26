@@ -89,13 +89,20 @@ $$;
 create table if not exists public.provider_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null check (provider in ('anthropic', 'openai')),
+  provider text not null check (provider in ('anthropic', 'openai', 'google')),
   label text,
   encrypted_key text not null,
   key_hint text not null,
   created_at timestamptz not null default now(),
   unique (user_id, provider)
 );
+
+-- Widen the provider allow-list on existing deployments (create table above is
+-- a no-op once the table exists, so the constraint must be replaced in place).
+-- Safe to re-run.
+alter table public.provider_keys drop constraint if exists provider_keys_provider_check;
+alter table public.provider_keys
+  add constraint provider_keys_provider_check check (provider in ('anthropic', 'openai', 'google'));
 
 -- ---------- projects -------------------------------------------------
 create table if not exists public.projects (
@@ -106,13 +113,18 @@ create table if not exists public.projects (
   brand_aliases text[] not null default '{}',
   brand_domain text,
   description text,
-  default_provider text not null default 'anthropic' check (default_provider in ('anthropic', 'openai')),
+  default_provider text not null default 'anthropic' check (default_provider in ('anthropic', 'openai', 'google')),
   default_model text not null default 'claude-sonnet-4-6',
   schedule text not null default 'off' check (schedule in ('off', 'daily', 'weekly')),
   last_run_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Widen the default-provider allow-list on existing deployments. Safe to re-run.
+alter table public.projects drop constraint if exists projects_default_provider_check;
+alter table public.projects
+  add constraint projects_default_provider_check check (default_provider in ('anthropic', 'openai', 'google'));
 
 -- Query the models with their native web search on, so we can capture the
 -- sources they cite. Default on. Safe to re-run.
@@ -170,6 +182,14 @@ create table if not exists public.runs (
   created_at timestamptz not null default now()
 );
 
+-- Keep the recorded provider in the known set, in sync with provider_keys and
+-- projects. Applied as an ALTER so it lands on both fresh and existing tables;
+-- all historical rows only ever held 'anthropic'/'openai', so this is safe to
+-- add and safe to re-run.
+alter table public.runs drop constraint if exists runs_provider_check;
+alter table public.runs
+  add constraint runs_provider_check check (provider in ('anthropic', 'openai', 'google'));
+
 -- ---------- responses ------------------------------------------------
 create table if not exists public.responses (
   id uuid primary key default gen_random_uuid(),
@@ -182,6 +202,11 @@ create table if not exists public.responses (
   response_text text not null,
   created_at timestamptz not null default now()
 );
+
+-- Same provider allow-list as runs (see note above). Safe to add and re-run.
+alter table public.responses drop constraint if exists responses_provider_check;
+alter table public.responses
+  add constraint responses_provider_check check (provider in ('anthropic', 'openai', 'google'));
 
 -- ---------- mentions -------------------------------------------------
 create table if not exists public.mentions (

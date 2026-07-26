@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { safeSource, dedupeSources, type CitedSource } from "@/lib/llm";
+import {
+  safeSource,
+  dedupeSources,
+  domainFromTitle,
+  googleGroundingSources,
+  type CitedSource,
+} from "@/lib/llm";
 
 describe("safeSource", () => {
   it("keeps http(s) URLs and extracts the host", () => {
@@ -44,5 +50,59 @@ describe("dedupeSources", () => {
   it("drops entries with no URL", () => {
     const raw: CitedSource[] = [{ url: "", domain: "", title: null, snippet: null }];
     expect(dedupeSources(raw)).toHaveLength(0);
+  });
+});
+
+describe("domainFromTitle", () => {
+  it("accepts a bare hostname and normalizes it", () => {
+    expect(domainFromTitle("uefa.com")).toBe("uefa.com");
+    expect(domainFromTitle("EN.Wikipedia.org")).toBe("en.wikipedia.org");
+    expect(domainFromTitle("www.notion.so")).toBe("notion.so");
+  });
+
+  it("rejects titles that aren't domains", () => {
+    expect(domainFromTitle("How Spain won Euro 2024")).toBeNull();
+    expect(domainFromTitle("localhost")).toBeNull();
+    expect(domainFromTitle("")).toBeNull();
+    expect(domainFromTitle(null)).toBeNull();
+  });
+});
+
+describe("googleGroundingSources", () => {
+  it("keeps the redirect uri as the url but takes the domain from the title", () => {
+    const out = googleGroundingSources([
+      {
+        web: {
+          uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC",
+          title: "uefa.com",
+        },
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    // url stays the (clickable) Google redirect; domain is the real source host,
+    // so ownership / attribution keeps working.
+    expect(out[0].url).toBe(
+      "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC",
+    );
+    expect(out[0].domain).toBe("uefa.com");
+    expect(out[0].title).toBe("uefa.com");
+  });
+
+  it("falls back to the uri host when the title isn't a domain", () => {
+    const out = googleGroundingSources([
+      { web: { uri: "https://example.com/page", title: "Some Page Title" } },
+    ]);
+    expect(out[0].domain).toBe("example.com");
+  });
+
+  it("skips chunks without a web uri and dedupes by url", () => {
+    const out = googleGroundingSources([
+      { web: { title: "no-uri.com" } },
+      {},
+      { web: { uri: "https://a.com", title: "a.com" } },
+      { web: { uri: "https://a.com", title: "a.com" } },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].domain).toBe("a.com");
   });
 });

@@ -102,13 +102,13 @@ const STEPS = [
 const FEATURES = [
   {
     title: "Bring your own key",
-    body: "Use your own Anthropic & OpenAI keys. They’re encrypted at rest and never leave your infrastructure.",
+    body: "Use your own Anthropic, OpenAI & Google keys. They’re encrypted at rest and never leave your infrastructure.",
     icon: KeyRound,
     tone: "terracotta" as const,
   },
   {
     title: "Multi-model",
-    body: "Monitor Claude and ChatGPT side by side. Add more answer engines as they matter.",
+    body: "Monitor Claude, ChatGPT, Gemini, and Google AI Overviews side by side. Add more answer engines as they matter.",
     icon: Layers,
     tone: "teal" as const,
   },
@@ -179,8 +179,8 @@ export default function LandingPage() {
               Track your AI visibility, <em className="italic">for free</em>.
             </h1>
             <p className="mt-5 max-w-xl text-lg text-ink-soft">
-              Lettertrace measures how often Claude and ChatGPT mention your company. But
-              there&apos;s a catch: it&apos;s free, developer-first, and open source.
+              Lettertrace measures how often Claude, ChatGPT, and Gemini mention your
+              company. But there&apos;s a catch: it&apos;s free, developer-first, and open source.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Button href="/login" size="lg">
@@ -193,7 +193,7 @@ export default function LandingPage() {
               </Button>
             </div>
             <p className="mt-4 font-mono text-xs text-ink-faint">
-              works with ChatGPT &amp; Claude · self-host in minutes
+              works with ChatGPT, Claude &amp; Gemini · self-host in minutes
             </p>
           </div>
 

@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI keys. They're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic) and ChatGPT (OpenAI). Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google keys. They're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini, and Google AI Overviews (both on your Google key). Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -45,7 +45,7 @@ For each answer the model returns, Lettertrace:
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) adapters
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus a dependency-free Google Gemini REST adapter (Gemini models + Google AI Overviews, via Google Search grounding)
 
 ## Getting started
 
@@ -96,7 +96,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ### 5. First monitor
 
-1. **Settings** → add your Anthropic and/or OpenAI API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, default model).
+1. **Settings** → add your Anthropic, OpenAI, and/or Google API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews).
 2. **Competitors** → add the brands you want to benchmark against.
 3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
 4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.
@@ -121,14 +121,14 @@ By default Lettertrace is bring-your-own-key: a user must add a key before runni
 
 Set in your environment:
 
-- `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
+- `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY` / `TRIAL_GOOGLE_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
 - `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap).
-- `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
+- `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL` / `TRIAL_GOOGLE_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
 - `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
 
-> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, and the multi-organization column `profiles.active_project_id` (all safe to re-run).
+> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
 
 ## Programmatic access (REST API + MCP)
 
