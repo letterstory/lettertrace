@@ -6,7 +6,7 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 // Run at most this many queries at once to stay under provider rate limits.
 const CONCURRENCY = 4;
 
-// The brand's registrable web host, e.g. "notion.so" from a messy brand_domain.
+// The brand's registrable web host, e.g. "notion.so" from a messy domain entry.
 export function hostOf(domain: string | null): string {
   if (!domain) return "";
   return domain
@@ -102,9 +102,11 @@ export async function executeRun(params: {
     return { runId, status: "completed", totalResponses: 0, tokensUsed: 0 };
   }
 
-  const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domain);
-  // The brand's own web host, for flagging cited sources as "yours".
-  const ownedHost = hostOf(project.brand_domain);
+  // Mention terms derive from the PRIMARY domain only: phantom-site names
+  // aren't the brand name, so they shouldn't count as brand mentions.
+  const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domains[0] ?? null);
+  // Every domain (main + phantoms) counts when flagging cited sources as "yours".
+  const ownedHosts = project.brand_domains.map(hostOf).filter(Boolean);
   let processed = 0; // prompts attempted (success or failure)
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
@@ -149,7 +151,7 @@ export async function executeRun(params: {
           domain: s.domain,
           title: s.title,
           snippet: s.snippet,
-          is_owned: isOwnedDomain(s.domain, ownedHost),
+          is_owned: ownedHosts.some((h) => isOwnedDomain(s.domain, h)),
         }));
         await supabase.from("sources").insert(sourceRows);
       }

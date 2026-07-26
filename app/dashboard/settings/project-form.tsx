@@ -32,7 +32,9 @@ export default function ProjectForm({ project }: { project: Project | null }) {
   const [brandAliases, setBrandAliases] = useState(
     (project?.brand_aliases ?? []).join(", "),
   );
-  const [brandDomain, setBrandDomain] = useState(project?.brand_domain ?? "");
+  const [brandDomains, setBrandDomains] = useState(
+    (project?.brand_domains ?? []).join(", "),
+  );
   const [description, setDescription] = useState(project?.description ?? "");
   const [schedule, setSchedule] = useState<Schedule>(project?.schedule ?? "off");
   const [useWebSearch, setUseWebSearch] = useState(project?.use_web_search ?? true);
@@ -64,7 +66,7 @@ export default function ProjectForm({ project }: { project: Project | null }) {
           name,
           brand_name: brandName,
           brand_aliases: aliases,
-          brand_domain: brandDomain,
+          brand_domains: brandDomains,
           description,
           schedule,
           use_web_search: useWebSearch,
@@ -135,16 +137,20 @@ export default function ProjectForm({ project }: { project: Project | null }) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <Label htmlFor="p-domain">Brand domain</Label>
+          <Label htmlFor="p-domains">Brand domains</Label>
           <Input
-            id="p-domain"
-            value={brandDomain}
+            id="p-domains"
+            value={brandDomains}
             onChange={(e) => {
-              setBrandDomain(e.target.value);
+              setBrandDomains(e.target.value);
               setSaved(false);
             }}
-            placeholder="acme.com"
+            placeholder="acme.com, acme-guides.com"
           />
+          <p className="mt-1.5 text-xs text-ink-faint">
+            Comma-separated, main domain first. Sources cited from any of these
+            count as yours — include phantom sites for this brand.
+          </p>
         </div>
         <div>
           <Label htmlFor="p-schedule">Monitoring schedule</Label>

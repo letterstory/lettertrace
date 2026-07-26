@@ -111,7 +111,7 @@ create table if not exists public.projects (
   name text not null,
   brand_name text not null,
   brand_aliases text[] not null default '{}',
-  brand_domain text,
+  brand_domains text[] not null default '{}',
   description text,
   default_provider text not null default 'anthropic' check (default_provider in ('anthropic', 'openai', 'google')),
   default_model text not null default 'claude-sonnet-4-6',
@@ -130,6 +130,29 @@ alter table public.projects
 -- sources they cite. Default on. Safe to re-run.
 alter table public.projects
   add column if not exists use_web_search boolean not null default true;
+
+-- Phantomsites: a brand can have several domains — the main site plus phantom
+-- sites that build rapport for the same brand. The first entry is the primary
+-- (main TLD); every entry counts for source ownership. Migrates the old single
+-- brand_domain into the array, then retires it. Safe to re-run.
+alter table public.projects
+  add column if not exists brand_domains text[] not null default '{}';
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'projects'
+      and column_name = 'brand_domain'
+  ) then
+    update public.projects
+      set brand_domains = array[btrim(brand_domain)]
+      where brand_domain is not null
+        and btrim(brand_domain) <> ''
+        and brand_domains = '{}';
+    alter table public.projects drop column brand_domain;
+  end if;
+end $$;
 
 -- Multi-org: which of the user's projects (organizations) the dashboard is
 -- currently showing. Falls back to the earliest project when unset. Safe to

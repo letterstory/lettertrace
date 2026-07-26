@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { Provider, Sentiment } from "@/lib/types";
-import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
+import { GOOGLE_AI_OVERVIEWS_MODEL, analysisModelFor } from "@/lib/models";
 
 // ------------------------------------------------------------------
 // Provider adapters. Every call here uses the *user's own* API key (BYOK).
@@ -613,13 +613,17 @@ ${entityList}
 
 Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|neutral|negative", "recommended": true|false } ] } with one entry per entity.`;
 
+  // Classification always runs on the cheap model, regardless of which model
+  // answered the question — see analysisModelFor.
+  const analysisModel = analysisModelFor(opts.provider);
+
   try {
     const res =
       opts.provider === "anthropic"
-        ? await anthropicChat(opts.apiKey, opts.model, ANALYZE_SYSTEM, user, 700)
+        ? await anthropicChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
         : opts.provider === "google"
-          ? await googleChat(opts.apiKey, opts.model, ANALYZE_SYSTEM, user, 700, true)
-          : await openaiChat(opts.apiKey, opts.model, ANALYZE_SYSTEM, user, 700, true);
+          ? await googleChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true)
+          : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
 
     let parsed: unknown = extractJson(res.text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {

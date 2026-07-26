@@ -88,7 +88,7 @@ const PROJECT: Project = {
   name: "Credal",
   brand_name: "Credal",
   brand_aliases: [],
-  brand_domain: "credal.ai",
+  brand_domains: ["credal.ai"],
   description: null,
   default_provider: "anthropic",
   default_model: "claude-sonnet-4-6",
@@ -415,7 +415,7 @@ describe("createProject", () => {
       name: "Acme",
       brand_name: "Acme",
       brand_aliases: [],
-      brand_domain: null,
+      brand_domains: [],
       description: null,
       default_provider: "anthropic",
       default_model: "claude-opus-4-8", // defaultModelFor("anthropic")
@@ -430,14 +430,15 @@ describe("createProject", () => {
       name: "Acme",
       brand_name: "Acme",
       brand_aliases: ["Acme Inc", " acme.io "],
-      brand_domain: "acme.io",
+      brand_domains: ["acme.io", " acme-guides.io ", "ACME.io"],
       default_provider: "openai",
       default_model: "gpt-4o-mini",
       use_web_search: false,
     });
     expect(insertedValues(db, "projects")).toMatchObject({
       brand_aliases: ["Acme Inc", "acme.io"],
-      brand_domain: "acme.io",
+      // Trimmed and deduped case-insensitively, primary first.
+      brand_domains: ["acme.io", "acme-guides.io"],
       default_provider: "openai",
       default_model: "gpt-4o-mini",
       use_web_search: false,

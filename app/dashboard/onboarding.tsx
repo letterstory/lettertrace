@@ -139,7 +139,7 @@ export function Onboarding() {
         body: JSON.stringify({
           brand_name: brandName.trim(),
           name: brandName.trim(),
-          brand_domain: domain.trim() || null,
+          brand_domains: domain.trim() ? [domain.trim()] : [],
           description: description.trim() || null,
           topics: cleaned,
         }),

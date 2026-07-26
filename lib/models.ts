@@ -76,6 +76,27 @@ export function defaultModelFor(provider: Provider): string {
   return PROVIDERS[provider].models[0].id;
 }
 
+const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
+  anthropic: "ANALYSIS_ANTHROPIC_MODEL",
+  openai: "ANALYSIS_OPENAI_MODEL",
+  google: "ANALYSIS_GOOGLE_MODEL",
+};
+
+const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
+  anthropic: "claude-haiku-4-5",
+  openai: "gpt-4o-mini",
+  google: "gemini-2.5-flash-lite",
+};
+
+// Sentiment/recommendation enrichment is a simple structured-JSON judgment;
+// running it on the flagship answer model multiplies run cost for no quality
+// gain. Always classify on the provider's cheap model (overridable via env).
+export function analysisModelFor(provider: Provider): string {
+  const override = process.env[ANALYSIS_MODEL_ENV[provider]];
+  if (override && override.trim()) return override.trim();
+  return ANALYSIS_MODEL_DEFAULT[provider];
+}
+
 export function modelLabel(provider: Provider, modelId: string): string {
   const found = PROVIDERS[provider]?.models.find((m) => m.id === modelId);
   return found?.label ?? modelId;

@@ -54,7 +54,8 @@ export interface Project {
   name: string;
   brand_name: string;
   brand_aliases: string[];
-  brand_domain: string | null;
+  /** All domains for the brand; index 0 is the primary (main TLD), the rest are phantom sites. */
+  brand_domains: string[];
   description: string | null;
   default_provider: Provider;
   default_model: string;

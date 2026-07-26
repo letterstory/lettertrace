@@ -29,7 +29,7 @@ export function projectSummary(p: Project) {
     id: p.id,
     name: p.name,
     brand_name: p.brand_name,
-    brand_domain: p.brand_domain,
+    brand_domains: p.brand_domains,
     default_provider: p.default_provider,
     default_model: p.default_model,
     schedule: p.schedule,
@@ -70,6 +70,18 @@ function toNullableString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// Brand domains, first = primary. Accepts an array or a comma-separated
+// string; deduped case-insensitively, order preserved.
+function toDomains(value: unknown): string[] {
+  const seen = new Set<string>();
+  return toAliases(value).filter((d) => {
+    const key = d.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export type CreateProjectOutcome =
@@ -125,7 +137,7 @@ export async function createProject(
       name,
       brand_name,
       brand_aliases: toAliases(input.brand_aliases),
-      brand_domain: toNullableString(input.brand_domain),
+      brand_domains: toDomains(input.brand_domains),
       description: toNullableString(input.description),
       default_provider: provider,
       default_model: model,
