@@ -26,10 +26,12 @@ const bullets = [
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { next?: string; mode?: string };
+  searchParams: { next?: string; mode?: string; error?: string };
 }) {
   const next = typeof searchParams.next === "string" ? searchParams.next : undefined;
   const mode = typeof searchParams.mode === "string" ? searchParams.mode : undefined;
+  // Set by /auth/callback when a provider hand-off or code exchange fails.
+  const error = typeof searchParams.error === "string" ? searchParams.error : undefined;
 
   return (
     <main className="flex min-h-screen bg-paper">
@@ -85,7 +87,7 @@ export default async function LoginPage({
           </div>
           <Card>
             <CardBody className="p-8 sm:p-10">
-              <AuthForm next={next} mode={mode} />
+              <AuthForm next={next} mode={mode} initialError={error} />
             </CardBody>
           </Card>
         </div>

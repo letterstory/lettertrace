@@ -6,25 +6,69 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { safePath } from "@/lib/utils";
 import { Button, Input, Label, Spinner } from "@/components/ui";
+import { GithubIcon, GoogleIcon } from "@/components/brand-icons";
 
 type Mode = "signin" | "signup";
+type OAuthProvider = "google" | "github";
 
-export function AuthForm({ next, mode }: { next?: string; mode?: string }) {
+// Sign-in providers configured in Supabase (Authentication → Providers). Adding
+// one here is the only client-side change a new provider needs — the callback
+// route and the profiles trigger are provider-agnostic.
+const oauthProviders: { id: OAuthProvider; label: string; Icon: typeof GoogleIcon }[] = [
+  { id: "google", label: "Google", Icon: GoogleIcon },
+  { id: "github", label: "GitHub", Icon: GithubIcon },
+];
+
+export function AuthForm({
+  next,
+  mode,
+  initialError,
+}: {
+  next?: string;
+  mode?: string;
+  initialError?: string;
+}) {
   const router = useRouter();
   const [authMode, setAuthMode] = useState<Mode>(mode === "signup" ? "signup" : "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
   const [confirmSent, setConfirmSent] = useState(false);
 
   const isSignup = authMode === "signup";
   const destination = safePath(next);
+  const busy = loading || oauthLoading !== null;
 
   function toggleMode() {
     setAuthMode((m) => (m === "signin" ? "signup" : "signin"));
     setError(null);
     setConfirmSent(false);
+  }
+
+  async function handleOAuth(provider: OAuthProvider) {
+    setError(null);
+    setConfirmSent(false);
+    setOauthLoading(provider);
+
+    const supabase = createClient();
+    // Supabase sends the user to the provider, the provider returns to
+    // Supabase, and Supabase finally lands on this `redirectTo` with a `code`.
+    // It must be on the allowlist under Authentication → URL Configuration.
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
+      },
+    });
+
+    // On success the browser is already navigating away, so the spinner is
+    // deliberately left running rather than flashing off mid-redirect.
+    if (oauthError) {
+      setError(oauthError.message);
+      setOauthLoading(null);
+    }
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -118,6 +162,34 @@ export function AuthForm({ next, mode }: { next?: string; mode?: string }) {
         </div>
       )}
 
+      <div className="space-y-3">
+        {oauthProviders.map(({ id, label, Icon }) => (
+          <Button
+            key={id}
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="w-full"
+            disabled={busy}
+            onClick={() => handleOAuth(id)}
+          >
+            {oauthLoading === id ? <Spinner /> : <Icon />}
+            Continue with {label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center" aria-hidden>
+          <span className="w-full border-t border-ink/10" />
+        </div>
+        <div className="relative flex justify-center">
+          <span className="bg-surface px-3 text-xs uppercase tracking-wide text-ink-faint">
+            or
+          </span>
+        </div>
+      </div>
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <Label htmlFor="email">Email</Label>
@@ -147,7 +219,7 @@ export function AuthForm({ next, mode }: { next?: string; mode?: string }) {
           />
         </div>
 
-        <Button type="submit" size="lg" className="w-full" disabled={loading}>
+        <Button type="submit" size="lg" className="w-full" disabled={busy}>
           {loading ? (
             <>
               <Spinner />

@@ -63,6 +63,34 @@ Open the Supabase **SQL Editor** and run the contents of [`supabase/schema.sql`]
 
 > **Email confirmation:** for the smoothest local experience, disable "Confirm email" under **Authentication → Providers → Email**, or confirm via the link (handled by `/auth/callback`).
 
+#### Social sign-in (optional)
+
+The sign-in screen offers **Google** and **GitHub** alongside email + password. Both are optional — if a provider isn't enabled in Supabase, its button will simply error when clicked, so remove it from `oauthProviders` in [`app/login/auth-form.tsx`](./app/login/auth-form.tsx) if you don't plan to configure it.
+
+No new environment variables are involved: the client secrets live in Supabase, not in this repo.
+
+**1. Register the app with each provider.** Both point at *Supabase's* callback, not yours — which means one registration covers local development and production:
+
+```
+https://<project-ref>.supabase.co/auth/v1/callback
+```
+
+- **GitHub** → Settings → Developer settings → OAuth Apps → New OAuth App. Leave "Enable Device Flow" unchecked.
+- **Google** → Cloud Console → APIs & Services → Credentials → OAuth client ID (Web application). Add `https://<project-ref>.supabase.co` as an authorized JavaScript origin. On the consent screen, request only the default non-sensitive scopes (`email`, `profile`, `openid`) — those need no verification review, but the app must be published to **In production** to accept more than 100 users, and any domain in your consent-screen links must be verified in Search Console.
+
+**2. Enable the providers in Supabase.** Authentication → Providers → Google / GitHub: toggle on and paste each client ID and secret. Requires the **Owner** or **Administrator** role on the project; other roles see the fields greyed out. Leave "Allow users without an email" off — GitHub returns a `@users.noreply.github.com` address even for users with private emails, so `handle_new_user` always has something to write into `profiles`.
+
+**3. Allowlist your own redirect URLs.** Authentication → URL Configuration → Redirect URLs. This is the second hop (Supabase → your app) and is separate from step 1; missing it is the most common cause of a sign-in that dead-ends:
+
+```
+http://localhost:3000/auth/callback
+https://your-domain.com/auth/callback
+```
+
+Set **Site URL** to your production origin while you're on that screen, and make sure `NEXT_PUBLIC_SITE_URL` matches it — `/auth/callback` prefers it over the request origin, which would otherwise resolve to the internal deployment host behind a proxy.
+
+Users who sign up with a password and later use a social provider with the same address are linked into one account by Supabase, provided the provider reports the email as verified.
+
 ### 3. Configure environment
 
 ```bash
@@ -205,7 +233,8 @@ Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env v
 ```
 app/                     Next.js App Router
   page.tsx               Landing page
-  login/                 Auth
+  login/                 Auth (email + password, Google, GitHub)
+  auth/callback/         OAuth + email-confirmation code exchange
   dashboard/             Overview, topics, competitors, runs, settings
   api/                   Route handlers (keys, project, topics, prompts, competitors, runs, cron)
 components/              UI primitives, logo, dashboard nav + charts
