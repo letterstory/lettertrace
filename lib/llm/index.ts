@@ -190,10 +190,23 @@ async function anthropicWebSearch(
 ): Promise<QueryResult> {
   const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
   // web_search is a server-side tool not in older SDK typings; cast the params.
+  //
+  // Keep the 20250305 tool version. The newer web_search_20260209 runs dynamic
+  // filtering through code execution and returns results in a shape this parser
+  // doesn't read: measured against the same prompt it produced 0 inline
+  // citations (vs 11) for 2.6x the tokens, falling back to the "retrieved but
+  // not cited" path below. Upgrading needs the citation parsing reworked first.
   const params = {
     model,
     max_tokens: ANSWER_MAX_TOKENS,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }],
+    // Force the browse, matching the OpenAI path. Left to choose, the model
+    // answers well-known questions from memory and cites nothing — in a live
+    // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
+    // which made the two providers' mention rates measure different things.
+    // use_web_search is opt-in per project, so when it's on the user has asked
+    // us to check the live web. Costs roughly 4x the tokens of a memory answer.
+    tool_choice: { type: "tool", name: "web_search" },
     messages: [{ role: "user", content: prompt }],
   };
   const msg = await client.messages.create(
@@ -583,11 +596,18 @@ export async function suggestCompetitors(
     }
     const arr = Array.isArray(parsed) ? parsed : [];
     const suggestions: CompetitorSuggestion[] = [];
+    // Models occasionally list the same company twice in one response. Two rows
+    // for one competitor become two entities in computeEntityStats, which
+    // inflates the share-of-voice denominator and understates the brand.
+    const seen = new Set<string>();
     for (const item of arr) {
       if (!item || typeof item !== "object") continue;
       const o = item as Record<string, unknown>;
       const name = typeof o.name === "string" ? o.name.trim() : "";
       if (!name) continue;
+      const dedupeKey = name.toLowerCase();
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
       suggestions.push({
         name,
         domain:

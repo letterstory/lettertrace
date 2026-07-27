@@ -75,7 +75,14 @@ export async function POST() {
         (n) => n.trim().toLowerCase(),
       ),
     );
-    const fresh = suggestions.filter((s) => !taken.has(s.name.trim().toLowerCase()));
+    // Adding as we go also collapses repeats *within* this batch, so a model
+    // that names the same competitor twice can't get two rows past the UI.
+    const fresh = suggestions.filter((s) => {
+      const name = s.name.trim().toLowerCase();
+      if (taken.has(name)) return false;
+      taken.add(name);
+      return true;
+    });
 
     return NextResponse.json({ suggestions: fresh });
   } catch (e) {

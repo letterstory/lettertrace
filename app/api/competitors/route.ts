@@ -64,6 +64,14 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
+      // 23505 = the competitors_project_name_uniq index. Adding the same
+      // competitor twice is a user-visible conflict, not a server fault.
+      if (error.code === "23505") {
+        return NextResponse.json(
+          { error: `"${name}" is already tracked as a competitor.` },
+          { status: 409 },
+        );
+      }
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
