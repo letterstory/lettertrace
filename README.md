@@ -195,10 +195,34 @@ curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
 curl https://your-app.com/api/v1/runs/<run-id> \
   -H "Authorization: Bearer lt_live_..."
 
+# Brand visibility across every completed run, oldest first.
+# `firstMentionAt` is the event to poll for: null until the brand is first named.
+curl https://your-app.com/api/v1/projects/<project-id>/history?limit=30 \
+  -H "Authorization: Bearer lt_live_..."
+
 # Raw artifacts for a run: each response's full text + cited sources + mentions
 curl https://your-app.com/api/v1/runs/<run-id>/responses \
   -H "Authorization: Bearer lt_live_..."
 ```
+
+The run report carries four blocks. Read them in this order:
+
+| Block | What it answers |
+|---|---|
+| `quality.informativeRate` | Did the answers name *any* company? If low, the prompts are the wrong shape and every rate below is meaningless. |
+| `summary` | Brand mention rate, with `brandMentionRateInterval` and the raw numerator/denominator. A zero from 1 answer and a zero from 30 are not the same evidence. |
+| `citations` | Did the models read the brand's own pages? Moves before mentions do, so it is often the only signal a young brand has. |
+| `topics` | The same per topic, which is the join between what you published and what surfaced. |
+
+Answers vary between identical calls, so a single ask cannot distinguish "not
+mentioned" from "mentioned, unlucky". Set `replicates` (1–10, default 1) on a
+project to ask each prompt several times per run and narrow the interval; token
+cost scales linearly with it.
+
+> **Writing prompts that measure anything** is the single biggest lever on
+> whether a run is useful — bigger than model choice. See
+> [`docs/prompt-playbook.md`](./docs/prompt-playbook.md) before configuring a
+> client.
 
 **MCP:** Lettertrace exposes a [Model Context Protocol](https://modelcontextprotocol.io) server (Streamable HTTP) so Claude and other MCP clients can query your share-of-voice data conversationally:
 
@@ -238,6 +262,10 @@ app/                     Next.js App Router
   dashboard/             Overview, topics, competitors, runs, settings
   api/                   Route handlers (keys, project, topics, prompts, competitors, runs, cron)
 components/              UI primitives, logo, dashboard nav + charts
+docs/
+  prompt-playbook.md     What live client runs taught us about prompt shape
+scripts/
+  pilot-client.ts        Dry-run a client through the pipeline (no DB writes)
 lib/
   supabase/              Server / browser / middleware clients
   llm/                   Anthropic + OpenAI adapters (query, variations, sentiment)
