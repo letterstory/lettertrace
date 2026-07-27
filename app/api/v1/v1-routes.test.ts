@@ -385,6 +385,12 @@ describe("GET /api/v1/runs/:id", () => {
         distinctOwnedUrls: 1,
         totalSources: 3,
       },
+      quality: {
+        totalResponses: 2,
+        responsesNamingSomeone: 2,
+        responsesNamingNobody: 0,
+        informativeRate: 1,
+      },
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });
     expect(res.status).toBe(200);

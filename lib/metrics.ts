@@ -210,6 +210,44 @@ export function computeCitationStats(
   };
 }
 
+/**
+ * How much of a run actually measured anything.
+ *
+ * An answer that names no tracked company at all is not a zero — it's a failed
+ * measurement, and today it's stored identically to a real miss. The two mean
+ * opposite things: "three competitors were named and you weren't" is a
+ * competitive finding, while "the model explained the category and named nobody"
+ * says only that the question was the wrong shape. Measured live, how-to and
+ * best-X phrasings named ~0.1 companies per answer while list-style phrasings
+ * named 3.7, so a run built from the wrong shapes can look like total invisibility
+ * while carrying no information whatsoever.
+ *
+ * Derived rather than stored: a response with no mention rows named nobody.
+ */
+export interface MeasurementQuality {
+  totalResponses: number;
+  responsesNamingSomeone: number;
+  responsesNamingNobody: number;
+  /** Share of answers that named at least one tracked entity. Low means the
+   *  prompts need reshaping, not that the brand is absent. */
+  informativeRate: number; // 0..1
+}
+
+export function computeMeasurementQuality(
+  mentions: Pick<Mention, "response_id">[],
+  totalResponses: number,
+): MeasurementQuality {
+  const responsesNamingSomeone = new Set(mentions.map((m) => m.response_id)).size;
+  // Guard against a caller passing a stale/short response count.
+  const naming = Math.min(responsesNamingSomeone, totalResponses);
+  return {
+    totalResponses,
+    responsesNamingSomeone: naming,
+    responsesNamingNobody: Math.max(0, totalResponses - naming),
+    informativeRate: totalResponses ? naming / totalResponses : 0,
+  };
+}
+
 // Per-topic breakdown for the brand (uses topic_id stored on mention rows).
 export interface TopicStat {
   topicId: string | null;

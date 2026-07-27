@@ -4,6 +4,7 @@ import {
   computeEntityStats,
   computeRunSummary,
   computeCitationStats,
+  computeMeasurementQuality,
 } from "@/lib/metrics";
 import type { Mention } from "@/lib/types";
 
@@ -177,5 +178,40 @@ describe("computeCitationStats", () => {
     expect(s.ownedCitationRate).toBe(0);
     expect(s.totalSources).toBe(0);
     expect(s.ownedCitationRateInterval.high).toBeGreaterThan(0);
+  });
+});
+
+describe("computeMeasurementQuality", () => {
+  const at = (response_id: string) => ({ response_id });
+
+  it("separates answers that named someone from answers that named nobody", () => {
+    // 5 answers, 2 of which named a tracked company (one named two).
+    const q = computeMeasurementQuality([at("r1"), at("r1"), at("r2")], 5);
+    expect(q.responsesNamingSomeone).toBe(2);
+    expect(q.responsesNamingNobody).toBe(3);
+    expect(q.informativeRate).toBeCloseTo(0.4);
+  });
+
+  it("flags a run where every answer named nobody as measuring nothing", () => {
+    const q = computeMeasurementQuality([], 12);
+    expect(q.responsesNamingSomeone).toBe(0);
+    expect(q.responsesNamingNobody).toBe(12);
+    expect(q.informativeRate).toBe(0);
+  });
+
+  it("reports a fully informative run", () => {
+    const q = computeMeasurementQuality([at("r1"), at("r2")], 2);
+    expect(q.informativeRate).toBe(1);
+    expect(q.responsesNamingNobody).toBe(0);
+  });
+
+  it("never reports negative unnamed answers if the counts disagree", () => {
+    const q = computeMeasurementQuality([at("r1"), at("r2"), at("r3")], 1);
+    expect(q.responsesNamingNobody).toBe(0);
+    expect(q.responsesNamingSomeone).toBe(1);
+  });
+
+  it("handles an empty run", () => {
+    expect(computeMeasurementQuality([], 0).informativeRate).toBe(0);
   });
 });

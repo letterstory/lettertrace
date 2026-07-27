@@ -11,9 +11,11 @@ import type {
 import {
   computeCitationStats,
   computeEntityStats,
+  computeMeasurementQuality,
   computeRunSummary,
   type CitationStat,
   type EntityStat,
+  type MeasurementQuality,
   type RunSummary,
 } from "@/lib/metrics";
 import { executeRun, type RunResult } from "@/lib/engine";
@@ -394,6 +396,9 @@ export interface RunReport {
   /** Whether the models read the brand's own pages. Moves before mentions do,
    *  so it's the only progress signal a young brand has. */
   citations: CitationStat;
+  /** How many answers named any tracked company. A run that named nobody
+   *  measured nothing — read this before believing a zero mention rate. */
+  quality: MeasurementQuality;
 }
 
 /** The most recent completed run for a project, if any. */
@@ -449,6 +454,7 @@ export async function getRunReport(
     summary: computeRunSummary(mentions, totalResponses, project.brand_name),
     entities: computeEntityStats(mentions, totalResponses, project.brand_name),
     citations: computeCitationStats(sources, totalResponses),
+    quality: computeMeasurementQuality(mentions, totalResponses),
   };
 }
 
