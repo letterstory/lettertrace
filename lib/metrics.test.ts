@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { wilsonInterval, computeEntityStats, computeRunSummary } from "@/lib/metrics";
+import {
+  wilsonInterval,
+  computeEntityStats,
+  computeRunSummary,
+  computeCitationStats,
+} from "@/lib/metrics";
 import type { Mention } from "@/lib/types";
 
 function mention(over: Partial<Mention> = {}): Mention {
@@ -128,5 +133,49 @@ describe("computeRunSummary", () => {
     const s = computeRunSummary([], 1, "Acme");
     expect(s.brandMentionRate).toBe(0);
     expect(s.brandMentionRateInterval.high).toBeGreaterThan(0.7);
+  });
+});
+
+describe("computeCitationStats", () => {
+  const src = (response_id: string, url: string, is_owned: boolean) => ({ response_id, url, is_owned });
+
+  it("counts answers that cited the brand's own site, not raw citations", () => {
+    // Two owned citations inside one answer is still one answer.
+    const s = computeCitationStats(
+      [
+        src("r1", "https://acme.com/a", true),
+        src("r1", "https://acme.com/b", true),
+        src("r2", "https://other.com/x", false),
+      ],
+      4,
+    );
+    expect(s.responsesWithOwnedSource).toBe(1);
+    expect(s.ownedCitationRate).toBe(0.25);
+    expect(s.distinctOwnedUrls).toBe(2);
+    expect(s.totalSources).toBe(3);
+  });
+
+  it("reports a believable zero when nothing of the brand's was cited", () => {
+    const s = computeCitationStats([src("r1", "https://other.com", false)], 20);
+    expect(s.ownedCitationRate).toBe(0);
+    expect(s.distinctOwnedUrls).toBe(0);
+    expect(s.ownedCitationRateInterval.high).toBeLessThan(0.2);
+  });
+
+  it("does not double-count the same page cited across answers", () => {
+    const s = computeCitationStats(
+      [src("r1", "https://acme.com/a", true), src("r2", "https://acme.com/a", true)],
+      2,
+    );
+    expect(s.responsesWithOwnedSource).toBe(2);
+    expect(s.distinctOwnedUrls).toBe(1);
+    expect(s.ownedCitationRate).toBe(1);
+  });
+
+  it("handles a run with no sources at all", () => {
+    const s = computeCitationStats([], 5);
+    expect(s.ownedCitationRate).toBe(0);
+    expect(s.totalSources).toBe(0);
+    expect(s.ownedCitationRateInterval.high).toBeGreaterThan(0);
   });
 });

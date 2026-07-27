@@ -9,8 +9,10 @@ import type {
   Source,
 } from "@/lib/types";
 import {
+  computeCitationStats,
   computeEntityStats,
   computeRunSummary,
+  type CitationStat,
   type EntityStat,
   type RunSummary,
 } from "@/lib/metrics";
@@ -389,6 +391,9 @@ export interface RunReport {
   totalResponses: number;
   summary: RunSummary;
   entities: EntityStat[];
+  /** Whether the models read the brand's own pages. Moves before mentions do,
+   *  so it's the only progress signal a young brand has. */
+  citations: CitationStat;
 }
 
 /** The most recent completed run for a project, if any. */
@@ -422,15 +427,17 @@ export async function getRunReport(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [{ count }, { data: mentionRows }] = await Promise.all([
+  const [{ count }, { data: mentionRows }, { data: sourceRows }] = await Promise.all([
     supabase
       .from("responses")
       .select("id", { count: "exact", head: true })
       .eq("run_id", runId),
     supabase.from("mentions").select("*").eq("run_id", runId),
+    supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
   ]);
 
   const mentions = (mentionRows ?? []) as Mention[];
+  const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
   const totalResponses = count ?? 0;
 
   return {
@@ -441,6 +448,7 @@ export async function getRunReport(
     // tracking "have we been mentioned yet" needs the zero, not a missing key.
     summary: computeRunSummary(mentions, totalResponses, project.brand_name),
     entities: computeEntityStats(mentions, totalResponses, project.brand_name),
+    citations: computeCitationStats(sources, totalResponses),
   };
 }
 

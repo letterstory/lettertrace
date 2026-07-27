@@ -377,6 +377,14 @@ describe("GET /api/v1/runs/:id", () => {
         brandAvgProminence: 0.9,
       },
       entities: [],
+      citations: {
+        responsesWithOwnedSource: 1,
+        totalResponses: 2,
+        ownedCitationRate: 0.5,
+        ownedCitationRateInterval: { low: 0.09, high: 0.91 },
+        distinctOwnedUrls: 1,
+        totalSources: 3,
+      },
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });
     expect(res.status).toBe(200);

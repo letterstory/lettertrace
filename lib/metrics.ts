@@ -1,4 +1,4 @@
-import type { Mention, Sentiment } from "@/lib/types";
+import type { Mention, Sentiment, Source } from "@/lib/types";
 
 // Aggregations over stored (positive) mention rows. `totalResponses` is the
 // number of assistant answers in scope, the denominator for mention rate.
@@ -170,6 +170,43 @@ export function computeRunSummary(
     brandShareOfVoice: brand?.shareOfVoice ?? 0,
     brandSentimentScore: brand?.sentimentScore ?? 0,
     brandAvgProminence: brand?.avgProminence ?? 0,
+  };
+}
+
+/**
+ * Whether the models read the brand's own site while answering.
+ *
+ * This is the leading indicator, and for a young brand it is the only one that
+ * moves. Being cited as a source and being named in the prose are separate
+ * events won by different content: measured live, a how-to question cited the
+ * brand's domain while naming nobody at all, and the list-style questions that
+ * did name companies cited roundups instead of any vendor's own site. So a
+ * client publishing articles can be making real progress for months while
+ * mention rate sits flat at zero — this is what shows it.
+ */
+export interface CitationStat {
+  responsesWithOwnedSource: number;
+  totalResponses: number;
+  ownedCitationRate: number; // 0..1
+  ownedCitationRateInterval: Interval;
+  /** Distinct owned URLs cited, i.e. how many of their pages are landing. */
+  distinctOwnedUrls: number;
+  totalSources: number;
+}
+
+export function computeCitationStats(
+  sources: Pick<Source, "response_id" | "url" | "is_owned">[],
+  totalResponses: number,
+): CitationStat {
+  const owned = sources.filter((s) => s.is_owned);
+  const responsesWithOwnedSource = new Set(owned.map((s) => s.response_id)).size;
+  return {
+    responsesWithOwnedSource,
+    totalResponses,
+    ownedCitationRate: totalResponses ? responsesWithOwnedSource / totalResponses : 0,
+    ownedCitationRateInterval: wilsonInterval(responsesWithOwnedSource, totalResponses),
+    distinctOwnedUrls: new Set(owned.map((s) => s.url)).size,
+    totalSources: sources.length,
   };
 }
 
