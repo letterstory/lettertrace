@@ -254,6 +254,9 @@ export interface TopicStat {
   brandMentions: number;
   totalResponses: number;
   mentionRate: number;
+  /** Per-topic samples are small — a topic's rate needs its interval even more
+   *  than the run-level one does. */
+  mentionRateInterval: Interval;
 }
 
 export function computeTopicStats(
@@ -275,6 +278,7 @@ export function computeTopicStats(
       brandMentions,
       totalResponses: total,
       mentionRate: total ? brandMentions / total : 0,
+      mentionRateInterval: wilsonInterval(brandMentions, total),
     });
   }
   return out.sort((a, b) => b.mentionRate - a.mentionRate);
