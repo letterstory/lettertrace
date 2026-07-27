@@ -193,7 +193,7 @@ export default function LandingPage() {
               </Button>
             </div>
             <p className="mt-4 font-mono text-xs text-ink-faint">
-              works with ChatGPT &amp; Claude · self-host in minutes
+              self-host in minutes · built by the Letter Company
             </p>
           </div>
 
@@ -237,7 +237,7 @@ export default function LandingPage() {
             <div>
               <p className="mono-eyebrow">the numbers that matter</p>
               <h2 className="mt-3 text-3xl font-semibold text-ink sm:text-4xl">
-                A visibility report, not a vibe.
+                A data-rich visibility report.
               </h2>
               <p className="mt-4 text-ink-soft">
                 Lettertrace turns raw AI answers into the metrics AEO/GEO teams track: visibility,
