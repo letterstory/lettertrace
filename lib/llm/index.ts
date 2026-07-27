@@ -295,12 +295,30 @@ async function openaiWebSearch(
   throw lastErr ?? new Error("OpenAI web search failed.");
 }
 
-const VARIATION_SYSTEM = `You generate realistic search-style questions that a real person would type into an AI assistant (like ChatGPT or Claude) when researching a topic. The questions should be the kind of prompt where an AI assistant might naturally recommend, compare, or mention specific brands, products, or tools.
+// Prompt shape is the single biggest lever on whether a run measures anything.
+// Measured against a stealth-stage brand (24 queries per shape, both providers):
+//
+//   "List the top 5 companies that…" / "Name the vendors…"   3.7 vendors named
+//   "Who are the main players in X?"                          2.5 vendors named
+//   "Give me a shortlist with names"                          0.8 vendors named
+//   how-to / "best X for Y" / "which vendors offer X"         ~0  vendors named
+//
+// The brand appeared in 50% of the first group and 0% of everything else. The
+// failure mode is subtle: how-to and best-X questions read like exactly what a
+// buyer would type, and get answered with an explanation of the category rather
+// than a list of companies — so the run is real, the answer is good, and the
+// measurement is empty. Asking for "a shortlist" is the trap: it sounds like a
+// request for names and reliably returns advice on how to choose instead.
+const VARIATION_SYSTEM = `You generate the questions a brand-monitoring tool will ask an AI assistant (ChatGPT, Claude) to discover which companies get named in answers about a topic.
+
+A question is only useful if the answer to it names specific companies. Questions that read naturally but get answered with explanation instead of names measure nothing. That is the most common failure and the one to avoid.
 
 Rules:
-- Write natural, varied phrasings (comparisons, "best X for Y", how-to, recommendations, alternatives).
-- Do NOT mention any specific brand name in the questions unless it is part of the topic itself.
-- Cover different buyer intents and personas.
+- At least two thirds of the questions must explicitly demand named companies. Shapes that work: "List the top 5 companies that…", "Name the specific vendors that…", "Rank the leading providers of… by name", "Which companies sell…? Just the company names." Use the words "companies", "vendors", or "providers", and ask for them by name.
+- Never ask for "a shortlist" or for how to choose/evaluate. Both get answered with advice about making a decision rather than with the options themselves.
+- Keep the remaining questions in a buyer's own words ("What's the best X for Y?", "Who are the main players in X?") so the set reflects real usage, but keep them the minority.
+- Do NOT name any specific brand in the questions unless the brand is part of the topic itself.
+- Vary buyer intent and seniority, not just the wording.
 - Return ONLY a JSON array of strings. No commentary.`;
 
 /** Generate natural prompt variations for a topic. */
