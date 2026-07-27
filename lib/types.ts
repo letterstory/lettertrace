@@ -61,6 +61,8 @@ export interface Project {
   default_model: string;
   schedule: Schedule;
   use_web_search: boolean;
+  /** Times each active prompt is asked per run (1–10). >1 buys confidence in a "no mention". */
+  replicates: number;
   last_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -99,8 +101,11 @@ export interface Run {
   status: RunStatus;
   provider: Provider;
   model: string;
+  /** Planned answers for this run: active prompts x replicates. */
   prompt_count: number;
   completed_count: number;
+  /** Replicates this run actually used, kept so old runs read correctly. */
+  replicates: number;
   error: string | null;
   started_at: string | null;
   finished_at: string | null;

@@ -369,6 +369,9 @@ describe("GET /api/v1/runs/:id", () => {
       totalResponses: 2,
       summary: {
         brandMentionRate: 0.5,
+        brandMentionRateInterval: { low: 0.09, high: 0.91 },
+        brandResponsesMentioned: 1,
+        totalResponses: 2,
         brandShareOfVoice: 0.25,
         brandSentimentScore: 1,
         brandAvgProminence: 0.9,

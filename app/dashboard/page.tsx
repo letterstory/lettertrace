@@ -252,9 +252,9 @@ export default async function DashboardPage() {
   const latestMentions = mentionsByRun.get(latestRun.id) ?? [];
   const totalResponses = latestRun.completed_count;
 
-  const stats = computeEntityStats(latestMentions, totalResponses);
+  const stats = computeEntityStats(latestMentions, totalResponses, project.brand_name);
   const brand = stats.find((s) => s.type === "brand");
-  const summary = computeRunSummary(latestMentions, totalResponses);
+  const summary = computeRunSummary(latestMentions, totalResponses, project.brand_name);
 
   // Trend across the last 10 completed runs (chronological).
   const trendData = trendRuns

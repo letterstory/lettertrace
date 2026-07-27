@@ -436,8 +436,11 @@ export async function getRunReport(
   return {
     run,
     totalResponses,
-    summary: computeRunSummary(mentions, totalResponses),
-    entities: computeEntityStats(mentions, totalResponses),
+    // Pass the brand name so a run with no brand mentions still reports a brand
+    // row (rate 0 with an interval) rather than omitting it — an API consumer
+    // tracking "have we been mentioned yet" needs the zero, not a missing key.
+    summary: computeRunSummary(mentions, totalResponses, project.brand_name),
+    entities: computeEntityStats(mentions, totalResponses, project.brand_name),
   };
 }
 

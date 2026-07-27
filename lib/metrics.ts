@@ -3,6 +3,39 @@ import type { Mention, Sentiment } from "@/lib/types";
 // Aggregations over stored (positive) mention rows. `totalResponses` is the
 // number of assistant answers in scope, the denominator for mention rate.
 
+/** A 95% confidence range for a rate, both bounds 0..1. */
+export interface Interval {
+  low: number;
+  high: number;
+}
+
+/**
+ * Wilson score interval for a proportion.
+ *
+ * Mention rate is an estimate from a handful of answers, not a measurement, and
+ * the product's core claim is that "not mentioned" means something. 0 out of 1
+ * and 0 out of 30 are both a rate of zero and are not remotely the same
+ * evidence — this is what tells them apart.
+ *
+ * Wilson rather than the textbook normal approximation because the interesting
+ * cases are exactly where that one breaks: zero successes (it returns a
+ * degenerate +/-0) and single-digit sample sizes. Wilson stays sane at both,
+ * never escapes [0, 1], and needs no special-casing.
+ */
+export function wilsonInterval(successes: number, trials: number, z = 1.96): Interval {
+  if (trials <= 0) return { low: 0, high: 1 };
+  const hits = Math.min(Math.max(successes, 0), trials);
+  const p = hits / trials;
+  const z2 = z * z;
+  const denominator = 1 + z2 / trials;
+  const centre = p + z2 / (2 * trials);
+  const margin = z * Math.sqrt((p * (1 - p)) / trials + z2 / (4 * trials * trials));
+  return {
+    low: Math.max(0, (centre - margin) / denominator),
+    high: Math.min(1, (centre + margin) / denominator),
+  };
+}
+
 export interface EntityStat {
   key: string; // 'brand' or a competitor id
   name: string;
@@ -10,6 +43,9 @@ export interface EntityStat {
   responsesMentioned: number;
   totalResponses: number;
   mentionRate: number; // 0..1
+  /** How much to trust mentionRate. Wide at small n; a zero rate with a high
+   *  upper bound means "no evidence yet", not "confirmed absent". */
+  mentionRateInterval: Interval;
   totalMentionCount: number;
   shareOfVoice: number; // 0..1 across all entities
   avgProminence: number; // 0..1, higher = appears earlier
@@ -22,7 +58,15 @@ function entityKey(m: Mention): string {
   return m.entity_type === "brand" ? "brand" : m.competitor_id ?? m.entity_name;
 }
 
-export function computeEntityStats(mentions: Mention[], totalResponses: number): EntityStat[] {
+/**
+ * `brandName` is optional only for backwards compatibility. Pass it: without it
+ * a run in which the brand was never mentioned reports no brand row at all.
+ */
+export function computeEntityStats(
+  mentions: Mention[],
+  totalResponses: number,
+  brandName?: string,
+): EntityStat[] {
   const groups = new Map<string, Mention[]>();
   for (const m of mentions) {
     const k = entityKey(m);
@@ -59,12 +103,35 @@ export function computeEntityStats(mentions: Mention[], totalResponses: number):
       responsesMentioned,
       totalResponses,
       mentionRate: totalResponses ? responsesMentioned / totalResponses : 0,
+      mentionRateInterval: wilsonInterval(responsesMentioned, totalResponses),
       totalMentionCount,
       shareOfVoice: grandTotalMentions ? totalMentionCount / grandTotalMentions : 0,
       avgProminence,
       recommendRate: responsesMentioned ? recommended / responsesMentioned : 0,
       sentiment,
       sentimentScore,
+    });
+  }
+
+  // An entity with no mentions has no rows, so the brand silently vanishes from
+  // the report on exactly the runs where its absence is the finding. Synthesise
+  // the zero row when the caller tells us who the brand is, so a run always
+  // states something about it — with an interval showing what the zero is worth.
+  if (brandName && !stats.some((s) => s.type === "brand")) {
+    stats.push({
+      key: "brand",
+      name: brandName,
+      type: "brand",
+      responsesMentioned: 0,
+      totalResponses,
+      mentionRate: 0,
+      mentionRateInterval: wilsonInterval(0, totalResponses),
+      totalMentionCount: 0,
+      shareOfVoice: 0,
+      avgProminence: 0,
+      recommendRate: 0,
+      sentiment: { positive: 0, neutral: 0, negative: 0 },
+      sentimentScore: 0,
     });
   }
 
@@ -77,16 +144,29 @@ export function computeEntityStats(mentions: Mention[], totalResponses: number):
 
 export interface RunSummary {
   brandMentionRate: number;
+  /** Confidence range on brandMentionRate — read it before acting on a zero. */
+  brandMentionRateInterval: Interval;
+  /** Numerator and denominator behind the rate, so a consumer can judge it. */
+  brandResponsesMentioned: number;
+  totalResponses: number;
   brandShareOfVoice: number;
   brandSentimentScore: number;
   brandAvgProminence: number;
 }
 
-export function computeRunSummary(mentions: Mention[], totalResponses: number): RunSummary {
-  const stats = computeEntityStats(mentions, totalResponses);
+export function computeRunSummary(
+  mentions: Mention[],
+  totalResponses: number,
+  brandName?: string,
+): RunSummary {
+  const stats = computeEntityStats(mentions, totalResponses, brandName);
   const brand = stats.find((s) => s.type === "brand");
   return {
     brandMentionRate: brand?.mentionRate ?? 0,
+    brandMentionRateInterval:
+      brand?.mentionRateInterval ?? wilsonInterval(0, totalResponses),
+    brandResponsesMentioned: brand?.responsesMentioned ?? 0,
+    totalResponses,
     brandShareOfVoice: brand?.shareOfVoice ?? 0,
     brandSentimentScore: brand?.sentimentScore ?? 0,
     brandAvgProminence: brand?.avgProminence ?? 0,
