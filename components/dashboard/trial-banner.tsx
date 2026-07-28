@@ -38,7 +38,7 @@ export function TrialBanner({
           </span>
           <div>
             <p className="text-sm font-medium text-ink">
-              {exhausted ? "Your free runs are used up" : "You're on the free trial"}
+              {exhausted ? "Your free runs are used up" : "You're currently on complimentary tokens"}
             </p>
             <p className="mt-0.5 text-xs text-ink-faint">
               {exhausted
