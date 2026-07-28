@@ -14,7 +14,7 @@ export default function TermsPage() {
     <LegalPage
       title="Terms of Service"
       updated={UPDATED}
-      intro="These terms govern your use of the hosted Lettertrace service at lettertrace.com, operated by The Letter Company. Lettertrace's source code is separately available under the MIT licence; these terms apply to the service we run, not to the code."
+      intro="These terms govern your use of the hosted Lettertrace service at lettertrace.com, operated by The Letter Company."
     >
       <Section n={1} title="Agreement">
         <p>By creating an account or using Lettertrace, you agree to these terms. If you are using it on behalf of a company, you confirm you have authority to bind that company, and &quot;you&quot; means that company. If you do not agree, do not use the service.</p>
@@ -71,8 +71,8 @@ export default function TermsPage() {
         <p>Lettertrace depends on Anthropic, OpenAI, Supabase, Vercel, and — if you use social sign-in — Google and GitHub. We do not control those services. Outages, changes, price increases, or policy changes on their side may affect or interrupt Lettertrace, and we are not liable for them.</p>
       </Section>
 
-      <Section n={10} title="Open source and self-hosting">
-        <p>Lettertrace&apos;s source is released under the MIT licence, and you are free to run your own instance under that licence. These terms govern only the hosted service we operate. We provide no warranty or support for self-hosted deployments, and we are not responsible for how they behave.</p>
+      <Section n={10} title="Scope of these terms">
+        <p>These terms govern the hosted service we operate at lettertrace.com. They do not grant any licence to the Lettertrace software itself, and they do not cover any separately operated deployment of it — we provide no warranty or support for those and are not responsible for how they behave.</p>
       </Section>
 
       <Section n={11} title="Availability and changes">

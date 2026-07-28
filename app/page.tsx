@@ -367,8 +367,8 @@ export default function LandingPage() {
             title="Open source"
             links={[
               { label: "GitHub", href: GITHUB_URL },
-              { label: "MIT License", href: `${GITHUB_URL}/blob/main/LICENSE` },
-              { label: "Self-host guide", href: `${GITHUB_URL}#getting-started` },
+              { label: "MIT License", href: GITHUB_URL },
+              { label: "Self-host guide", href: GITHUB_URL },
             ]}
           />
           <FooterCol
