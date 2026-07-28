@@ -63,7 +63,7 @@ export default async function DashboardLayout({
               canAddOrg={canAddOrg}
             />
           ) : (
-            <div className="rounded-2xl border border-ink/10 bg-paper-shade/50 px-4 py-3">
+            <div className="rounded border border-ink/10 bg-paper-shade/50 px-4 py-3">
               <p className="text-sm text-ink-faint">No organization yet</p>
             </div>
           )}

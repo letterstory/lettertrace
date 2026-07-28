@@ -126,13 +126,13 @@ function ProviderCard({
   }
 
   return (
-    <div className="flex flex-col rounded-2xl border border-ink/10 bg-paper p-5">
+    <div className="flex flex-col rounded border border-ink/10 bg-paper p-5">
       {/* Header: identity + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span
             className={cn(
-              "grid h-11 w-11 shrink-0 place-items-center rounded-xl font-serif text-lg font-semibold",
+              "grid h-11 w-11 shrink-0 place-items-center rounded font-serif text-lg font-semibold",
               style.markClass,
             )}
             aria-hidden
@@ -162,7 +162,7 @@ function ProviderCard({
       {/* Body */}
       <div className="mt-4 flex-1">
         {existing && !editing && (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-ink/10 bg-paper-shade/50 px-4 py-3">
+          <div className="flex items-center justify-between gap-3 rounded border border-ink/10 bg-paper-shade/50 px-4 py-3">
             <p className="font-mono text-sm text-ink">{existing.key_hint}</p>
             <p className="shrink-0 text-xs text-ink-faint">
               Added {formatDate(existing.created_at)}
@@ -186,7 +186,7 @@ function ProviderCard({
               <button
                 type="button"
                 onClick={() => setReveal((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-ink-faint transition hover:text-ink"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-ink-faint transition hover:text-ink"
                 aria-label={reveal ? "Hide key" : "Show key"}
                 tabIndex={-1}
               >

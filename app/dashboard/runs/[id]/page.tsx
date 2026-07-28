@@ -28,7 +28,7 @@ function SentimentDot({ sentiment }: { sentiment: Sentiment | null }) {
   const color = SENTIMENT_COLORS[sentiment ?? "neutral"];
   return (
     <span
-      className="inline-block h-2 w-2 rounded-full"
+      className="inline-block h-2 w-2 rounded-sm"
       style={{ backgroundColor: color }}
       aria-label={sentiment ?? "neutral"}
     />
@@ -154,7 +154,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
       </div>
 
       {anySources && (
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink/10 bg-paper-shade/50 px-5 py-4 text-sm">
+        <div className="flex flex-wrap items-center gap-2 rounded border border-ink/10 bg-paper-shade/50 px-5 py-4 text-sm">
           <Globe className="h-4 w-4 text-ink-faint" />
           {ownedResponseIds.size > 0 ? (
             <p className="text-ink">
@@ -199,7 +199,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
                     <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-faint">
                       Answer
                     </p>
-                    <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-2xl bg-paper-shade p-4 text-sm leading-relaxed text-ink-soft">
+                    <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded bg-paper-shade p-4 text-sm leading-relaxed text-ink-soft">
                       {response.response_text}
                     </div>
                   </div>

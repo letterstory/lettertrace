@@ -12,7 +12,7 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
 
 const buttonBase =
-  "inline-flex items-center justify-center gap-2 rounded-xl font-medium tracking-tight transition-all disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
+  "inline-flex items-center justify-center gap-2 rounded font-medium tracking-tight transition-all disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-ink text-paper hover:bg-ink/90 shadow-sm",
@@ -64,7 +64,7 @@ export function Card({
   children: ReactNode;
 }) {
   return (
-    <div className={cn("rounded-2xl border border-ink/10 bg-surface shadow-card", className)}>
+    <div className={cn("rounded border border-ink/10 bg-surface shadow-card", className)}>
       {children}
     </div>
   );
@@ -123,7 +123,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1 rounded-sm px-2.5 py-0.5 text-xs font-medium",
         badgeTones[tone],
         className,
       )}
@@ -150,7 +150,7 @@ export function Label({
 }
 
 const fieldBase =
-  "w-full rounded-xl border border-ink/15 bg-surface px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint/70 transition focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/20";
+  "w-full rounded border border-ink/15 bg-surface px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint/70 transition focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/20";
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cn(fieldBase, className)} {...props} />;
@@ -192,7 +192,7 @@ export function StatCard({
     <Card>
       <CardBody className="p-5">
         <div className="flex items-center gap-2">
-          <span className={cn("h-2 w-2 rounded-full", accentDot[accent])} />
+          <span className={cn("h-2 w-2 rounded-sm", accentDot[accent])} />
           <p className="text-sm font-medium text-ink-faint">{label}</p>
         </div>
         <p className="mt-2 font-serif text-3xl font-semibold text-ink">{value}</p>
@@ -214,7 +214,7 @@ export function EmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink/15 bg-paper-shade/40 px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center rounded border border-dashed border-ink/15 bg-paper-shade/40 px-6 py-14 text-center">
       {icon && <div className="mb-3 text-terracotta">{icon}</div>}
       <h3 className="text-lg font-semibold text-ink">{title}</h3>
       {description && <p className="mt-1 max-w-md text-sm text-ink-faint">{description}</p>}
@@ -227,7 +227,7 @@ export function Spinner({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent",
+        "inline-block h-4 w-4 animate-spin rounded-sm border-2 border-current border-t-transparent",
         className,
       )}
       aria-hidden

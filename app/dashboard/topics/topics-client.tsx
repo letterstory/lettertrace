@@ -245,7 +245,7 @@ function TopicCard({
         </div>
 
         {/* Generate + manual controls */}
-        <div className="grid gap-4 rounded-2xl border border-ink/10 bg-paper-shade/40 p-4 md:grid-cols-2">
+        <div className="grid gap-4 rounded border border-ink/10 bg-paper-shade/40 p-4 md:grid-cols-2">
           {/* Generate variations */}
           <div className="space-y-2">
             <Label>Generate variations</Label>
@@ -344,7 +344,7 @@ function PromptRow({ prompt }: { prompt: Prompt }) {
         onChange={toggleActive}
         disabled={busy}
         aria-label={prompt.is_active ? "Deactivate prompt" : "Activate prompt"}
-        className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-ink/30 text-terracotta-dark accent-terracotta focus:ring-terracotta/40"
+        className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded-sm border-ink/30 text-terracotta-dark accent-terracotta focus:ring-terracotta/40"
       />
       <div className="min-w-0 flex-1">
         <p className={prompt.is_active ? "text-sm text-ink" : "text-sm text-ink-faint line-through"}>

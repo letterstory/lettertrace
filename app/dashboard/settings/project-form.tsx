@@ -167,7 +167,7 @@ export default function ProjectForm({ project }: { project: Project | null }) {
 
       <label
         htmlFor="p-websearch"
-        className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-ink/10 bg-paper-shade/40 p-4"
+        className="flex cursor-pointer items-start justify-between gap-4 rounded border border-ink/10 bg-paper-shade/40 p-4"
       >
         <span>
           <span className="text-sm font-medium text-ink">Web search</span>
@@ -186,13 +186,13 @@ export default function ProjectForm({ project }: { project: Project | null }) {
             setSaved(false);
           }}
           className={
-            "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition " +
+            "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded transition " +
             (useWebSearch ? "bg-terracotta" : "bg-ink/15")
           }
         >
           <span
             className={
-              "inline-block h-4 w-4 transform rounded-full bg-white transition " +
+              "inline-block h-4 w-4 transform rounded-sm bg-white transition " +
               (useWebSearch ? "translate-x-6" : "translate-x-1")
             }
           />

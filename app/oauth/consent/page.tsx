@@ -38,7 +38,7 @@ function ConsentError({ message }: { message: string }) {
   return (
     <ConsentShell>
       <div className="space-y-4 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-terracotta/12 text-terracotta-dark">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded bg-terracotta/12 text-terracotta-dark">
           <AlertCircle className="h-6 w-6" aria-hidden />
         </div>
         <h1 className="font-serif text-xl font-semibold text-ink">
@@ -95,15 +95,15 @@ export default async function ConsentPage({
           </p>
         </div>
 
-        <div className="rounded-xl border border-ink/10 bg-surface px-4 py-3.5">
+        <div className="rounded border border-ink/10 bg-surface px-4 py-3.5">
           <div className="flex items-center gap-2">
             <span className="font-medium text-ink">{client.client_name}</span>
             {client.is_first_party ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-mint-tint px-2 py-0.5 text-xs font-medium text-mint-ink">
+              <span className="inline-flex items-center gap-1 rounded-sm bg-mint-tint px-2 py-0.5 text-xs font-medium text-mint-ink">
                 <ShieldCheck className="h-3 w-3" aria-hidden /> First-party
               </span>
             ) : (
-              <span className="rounded-full bg-butter/50 px-2 py-0.5 text-xs font-medium text-ink-soft">
+              <span className="rounded-sm bg-butter/50 px-2 py-0.5 text-xs font-medium text-ink-soft">
                 Unverified
               </span>
             )}
@@ -127,7 +127,7 @@ export default async function ConsentPage({
           </ul>
         </div>
 
-        <p className="rounded-xl border border-ink/10 bg-paper-shade px-4 py-3 text-xs text-ink-faint">
+        <p className="rounded border border-ink/10 bg-paper-shade px-4 py-3 text-xs text-ink-faint">
           A code will be delivered to{" "}
           <span className="font-medium text-ink-soft">
             {dest.loopback ? "an application on this device" : dest.host}

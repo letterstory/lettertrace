@@ -110,7 +110,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
       className={cn(
-        "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-ink/15 text-ink-soft transition hover:border-ink/35 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40",
+        "inline-flex h-9 w-9 items-center justify-center rounded border border-ink/15 text-ink-soft transition hover:border-ink/35 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40",
         className,
       )}
     >
@@ -149,13 +149,13 @@ export function ThemeSwitch({
         aria-label="Toggle light mode"
         onClick={toggle}
         className={cn(
-          "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40",
+          "relative inline-flex h-6 w-11 shrink-0 items-center rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40",
           isDark ? "bg-ink/15" : "bg-terracotta",
         )}
       >
         <span
           className={cn(
-            "inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition",
+            "inline-block h-4 w-4 transform rounded-sm bg-white shadow-sm transition",
             isDark ? "translate-x-1" : "translate-x-6",
           )}
         />

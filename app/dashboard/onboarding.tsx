@@ -194,8 +194,8 @@ export function Onboarding() {
     return (
       <div className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center text-center">
         <div className="relative flex h-16 w-16 items-center justify-center">
-          <span className="absolute inset-0 animate-ping rounded-full bg-terracotta/20" />
-          <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-terracotta/10 text-terracotta">
+          <span className="absolute inset-0 animate-ping rounded bg-terracotta/20" />
+          <span className="flex h-16 w-16 items-center justify-center rounded bg-terracotta/10 text-terracotta">
             <Sparkles className="h-7 w-7" />
           </span>
         </div>
@@ -305,7 +305,7 @@ export function Onboarding() {
                     <button
                       type="button"
                       onClick={() => removeTopic(ti)}
-                      className="shrink-0 rounded-lg p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
+                      className="shrink-0 rounded p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
                       aria-label="Remove topic"
                     >
                       <X className="h-4 w-4" />
@@ -333,7 +333,7 @@ export function Onboarding() {
                         <button
                           type="button"
                           onClick={() => removePrompt(ti, pi)}
-                          className="shrink-0 rounded-lg p-2 text-ink-faint transition hover:bg-ink/5"
+                          className="shrink-0 rounded p-2 text-ink-faint transition hover:bg-ink/5"
                           aria-label="Remove question"
                         >
                           <X className="h-3.5 w-3.5" />
@@ -364,7 +364,7 @@ export function Onboarding() {
           <button
             type="button"
             onClick={addTopic}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-dashed border-ink/20 px-4 py-2.5 text-sm font-medium text-ink-soft transition hover:border-ink/40 hover:bg-ink/[0.02]"
+            className="mt-4 inline-flex items-center gap-1.5 rounded border border-dashed border-ink/20 px-4 py-2.5 text-sm font-medium text-ink-soft transition hover:border-ink/40 hover:bg-ink/[0.02]"
           >
             <Plus className="h-4 w-4" />
             Add topic
@@ -395,7 +395,7 @@ function StepDot({ active, done, label }: { active: boolean; done: boolean; labe
   return (
     <span
       className={
-        "flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold " +
+        "flex h-7 w-7 items-center justify-center rounded text-xs font-semibold " +
         (done
           ? "bg-terracotta text-paper"
           : active
