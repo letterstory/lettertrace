@@ -200,9 +200,12 @@ export function Onboarding() {
           </span>
         </div>
         <h2 className="mt-6 text-2xl font-semibold text-ink">Running your first search</h2>
+        {/* Deliberately does not name the models: the provider is resolved
+            server-side after this screen renders, so anything specific here is
+            a guess that goes stale every time the catalog grows. */}
         <p className="mt-2 text-ink-faint">
-          We&apos;re asking ChatGPT and Claude your questions and looking for {brandName || "your brand"}.
-          This takes about a minute.
+          We&apos;re asking AI assistants your questions and looking for {brandName || "your brand"}.
+          This usually takes a minute or two.
         </p>
         <div className="mt-5">
           <Spinner className="text-terracotta" />
