@@ -4,6 +4,7 @@ import { getProject } from "@/lib/data";
 import { generateVariations, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
 import { resolveRunKey, recordTrialUsage } from "@/lib/trial";
+import { logDashboard } from "@/lib/activity";
 import type { Topic } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -97,6 +98,16 @@ export async function POST(
 
     const { data, error } = await supabase.from("prompts").insert(rows).select();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await logDashboard(user, request, {
+      category: "prompt",
+      action: "prompt.generated",
+      summary: `Generated ${rows.length} prompt${rows.length === 1 ? "" : "s"} with AI for topic "${topic.name}"`,
+      projectId: project.id,
+      targetType: "topic",
+      targetId: topic.id,
+      metadata: { count: rows.length, tokens, keySource: key.source },
+    });
 
     return NextResponse.json({ prompts: data });
   } catch (e) {

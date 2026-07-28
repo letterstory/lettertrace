@@ -4,6 +4,7 @@ import { getProject } from "@/lib/data";
 import { suggestCompetitors, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
 import { resolveRunKey, recordTrialUsage } from "@/lib/trial";
+import { logDashboard } from "@/lib/activity";
 import type { Competitor, Topic } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 // POST /api/competitors/suggest
 // Ask the model for direct competitors of the active org's brand, excluding
 // ones already tracked. Uses the same key resolution (own -> trial) as runs.
-export async function POST() {
+export async function POST(request: Request) {
   const supabase = createClient();
   const {
     data: { user },
@@ -82,6 +83,16 @@ export async function POST() {
       if (taken.has(name)) return false;
       taken.add(name);
       return true;
+    });
+
+    await logDashboard(user, request, {
+      category: "competitor",
+      action: "competitor.suggested",
+      summary: `Generated ${fresh.length} competitor suggestion${fresh.length === 1 ? "" : "s"} with AI`,
+      projectId: project.id,
+      targetType: "project",
+      targetId: project.id,
+      metadata: { count: fresh.length, tokens, keySource: key.source },
     });
 
     return NextResponse.json({ suggestions: fresh });

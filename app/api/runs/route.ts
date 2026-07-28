@@ -64,6 +64,12 @@ export async function POST() {
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
+      context: {
+        channel: "dashboard",
+        actorType: "user",
+        actorId: user.id,
+        actorLabel: user.email ?? "You",
+      },
     });
 
     // Record token spend against the operator's shared key for cost visibility.

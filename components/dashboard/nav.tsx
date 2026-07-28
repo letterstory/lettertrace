@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard/topics", label: "Topics", icon: "Topics" },
   { href: "/dashboard/competitors", label: "Competitors", icon: "Competitors" },
   { href: "/dashboard/runs", label: "Runs", icon: "Runs" },
+  { href: "/dashboard/logs", label: "Logs", icon: "Logs" },
   { href: "/dashboard/settings", label: "Settings", icon: "Settings" },
 ];
 

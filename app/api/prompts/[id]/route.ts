@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
+import { logDashboard } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,14 @@ export async function PATCH(
       .eq("project_id", project.id);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logDashboard(user, request, {
+      category: "prompt",
+      action: is_active ? "prompt.activated" : "prompt.deactivated",
+      summary: `${is_active ? "Activated" : "Deactivated"} a prompt`,
+      projectId: project.id,
+      targetType: "prompt",
+      targetId: params.id,
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
@@ -48,7 +57,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: { id: string } },
 ) {
   const supabase = createClient();
@@ -69,6 +78,14 @@ export async function DELETE(
       .eq("id", params.id)
       .eq("project_id", project.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logDashboard(user, request, {
+      category: "prompt",
+      action: "prompt.removed",
+      summary: "Removed a prompt",
+      projectId: project.id,
+      targetType: "prompt",
+      targetId: params.id,
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

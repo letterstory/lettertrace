@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
+import { logDashboard } from "@/lib/activity";
 import type { Topic } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +61,14 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logDashboard(user, request, {
+      category: "prompt",
+      action: "prompt.added",
+      summary: `Added a prompt: "${text.trim().slice(0, 80)}"`,
+      projectId: project.id,
+      targetType: "prompt",
+      targetId: (data as { id: string }).id,
+    });
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

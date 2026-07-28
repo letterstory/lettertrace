@@ -4,6 +4,7 @@ import { getProject, setActiveProject } from "@/lib/data";
 import { isProvider, defaultModelFor } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
+import { logDashboard } from "@/lib/activity";
 import type { Provider, Schedule } from "@/lib/types";
 
 const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
@@ -121,6 +122,15 @@ export async function POST(request: Request) {
       if (error) {
         return NextResponse.json({ error: humanError(error) }, { status: 500 });
       }
+      await logDashboard(user, request, {
+        category: "project",
+        action: "project.updated",
+        summary: `Updated organization "${name}" settings`,
+        projectId: existing.id,
+        targetType: "project",
+        targetId: existing.id,
+        metadata: { schedule },
+      });
       return NextResponse.json(data);
     }
 
@@ -141,6 +151,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
     }
     await setActiveProject(supabase, user.id, (data as { id: string }).id);
+    await logDashboard(user, request, {
+      category: "project",
+      action: "project.created",
+      summary: `Created organization "${name}"`,
+      projectId: (data as { id: string }).id,
+      targetType: "project",
+      targetId: (data as { id: string }).id,
+    });
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

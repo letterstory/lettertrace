@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveRedirectBase, safePath } from "@/lib/utils";
+import { logDashboard } from "@/lib/activity";
 
 // Longest provider error we'll echo back onto the sign-in screen. The text is
 // attacker-influenceable via the query string (it renders as escaped text, so
@@ -39,6 +40,18 @@ export async function GET(request: Request) {
     const supabase = createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await logDashboard(user, request, {
+          category: "auth",
+          action: "auth.signed_in",
+          summary: `Signed in as ${user.email ?? "a user"}`,
+          targetType: "user",
+          targetId: user.id,
+        });
+      }
       return NextResponse.redirect(new URL(next, base));
     }
     return failed(error.message);

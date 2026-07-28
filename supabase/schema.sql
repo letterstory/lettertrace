@@ -770,3 +770,71 @@ create policy "oauth_clients_owner" on public.oauth_clients
 drop policy if exists "oauth_authorizations_owner" on public.oauth_authorizations;
 create policy "oauth_authorizations_owner" on public.oauth_authorizations
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ==================================================================
+-- activity_logs (telemetry)
+-- One append-only event per meaningful thing that happens in a Lettertrace
+-- account, whoever triggered it: a signed-in user in the dashboard, an agent
+-- calling the REST/MCP API, the CLI, or the cron scheduler. This is the single
+-- searchable feed behind the "Logs" screen. Every write happens through the
+-- service-role client (see lib/activity.ts), so clients can only ever READ their
+-- own rows — a user can neither forge nor tamper with the record.
+--
+-- Rows are deliberately denormalized (actor_label, summary, request metadata all
+-- copied in) so the feed reads correctly forever even after the referenced
+-- project / key / token is renamed or deleted. NOTHING secret is ever stored
+-- here: key hints and client ids only, never plaintext keys or tokens.
+-- Safe to re-run.
+-- ==================================================================
+create table if not exists public.activity_logs (
+  id           uuid primary key default gen_random_uuid(),
+  -- The account the event belongs to. Null only for operator/system events with
+  -- no owning user; those are invisible to every cookie client by design.
+  user_id      uuid references auth.users (id) on delete cascade,
+  -- Org context, when the event has one. SET NULL (not CASCADE) so deleting a
+  -- project does not erase its history — the summary still reads correctly.
+  project_id   uuid references public.projects (id) on delete set null,
+  -- WHO acted, and through WHAT surface. actor_type is the kind of principal;
+  -- channel is how the action arrived. e.g. an OAuth token used from the CLI is
+  -- actor_type 'oauth', channel 'cli'.
+  actor_type   text not null check (actor_type in ('user','api_key','oauth','mcp','cron','system')),
+  actor_id     text,             -- user id / api_keys.id / oauth token id / client id
+  actor_label  text,             -- human friendly: email, "Lettertrace CLI", "Scheduler"
+  channel      text not null check (channel in ('dashboard','api','mcp','cli','cron','system')),
+  -- WHAT happened. category groups the feed; action is the specific verb.
+  category     text not null,    -- 'run','auth','project','prompt','topic','competitor','provider_key','api_key','oauth','onboarding','settings','mcp_tool','system'
+  action       text not null,    -- 'run.completed','project.created','oauth.token_issued',...
+  status       text not null default 'success' check (status in ('success','failure','info','pending')),
+  target_type  text,             -- resource the action touched ('run','project','prompt',...)
+  target_id    text,
+  summary      text not null,    -- one human sentence, shown as the row title
+  -- Request shape, for the API/MCP/CLI surfaces (all null for internal events).
+  method       text,
+  path         text,
+  status_code  integer,
+  ip           text,
+  user_agent   text,
+  duration_ms  integer,
+  metadata     jsonb not null default '{}'::jsonb,   -- freeform, non-secret detail
+  created_at   timestamptz not null default now()
+);
+
+create index if not exists idx_activity_user      on public.activity_logs (user_id, created_at desc);
+create index if not exists idx_activity_project    on public.activity_logs (project_id, created_at desc);
+create index if not exists idx_activity_channel    on public.activity_logs (user_id, channel, created_at desc);
+create index if not exists idx_activity_category   on public.activity_logs (user_id, category, created_at desc);
+create index if not exists idx_activity_status     on public.activity_logs (user_id, status, created_at desc);
+create index if not exists idx_activity_created    on public.activity_logs (created_at desc);
+
+alter table public.activity_logs enable row level security;
+
+-- Read-only for the owner. There is deliberately NO insert/update/delete policy:
+-- with RLS on, that default-denies every client write, so the feed is
+-- append-only and un-forgeable. The service-role writer bypasses RLS. We also
+-- narrow the grants as defence-in-depth (Supabase may re-grant, hence the RLS
+-- default-deny is the real guard).
+drop policy if exists "activity_logs_owner_read" on public.activity_logs;
+create policy "activity_logs_owner_read" on public.activity_logs
+  for select using (user_id = auth.uid());
+
+revoke insert, update, delete on table public.activity_logs from anon, authenticated;

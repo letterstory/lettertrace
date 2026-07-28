@@ -1,7 +1,21 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Competitor, Project, Prompt, Provider } from "@/lib/types";
+import type { ActorType, Competitor, LogChannel, Project, Prompt, Provider } from "@/lib/types";
 import { runQuery, analyzeResponse, humanError, type AnalyzeEntity } from "@/lib/llm";
 import { detectMention, brandTerms } from "@/lib/mentions";
+import { modelLabel } from "@/lib/models";
+import { logActivity } from "@/lib/activity";
+
+/**
+ * Who/what asked for a run, forwarded to the activity log so every run — from
+ * the dashboard, the API, MCP, or the cron scheduler — lands in one feed. When
+ * absent the run is attributed to the internal system.
+ */
+export interface RunContext {
+  channel?: LogChannel;
+  actorType?: ActorType;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
 
 // Run at most this many queries at once to stay under provider rate limits.
 const CONCURRENCY = 4;
@@ -58,8 +72,24 @@ export async function executeRun(params: {
   provider: Provider;
   model: string;
   apiKey: string;
+  /** Attribution for the activity log. Defaults to the internal system. */
+  context?: RunContext;
 }): Promise<RunResult> {
   const { supabase, project, provider, model, apiKey } = params;
+  const startedMs = Date.now();
+
+  // Attribution shared by every run event below. project.user_id is always the
+  // owner, so a run is visible in its owner's feed no matter who triggered it.
+  const attribution = {
+    userId: project.user_id,
+    projectId: project.id,
+    actorType: params.context?.actorType ?? ("system" as ActorType),
+    actorId: params.context?.actorId ?? null,
+    actorLabel: params.context?.actorLabel ?? "System",
+    channel: params.context?.channel ?? ("system" as LogChannel),
+    category: "run" as const,
+    targetType: "run",
+  };
 
   const { data: promptRows } = await supabase
     .from("prompts")
@@ -104,11 +134,29 @@ export async function executeRun(params: {
   }
   const runId = runRow.id as string;
 
+  await logActivity({
+    ...attribution,
+    action: "run.started",
+    status: "info",
+    targetId: runId,
+    summary: `Run started on ${modelLabel(provider, model)} (${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} planned)`,
+    metadata: { provider, model, prompt_count: jobs.length, replicates },
+  });
+
   if (prompts.length === 0) {
     await supabase
       .from("runs")
       .update({ status: "completed", finished_at: new Date().toISOString() })
       .eq("id", runId);
+    await logActivity({
+      ...attribution,
+      action: "run.completed",
+      status: "success",
+      targetId: runId,
+      summary: "Run completed with no active prompts to ask",
+      durationMs: Date.now() - startedMs,
+      metadata: { provider, model, total_responses: 0, tokens_used: 0 },
+    });
     return { runId, status: "completed", totalResponses: 0, tokensUsed: 0 };
   }
 
@@ -269,6 +317,26 @@ export async function executeRun(params: {
     .from("projects")
     .update({ last_run_at: finishedAt })
     .eq("id", project.id);
+
+  await logActivity({
+    ...attribution,
+    action: status === "completed" ? "run.completed" : "run.failed",
+    status: status === "completed" ? "success" : "failure",
+    targetId: runId,
+    summary:
+      status === "completed"
+        ? `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+        : `Run failed: ${hardError ?? "no answers were stored"}`,
+    durationMs: Date.now() - startedMs,
+    metadata: {
+      provider,
+      model,
+      total_responses: succeeded,
+      prompt_count: jobs.length,
+      tokens_used: tokensUsed,
+      ...(hardError ? { error: hardError } : {}),
+    },
+  });
 
   return { runId, status, totalResponses: succeeded, tokensUsed, error: hardError };
 }

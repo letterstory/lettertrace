@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
 import { createClient } from "@/lib/supabase/server";
+import { logDashboard } from "@/lib/activity";
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: { id: string } },
 ) {
   const supabase = createClient();
@@ -30,6 +31,15 @@ export async function DELETE(
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    await logDashboard(user, request, {
+      category: "competitor",
+      action: "competitor.removed",
+      summary: "Removed a competitor",
+      projectId: project.id,
+      targetType: "competitor",
+      targetId: params.id,
+    });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

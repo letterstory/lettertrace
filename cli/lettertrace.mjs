@@ -307,6 +307,32 @@ const commands = {
     }
   },
 
+  async logs() {
+    const query = {};
+    if (flags.limit) query.page_size = Number(flags.limit);
+    if (flags.channel) query.channel = flags.channel;
+    if (flags.category) query.category = flags.category;
+    if (flags.status) query.status = flags.status;
+    if (flags.days) query.days = Number(flags.days);
+    const search = flags.q ?? flags.search;
+    if (search && typeof search === "string") query.q = search;
+    const out = await withAutoLogin(() =>
+      rest(base, "GET", "/logs", {
+        query: Object.keys(query).length ? query : undefined,
+      }),
+    );
+    if (JSON_OUT) return printJson(out);
+    info(`${out.total} total event(s); showing ${out.logs.length}:`);
+    table(out.logs, [
+      { key: "created_at", label: "WHEN" },
+      { key: "channel", label: "CHANNEL" },
+      { key: "actor_label", label: "ACTOR", map: (v) => trunc(v, 22) },
+      { key: "action", label: "ACTION" },
+      { key: "status", label: "STATUS" },
+      { key: "summary", label: "SUMMARY", map: (v) => trunc(v, 50) },
+    ]);
+  },
+
   async mcp() {
     const sub = rest_[0];
     if (sub === "tools") {
@@ -382,6 +408,8 @@ function printHelp() {
     "  runs get <runId>                       Share-of-voice report",
     "  runs responses <runId>                 Raw answers, sources, mentions",
     "  history <projectId> [--limit <n>]      Brand visibility over time",
+    "  logs [--channel c] [--category c] [--status s] [--days n] [--q text] [--limit n]",
+    "                                         Account activity feed (users, agents, cron)",
     "",
     c.bold("MCP (Model Context Protocol)"),
     "  mcp tools                              List the MCP tools",

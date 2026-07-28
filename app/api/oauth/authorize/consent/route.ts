@@ -9,6 +9,7 @@ import {
   siteBase,
   upsertAuthorization,
 } from "@/lib/oauth";
+import { clientLabel, logDashboard } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,18 @@ export async function POST(request: Request) {
   // Re-derive EVERYTHING from the persisted request.
   const fail = (code: string) => oauthRedirectError(pending.redirect_uri, code, pending.state, base);
 
-  if (decision !== "approve") return fail("access_denied");
+  if (decision !== "approve") {
+    await logDashboard(user, request, {
+      category: "oauth",
+      action: "oauth.denied",
+      status: "info",
+      summary: `Denied ${clientLabel(pending.client_id)} access to ${pending.resource.toUpperCase()}`,
+      targetType: "oauth_client",
+      targetId: pending.client_id,
+      metadata: { resource: pending.resource, scopes: pending.scopes },
+    });
+    return fail("access_denied");
+  }
 
   try {
     const authorizationId = await upsertAuthorization(service, {
@@ -67,6 +79,15 @@ export async function POST(request: Request) {
       redirectUri: pending.redirect_uri,
       scopes: pending.scopes,
       resource: pending.resource,
+    });
+
+    await logDashboard(user, request, {
+      category: "oauth",
+      action: "oauth.authorized",
+      summary: `Authorized ${clientLabel(pending.client_id)} for ${pending.resource.toUpperCase()} access`,
+      targetType: "oauth_client",
+      targetId: pending.client_id,
+      metadata: { resource: pending.resource, scopes: pending.scopes },
     });
 
     const u = new URL(pending.redirect_uri);
