@@ -223,8 +223,8 @@ export function Onboarding() {
         <div>
           <h1 className="text-3xl font-semibold text-ink">Set up your brand</h1>
           <p className="mt-2 text-ink-soft">
-            Tell us who to watch for. We&apos;ll scan your site and suggest what to monitor. No API
-            key needed, you start on free credits.
+            Let&apos;s start with your brand. We&apos;ll scan your website and predict what AI search
+            queries to look out for.
           </p>
 
           <Card className="mt-6">
