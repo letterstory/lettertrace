@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
 import { createClient } from "@/lib/supabase/server";
+import { logDashboard } from "@/lib/activity";
 
 export async function POST(request: Request) {
   const supabase = createClient();
@@ -74,6 +75,15 @@ export async function POST(request: Request) {
       }
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    await logDashboard(user, request, {
+      category: "competitor",
+      action: "competitor.added",
+      summary: `Added competitor "${name}"`,
+      projectId: project.id,
+      targetType: "competitor",
+      targetId: (data as { id: string }).id,
+    });
 
     return NextResponse.json(data);
   } catch (e) {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
 import { createPrompts, listProjectPrompts } from "@/lib/api-service";
+import { logApiRequest } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,15 @@ export async function GET(
   if (!prompts) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
+  await logApiRequest(auth, request, "v1", {
+    category: "prompt",
+    action: "api.list_prompts",
+    summary: `Listed ${prompts.length} prompt${prompts.length === 1 ? "" : "s"} via the API`,
+    statusCode: 200,
+    projectId: params.id,
+    targetType: "project",
+    targetId: params.id,
+  });
   return NextResponse.json({ prompts });
 }
 
@@ -50,6 +60,16 @@ export async function POST(
         { status: outcome.code === "not_found" ? 404 : 400 },
       );
     }
+    await logApiRequest(auth, request, "v1", {
+      category: "prompt",
+      action: "prompt.created",
+      statusCode: 201,
+      projectId: params.id,
+      targetType: "project",
+      targetId: params.id,
+      summary: `Added ${outcome.created.length} prompt${outcome.created.length === 1 ? "" : "s"} via the API (${outcome.skipped} skipped)`,
+      metadata: { created: outcome.created.length, skipped: outcome.skipped },
+    });
     return NextResponse.json(
       { created: outcome.created, skipped: outcome.skipped },
       { status: 201 },

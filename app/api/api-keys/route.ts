@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateApiKey, hashApiKey, keyHint } from "@/lib/crypto";
+import { logDashboard } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
 
 // Session-authenticated management of Lettertrace API keys (settings page).
@@ -72,6 +73,15 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
     }
+
+    await logDashboard(user, request, {
+      category: "api_key",
+      action: "api_key.created",
+      summary: `Created API key "${cleanName}" (${(data as { key_hint: string }).key_hint})`,
+      targetType: "api_key",
+      targetId: (data as { id: string }).id,
+      metadata: { name: cleanName, key_hint: (data as { key_hint: string }).key_hint },
+    });
 
     // The one and only time the plaintext leaves the server.
     return NextResponse.json({ key: data, apiKey: plaintext });

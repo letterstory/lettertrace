@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
 import { setPromptActive } from "@/lib/api-service";
+import { logApiRequest } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,14 @@ export async function PATCH(
     if (!prompt) {
       return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
     }
+    await logApiRequest(auth, request, "v1", {
+      category: "prompt",
+      action: is_active ? "prompt.activated" : "prompt.deactivated",
+      statusCode: 200,
+      targetType: "prompt",
+      targetId: params.id,
+      summary: `${is_active ? "Activated" : "Deactivated"} a prompt via the API`,
+    });
     return NextResponse.json({ prompt });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

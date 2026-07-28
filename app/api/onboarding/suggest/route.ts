@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { scrapeDomain } from "@/lib/scrape";
 import { suggestFromSite, humanError } from "@/lib/llm";
 import { resolveKey, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
+import { logDashboard } from "@/lib/activity";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -63,6 +64,17 @@ export async function POST(request: Request) {
       siteText: scrape.text,
     });
     if (key.source === "trial") await recordTrialUsage(supabase, suggestion.tokens);
+    await logDashboard(user, request, {
+      category: "onboarding",
+      action: "onboarding.suggested",
+      summary: `Analyzed ${domain || brandName} and suggested ${suggestion.topics.length} topic${suggestion.topics.length === 1 ? "" : "s"} with AI`,
+      metadata: {
+        topics: suggestion.topics.length,
+        tokens: suggestion.tokens,
+        keySource: key.source,
+        domain,
+      },
+    });
     return NextResponse.json({
       scraped: suggestion.topics.length > 0,
       description: suggestion.description,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
 import { getProjectHistory } from "@/lib/api-service";
+import { logApiRequest } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -31,5 +32,14 @@ export async function GET(
   if (!history) {
     return NextResponse.json({ error: "Project not found." }, { status: 404 });
   }
+  await logApiRequest(auth, request, "v1", {
+    category: "run",
+    action: "api.read_history",
+    summary: `Read brand-visibility history (${history.points.length} runs) via the API`,
+    statusCode: 200,
+    projectId: params.id,
+    targetType: "project",
+    targetId: params.id,
+  });
   return NextResponse.json(history);
 }

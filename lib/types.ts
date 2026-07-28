@@ -156,3 +156,56 @@ export interface Mention {
   recommended: boolean;
   created_at: string;
 }
+
+// ---------- activity logs (telemetry) --------------------------------
+// The kind of principal behind an event, and the surface it arrived through.
+// See lib/activity.ts for how these are derived and supabase/schema.sql for the
+// column definitions they mirror.
+export type ActorType = "user" | "api_key" | "oauth" | "mcp" | "cron" | "system";
+
+export type LogChannel = "dashboard" | "api" | "mcp" | "cli" | "cron" | "system";
+
+// Grouping bucket for the feed. Kept as an open string in the DB (any verb can
+// be logged) but this union documents the ones the app emits and drives the UI.
+export type LogCategory =
+  | "run"
+  | "auth"
+  | "project"
+  | "prompt"
+  | "topic"
+  | "competitor"
+  | "provider_key"
+  | "api_key"
+  | "oauth"
+  | "onboarding"
+  | "settings"
+  | "mcp_tool"
+  | "system";
+
+export type LogStatus = "success" | "failure" | "info" | "pending";
+
+// One telemetry event. Mirrors public.activity_logs exactly. Read-only to the
+// client; written only through the service-role logger.
+export interface ActivityLog {
+  id: string;
+  user_id: string | null;
+  project_id: string | null;
+  actor_type: ActorType;
+  actor_id: string | null;
+  actor_label: string | null;
+  channel: LogChannel;
+  category: string;
+  action: string;
+  status: LogStatus;
+  target_type: string | null;
+  target_id: string | null;
+  summary: string;
+  method: string | null;
+  path: string | null;
+  status_code: number | null;
+  ip: string | null;
+  user_agent: string | null;
+  duration_ms: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}

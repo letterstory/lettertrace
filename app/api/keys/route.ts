@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isProvider } from "@/lib/models";
 import { verifyKey, humanError } from "@/lib/llm";
 import { ConfigurationError, encryptSecret, keyHint } from "@/lib/crypto";
+import { logDashboard } from "@/lib/activity";
 
 export async function POST(request: Request) {
   const supabase = createClient();
@@ -67,6 +68,15 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
     }
+
+    await logDashboard(user, request, {
+      category: "provider_key",
+      action: "provider_key.saved",
+      summary: `Saved a ${provider} provider key (${key_hint})`,
+      targetType: "provider_key",
+      targetId: (data as { id: string }).id,
+      metadata: { provider, key_hint },
+    });
 
     return NextResponse.json(data);
   } catch (e) {

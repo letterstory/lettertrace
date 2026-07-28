@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
 import { listRuns, triggerRunForProject } from "@/lib/api-service";
+import { apiActor, logApiRequest } from "@/lib/activity";
 import { isProvider, PROVIDERS } from "@/lib/models";
 import { humanError } from "@/lib/llm";
 import type { Provider } from "@/lib/types";
@@ -21,6 +22,15 @@ export async function GET(
   if (!runs) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
+  await logApiRequest(auth, request, "v1", {
+    category: "run",
+    action: "api.list_runs",
+    summary: `Listed ${runs.length} run${runs.length === 1 ? "" : "s"} via the API`,
+    statusCode: 200,
+    projectId: params.id,
+    targetType: "project",
+    targetId: params.id,
+  });
   return NextResponse.json({ runs });
 }
 
@@ -61,18 +71,39 @@ export async function POST(
   }
 
   try {
+    // Attribute the run itself (logged by the engine) to this API/CLI caller.
     const outcome = await triggerRunForProject(
       auth.supabase,
       auth.userId,
       params.id,
-      options,
+      { ...options, context: apiActor(auth, "v1") },
     );
     if (!outcome.ok) {
+      await logApiRequest(auth, request, "v1", {
+        category: "run",
+        action: "api.trigger_run",
+        status: "failure",
+        statusCode: outcome.code === "not_found" ? 404 : 402,
+        projectId: params.id,
+        targetType: "project",
+        targetId: params.id,
+        summary: `Run not triggered via the API: ${outcome.message}`,
+        metadata: { reason: outcome.code },
+      });
       return NextResponse.json(
         { error: outcome.message },
         { status: outcome.code === "not_found" ? 404 : 402 },
       );
     }
+    await logApiRequest(auth, request, "v1", {
+      category: "run",
+      action: "api.trigger_run",
+      statusCode: 200,
+      projectId: params.id,
+      targetType: "run",
+      targetId: outcome.result.runId,
+      summary: `Triggered a run via the API (${outcome.result.status})`,
+    });
     return NextResponse.json(outcome.result);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

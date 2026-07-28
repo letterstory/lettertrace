@@ -5,6 +5,7 @@ import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { resolveRunKey, consumeTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
+import { logDashboard } from "@/lib/activity";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -140,6 +141,16 @@ export async function POST(request: Request) {
   // The freshly created organization becomes the one the dashboard shows.
   await setActiveProject(supabase, user.id, project.id);
 
+  await logDashboard(user, request, {
+    category: "onboarding",
+    action: "onboarding.completed",
+    summary: `Set up "${brand_name}" with ${topics.length} topic${topics.length === 1 ? "" : "s"}`,
+    projectId: project.id,
+    targetType: "project",
+    targetId: project.id,
+    metadata: { topics: topics.length, brand_name },
+  });
+
   // Persist topics + their prompts.
   for (const topic of topics) {
     const { data: topicRow } = await supabase
@@ -184,6 +195,12 @@ export async function POST(request: Request) {
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey,
+      context: {
+        channel: "dashboard",
+        actorType: "user",
+        actorId: user.id,
+        actorLabel: user.email ?? "You",
+      },
     });
     if (key.source === "trial") {
       await recordTrialUsage(supabase, result.tokensUsed);

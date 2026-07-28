@@ -20,7 +20,7 @@ import {
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
-import { executeRun, type RunResult } from "@/lib/engine";
+import { executeRun, type RunContext, type RunResult } from "@/lib/engine";
 import { pickDefaultProvider, resolveKey, resolveRunKey } from "@/lib/trial";
 import { defaultModelFor, isProvider, PROVIDERS } from "@/lib/models";
 
@@ -612,7 +612,7 @@ export async function triggerRunForProject(
   supabase: SupabaseClient,
   userId: string,
   projectId: string,
-  options?: { provider?: Provider; model?: string },
+  options?: { provider?: Provider; model?: string; context?: RunContext },
 ): Promise<TriggerOutcome> {
   const project = await getOwnedProject(supabase, userId, projectId);
   if (!project) {
@@ -647,6 +647,7 @@ export async function triggerRunForProject(
     provider: key.provider,
     model: key.model,
     apiKey: key.apiKey!,
+    context: options?.context,
   });
   return { ok: true, result };
 }
