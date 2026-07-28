@@ -47,7 +47,16 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   triggerRunForProject: vi.fn(),
 }));
 
-const AUTH_CTX = { supabase: {} as never, userId: "user-1", keyId: "key-1" };
+const AUTH_CTX = {
+  supabase: {} as never,
+  userId: "user-1",
+  keyId: "key-1",
+  tokenType: "api_key" as const,
+  scopes: ["projects:read", "projects:write", "runs:read", "runs:trigger"],
+  clientId: null,
+  expiresAt: null,
+  aud: null,
+};
 
 function req(path: string, init?: RequestInit) {
   return new Request(`http://localhost${path}`, {

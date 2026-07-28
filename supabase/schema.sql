@@ -470,3 +470,259 @@ drop policy if exists "api_keys_owner" on public.api_keys;
 create policy "api_keys_owner" on public.api_keys
   for all using (user_id = auth.uid())
   with check (user_id = auth.uid());
+
+-- ==================================================================
+-- OAuth 2.1 Authorization Server
+-- Lets a CLI or external system obtain DELEGATED, user-scoped, expiring,
+-- revocable access WITHOUT the user hand-minting a static api_keys row.
+-- Lettertrace is the authorization server; Supabase is the identity provider
+-- (the user approves each grant from a logged-in browser session).
+--
+-- Every secret below is stored ONLY as a sha256 hex digest, exactly like
+-- api_keys.key_hash. Access tokens issued here resolve through the very same
+-- authenticateApiKey() path /api/v1 and /api/mcp already use, so those surfaces
+-- keep working unchanged (see lib/api-auth.ts).
+--
+-- The api_keys table above is deliberately untouched: OAuth tokens live in
+-- their own tables so the two credential classes never share a keyspace and so
+-- revocation here can be soft (revoked_at) rather than a hard row delete.
+-- All statements are idempotent. Safe to re-run.
+-- ==================================================================
+
+-- ---------- oauth_clients -------------------------------------------
+-- A registered client (the CLI, an MCP host, an external server). The
+-- first-party CLI is seeded below with a fixed, secret-less (public) client id;
+-- it authenticates by exact redirect-URI match + PKCE, per the OAuth 2.1
+-- native-app model. Confidential clients additionally hold a client_secret_hash.
+create table if not exists public.oauth_clients (
+  client_id                  text primary key,
+  user_id                    uuid references auth.users (id) on delete cascade,   -- null = first-party / global
+  is_first_party             boolean not null default false,
+  client_name                text not null,
+  client_type                text not null default 'public'
+                               check (client_type in ('public', 'confidential')),
+  client_secret_hash         text,                                                -- null for public clients
+  token_endpoint_auth_method text not null default 'none'
+                               check (token_endpoint_auth_method in ('none', 'client_secret_basic')),
+  redirect_uris              text[] not null,
+  allowed_scopes             text[] not null default '{}',
+  logo_uri                   text,
+  client_uri                 text,
+  created_at                 timestamptz not null default now()
+);
+create index if not exists oauth_clients_user_idx on public.oauth_clients (user_id);
+
+-- Seed the first-party CLI / MCP client. Loopback redirect templates: the host
+-- and path must match exactly; only the port varies at authorize time (RFC
+-- 8252). Safe to re-run.
+insert into public.oauth_clients
+  (client_id, is_first_party, client_name, client_type, token_endpoint_auth_method, redirect_uris, allowed_scopes)
+values
+  ('lt_cli', true, 'Lettertrace CLI & MCP', 'public', 'none',
+   array['http://127.0.0.1/callback', 'http://[::1]/callback'],
+   array['projects:read', 'projects:write', 'runs:read', 'runs:trigger', 'offline_access'])
+on conflict (client_id) do nothing;
+
+-- ---------- oauth_authorizations ------------------------------------
+-- The standing user<->client grant. One row per (user, client, resource); it is
+-- what the "Connected apps" settings screen lists and what a user revokes.
+-- Revoking it cascade-revokes the access/refresh tokens minted under it.
+create table if not exists public.oauth_authorizations (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users (id) on delete cascade,
+  client_id     text not null references public.oauth_clients (client_id) on delete cascade,
+  scopes        text[] not null,
+  resource      text not null,
+  granted_at    timestamptz not null default now(),
+  last_used_at  timestamptz,
+  revoked_at    timestamptz,
+  unique (user_id, client_id, resource)
+);
+create index if not exists oauth_authorizations_user_idx on public.oauth_authorizations (user_id);
+
+-- ---------- oauth_pending_requests ----------------------------------
+-- A validated /authorize request, persisted server-side so the login bounce and
+-- the consent screen round-trip only an opaque id (?req=<id>) rather than the
+-- full, tamperable authorize query string. user_id is filled in only AFTER the
+-- browser proves its Supabase session; consent_nonce is generated on the consent
+-- page (post-login) for CSRF.
+create table if not exists public.oauth_pending_requests (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid references auth.users (id) on delete cascade,   -- set only after login
+  client_id      text not null references public.oauth_clients (client_id) on delete cascade,
+  redirect_uri   text not null,
+  scopes         text[] not null,
+  resource       text not null,
+  state          text,
+  code_challenge text not null,
+  consent_nonce  text,
+  expires_at     timestamptz not null,
+  created_at     timestamptz not null default now()
+);
+create index if not exists oauth_pending_exp_idx on public.oauth_pending_requests (expires_at);
+
+-- ---------- oauth_authorization_codes -------------------------------
+-- Single-use authorization codes (~5 min). Bound to the client, the exact
+-- redirect_uri, the PKCE challenge, the granted scopes, and the resource
+-- audience; every one of those is re-verified at the token endpoint.
+create table if not exists public.oauth_authorization_codes (
+  id                    uuid primary key default gen_random_uuid(),
+  user_id               uuid not null references auth.users (id) on delete cascade,
+  client_id             text not null references public.oauth_clients (client_id) on delete cascade,
+  authorization_id      uuid references public.oauth_authorizations (id) on delete cascade,
+  code_hash             text not null unique,
+  code_challenge        text not null,
+  code_challenge_method text not null check (code_challenge_method in ('S256')),  -- 'plain' is rejected
+  redirect_uri          text not null,
+  scopes                text[] not null,
+  resource              text not null check (resource in ('v1', 'mcp')),          -- RFC 8707 audience
+  expires_at            timestamptz not null,
+  used_at               timestamptz,
+  created_at            timestamptz not null default now()
+);
+create index if not exists oauth_auth_codes_hash_idx on public.oauth_authorization_codes (code_hash);
+create index if not exists oauth_auth_codes_exp_idx  on public.oauth_authorization_codes (expires_at);
+
+-- ---------- oauth_access_tokens -------------------------------------
+-- The bearer tokens presented to /api/v1 and /api/mcp. Resolved by hash on the
+-- hot path (see authenticateApiKey). expires_at is NOT NULL and scopes may never
+-- be empty or '*' — an OAuth token is never immortal and never implicitly
+-- full-access (that would silently defeat the consent screen).
+create table if not exists public.oauth_access_tokens (
+  id               uuid primary key default gen_random_uuid(),
+  user_id          uuid not null references auth.users (id) on delete cascade,
+  client_id        text not null references public.oauth_clients (client_id) on delete cascade,
+  authorization_id uuid references public.oauth_authorizations (id) on delete cascade,
+  family_id        uuid not null,                                                -- shared with the refresh-token lineage
+  token_hash       text not null unique,
+  token_hint       text not null,
+  scopes           text[] not null
+                     check (array_length(scopes, 1) is not null and not ('*' = any (scopes))),
+  resource         text not null,
+  expires_at       timestamptz not null,
+  revoked_at       timestamptz,
+  last_used_at     timestamptz,
+  issued_at        timestamptz not null default now()
+);
+create index if not exists oauth_at_hash_idx   on public.oauth_access_tokens (token_hash);
+create index if not exists oauth_at_exp_idx    on public.oauth_access_tokens (expires_at);
+create index if not exists oauth_at_auth_idx   on public.oauth_access_tokens (authorization_id);
+create index if not exists oauth_at_family_idx on public.oauth_access_tokens (family_id);
+
+-- ---------- oauth_refresh_tokens ------------------------------------
+-- Long-lived, single-use, ROTATING. Each rotation issues a new access+refresh
+-- pair sharing a family_id; presenting an already-used refresh token trips reuse
+-- detection and the whole family is revoked. successor_pair records the pair a
+-- consumed token minted, so a network-retried refresh within a short grace
+-- window replays the same result instead of self-revoking.
+create table if not exists public.oauth_refresh_tokens (
+  id               uuid primary key default gen_random_uuid(),
+  user_id          uuid not null references auth.users (id) on delete cascade,
+  client_id        text not null references public.oauth_clients (client_id) on delete cascade,
+  authorization_id uuid references public.oauth_authorizations (id) on delete cascade,
+  family_id        uuid not null,
+  token_hash       text not null unique,
+  scopes           text[] not null,
+  resource         text not null,
+  expires_at       timestamptz not null,
+  used_at          timestamptz,
+  rotated_to       uuid,
+  successor_pair   jsonb,
+  revoked_at       timestamptz,
+  issued_at        timestamptz not null default now()
+);
+create index if not exists oauth_rt_hash_idx   on public.oauth_refresh_tokens (token_hash);
+create index if not exists oauth_rt_family_idx on public.oauth_refresh_tokens (family_id);
+
+-- ---------- oauth_device_codes (RFC 8628) ---------------------------
+-- The device-authorization grant for headless CLIs. Both device_code and the
+-- human-typed user_code are stored hashed and looked up by hash; user_id is set
+-- ONLY when a logged-in user approves, and the token endpoint reads the user
+-- from this row alone (never from the polling request).
+create table if not exists public.oauth_device_codes (
+  id                uuid primary key default gen_random_uuid(),
+  client_id         text not null references public.oauth_clients (client_id) on delete cascade,
+  user_id           uuid references auth.users (id) on delete cascade,            -- null until approved
+  authorization_id  uuid references public.oauth_authorizations (id) on delete cascade,
+  device_code_hash  text not null unique,
+  user_code_hash    text not null unique,
+  scopes            text[] not null,
+  resource          text not null,
+  status            text not null default 'pending'
+                      check (status in ('pending', 'approved', 'denied', 'consumed', 'expired')),
+  interval_seconds  int not null default 5,
+  attempts          int not null default 0,
+  poll_count        int not null default 0,
+  last_polled_at    timestamptz,
+  expires_at        timestamptz not null,
+  created_at        timestamptz not null default now()
+);
+create index if not exists oauth_dc_dhash_idx on public.oauth_device_codes (device_code_hash);
+create index if not exists oauth_dc_uhash_idx on public.oauth_device_codes (user_code_hash);
+
+-- ---------- oauth_rate_limits ---------------------------------------
+-- A tiny DB-counter limiter. express-rate-limit is Express-only and unusable in
+-- App Router route handlers, and this deployment has no guaranteed Redis, so
+-- abuse-prone endpoints (register, device, activate, token polling) count
+-- against fixed windows here. See lib/oauth-ratelimit.ts.
+create table if not exists public.oauth_rate_limits (
+  bucket       text primary key,
+  count        int not null default 0,
+  window_start timestamptz not null default now()
+);
+
+-- Atomic fixed-window increment. Resets the window when it has elapsed, then
+-- bumps the counter, and returns the count WITHIN the current window. Runs as a
+-- security-definer so the service-role AS logic can call it; self-contained so a
+-- burst of concurrent calls can't race past the limit.
+create or replace function public.oauth_rate_touch(p_bucket text, p_window_seconds int, p_limit int)
+returns table (allowed boolean, current_count int)
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_count int;
+begin
+  insert into public.oauth_rate_limits (bucket, count, window_start)
+    values (p_bucket, 1, now())
+  on conflict (bucket) do update
+    set count = case
+                  when public.oauth_rate_limits.window_start < now() - make_interval(secs => p_window_seconds)
+                  then 1
+                  else public.oauth_rate_limits.count + 1
+                end,
+        window_start = case
+                  when public.oauth_rate_limits.window_start < now() - make_interval(secs => p_window_seconds)
+                  then now()
+                  else public.oauth_rate_limits.window_start
+                end
+  returning count into v_count;
+  return query select (v_count <= p_limit), v_count;
+end;
+$$;
+
+-- ---------- OAuth RLS -----------------------------------------------
+-- All OAuth tables enable RLS (default-deny). The authorization-server logic
+-- runs with the service-role client, which bypasses RLS, and ALWAYS scopes its
+-- queries by the server-derived user_id. Only the two tables the settings UI
+-- reads through the cookie-bound client get per-user policies.
+alter table public.oauth_clients               enable row level security;
+alter table public.oauth_authorizations        enable row level security;
+alter table public.oauth_pending_requests      enable row level security;
+alter table public.oauth_authorization_codes   enable row level security;
+alter table public.oauth_access_tokens         enable row level security;
+alter table public.oauth_refresh_tokens        enable row level security;
+alter table public.oauth_device_codes          enable row level security;
+alter table public.oauth_rate_limits           enable row level security;
+
+-- A user may SELECT the clients they personally registered (for a future
+-- management view). First-party/global clients (user_id null) are not exposed
+-- to the cookie client; the AS reads them service-role.
+drop policy if exists "oauth_clients_owner" on public.oauth_clients;
+create policy "oauth_clients_owner" on public.oauth_clients
+  for select using (user_id = auth.uid());
+
+-- A user reads and revokes their own standing grants ("Connected apps").
+drop policy if exists "oauth_authorizations_owner" on public.oauth_authorizations;
+create policy "oauth_authorizations_owner" on public.oauth_authorizations
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());

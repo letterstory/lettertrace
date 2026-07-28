@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { getProjectHistory } from "@/lib/api-service";
 
 export const dynamic = "force-dynamic";
@@ -15,15 +15,8 @@ export async function GET(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "projects:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const limitParam = new URL(request.url).searchParams.get("limit");
   const limit = limitParam ? Number(limitParam) : 30;

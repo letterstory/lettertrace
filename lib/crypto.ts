@@ -84,8 +84,19 @@ export function generateApiKey(): string {
   return `${API_KEY_PREFIX}${crypto.randomBytes(24).toString("base64url")}`;
 }
 
-export function hashApiKey(plaintext: string): string {
+/**
+ * The single hashing convention for every bearer secret we store — classic API
+ * keys and every OAuth token/code alike. A plain SHA-256 hex digest of the
+ * trimmed plaintext: fast (these are high-entropy random tokens, not passwords,
+ * so no KDF is needed) and non-reversible, so a database leak never yields a
+ * usable credential.
+ */
+export function sha256Hex(plaintext: string): string {
   return crypto.createHash("sha256").update(plaintext.trim()).digest("hex");
+}
+
+export function hashApiKey(plaintext: string): string {
+  return sha256Hex(plaintext);
 }
 
 // A non-reversible hint so users can recognize which key is stored, e.g. "sk-ant-…4a9c".
@@ -95,4 +106,68 @@ export function keyHint(plaintext: string): string {
   const prefix = trimmed.slice(0, 7);
   const suffix = trimmed.slice(-4);
   return `${prefix}…${suffix}`;
+}
+
+// ------------------------------------------------------------------
+// OAuth 2.1 credentials. Every one is an opaque, high-entropy random string
+// stored only as its SHA-256 digest (sha256Hex) — never in plaintext, never
+// encrypted-and-recoverable. The plaintext is handed to the client exactly once
+// (in a redirect, a token response, or on-screen) and cannot be read back.
+// Prefixes make a leaked value instantly recognizable in logs/secret scanners.
+// ------------------------------------------------------------------
+
+/** Access token: short-lived (~1h), presented as `Authorization: Bearer`. */
+export function generateOAuthAccessToken(): string {
+  return `lt_oauth_${crypto.randomBytes(24).toString("base64url")}`;
+}
+
+/** Refresh token: longer-lived, rotates on every use. */
+export function generateRefreshToken(): string {
+  return `lt_refr_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+/** Authorization code: single-use, ~5 min, delivered via the redirect. */
+export function generateAuthCode(): string {
+  return `lt_code_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+/** Device code (RFC 8628): the CLI's polling handle, single-use, ~15 min. */
+export function generateDeviceCode(): string {
+  return `lt_dev_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+// Crockford base32 (no I, L, O, U — the characters people misread). We map 40
+// random bits (5 bytes) onto exactly 8 characters, so there is no modulo bias.
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * Human-typed device code, e.g. "WXYZ-1234" (~40 bits). Short enough to read off
+ * one screen and type on another, high-entropy enough that guessing is hopeless
+ * within the 15-minute window — and we additionally cap attempts and store only
+ * its hash, so the plaintext never sits in the database.
+ */
+export function generateUserCode(): string {
+  const bytes = crypto.randomBytes(5); // 40 bits
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += CROCKFORD[(value >>> bits) & 0x1f];
+    }
+  }
+  return `${out.slice(0, 4)}-${out.slice(4, 8)}`;
+}
+
+/** Normalize a user-entered code for hash lookup: uppercase, strip separators. */
+export function normalizeUserCode(input: string): string {
+  return input.trim().toUpperCase().replace(/[\s-]/g, "");
+}
+
+/** A masked hint for an OAuth token, mirroring keyHint's shape. */
+export function oauthTokenHint(plaintext: string): string {
+  return keyHint(plaintext);
 }
