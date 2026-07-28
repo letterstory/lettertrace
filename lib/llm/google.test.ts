@@ -481,6 +481,67 @@ describe("google HTTP errors", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  // The failure Casey hit on the first real production run: a single-prompt run
+  // burned all four attempts in about three seconds because the backoff ignored
+  // the quota window Google had just told us about, then reported "rate
+  // limited" as though nothing could be done.
+  it("waits as long as a 429's RetryInfo asks, not the exponential backoff", async () => {
+    vi.useFakeTimers();
+    mockFetch(
+      jsonResponse(
+        {
+          error: {
+            code: 429,
+            message: "Quota exceeded",
+            status: "RESOURCE_EXHAUSTED",
+            details: [
+              { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "12s" },
+            ],
+          },
+        },
+        429,
+      ),
+      jsonResponse(ok("hi")),
+    );
+    const p = runQuery({ provider: "google", model: "gemini-pro-latest", apiKey: KEY, prompt: "q" });
+
+    // The old 400ms backoff would have fired the retry by now — and hit the
+    // same spent quota window, which is exactly the bug.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(p).resolves.toMatchObject({ text: "hi" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up rather than blocking on a quota window it can't wait out", async () => {
+    vi.useFakeTimers();
+    mockFetch(
+      jsonResponse(
+        {
+          error: {
+            code: 429,
+            message: "Quota exceeded",
+            status: "RESOURCE_EXHAUSTED",
+            // A per-day quota. Waiting is not an option; failing fast with a
+            // message that says so is.
+            details: [
+              { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "3600s" },
+            ],
+          },
+        },
+        429,
+      ),
+    );
+    const p = runQuery({ provider: "google", model: "gemini-pro-latest", apiKey: KEY, prompt: "q" });
+    const rejected = expect(p).rejects.toThrow(/Quota exceeded/);
+    await vi.runAllTimersAsync();
+    await rejected;
+    // One attempt, no retry: the advised wait exceeded what we will block for.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a dropped connection", async () => {
     vi.useFakeTimers();
     let calls = 0;
@@ -570,8 +631,23 @@ describe("humanError for google", () => {
     ).toBe("Invalid API key.");
   });
 
-  it("maps quota, access, retired models and server errors", () => {
-    expect(humanError(new GoogleAPIError(429, "Quota exceeded"))).toBe("Rate limited by the provider.");
+  // "Rate limited by the provider" reads as "we went too fast" and invites a
+  // pointless immediate retry. A Gemini 429 is a spent quota on the key.
+  it("explains a 429 as a quota problem, not a speed problem", () => {
+    const msg = humanError(new GoogleAPIError(429, "Quota exceeded", "RESOURCE_EXHAUSTED"));
+    expect(msg).toMatch(/quota/i);
+    expect(msg).toMatch(/Google AI Studio/);
+    expect(msg).not.toBe("Rate limited by the provider.");
+  });
+
+  it("includes the wait Google asked for when it gave one", () => {
+    const msg = humanError(
+      new GoogleAPIError(429, "Quota exceeded", "RESOURCE_EXHAUSTED", 38),
+    );
+    expect(msg).toMatch(/wait 38s/);
+  });
+
+  it("maps access, retired models and server errors", () => {
     expect(humanError(new GoogleAPIError(403, "no access"))).toBe(
       "This key lacks access to the requested model.",
     );

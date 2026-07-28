@@ -326,6 +326,14 @@ const GOOGLE_TIMEOUT_MS = 60_000;
 const GOOGLE_MAX_ATTEMPTS = 4;
 // HTTP statuses worth retrying (transient); everything else fails fast.
 const GOOGLE_RETRYABLE = new Set([429, 500, 503, 504]);
+// The longest single wait we'll honour from a 429's RetryInfo. Past this the
+// quota window is long enough that blocking the request is worse than failing
+// with a message that says what to do about it.
+const GOOGLE_MAX_RETRY_WAIT_MS = 45_000;
+// Total time one call may spend asleep across all its retries. The run route
+// allows 300s for every prompt in the run, so a single prompt must not be able
+// to eat it and starve the rest.
+const GOOGLE_RETRY_BUDGET_MS = 90_000;
 // The real Gemini model the "Google AI Overviews" engine runs on. AI Overviews
 // are served by a fast Gemini model over Google Search, so we back them with
 // Flash and always ground the answer in Search.
@@ -349,12 +357,35 @@ const GOOGLE_THINKING_HEADROOM = 4096;
 export class GoogleAPIError extends Error {
   status: number;
   googleStatus?: string;
-  constructor(status: number, message: string, googleStatus?: string) {
+  /** Seconds Google itself asked us to wait, from google.rpc.RetryInfo. Only
+   *  ever present on 429s, and the only trustworthy source for how long a quota
+   *  window has left to run. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, googleStatus?: string, retryAfterSec?: number) {
     super(message);
     this.name = "GoogleAPIError";
     this.status = status;
     this.googleStatus = googleStatus;
+    this.retryAfterSec = retryAfterSec;
   }
+}
+
+/**
+ * Pull the advised wait out of a google.rpc.RetryInfo detail, in seconds.
+ *
+ * A Gemini 429 carries `details: [{ "@type": ".../google.rpc.RetryInfo",
+ * retryDelay: "38s" }]`. That number is the quota window, not a hint: backing
+ * off 400ms and retrying is guaranteed to fail again, which is how a run with a
+ * single prompt burned all four attempts in about three seconds and reported
+ * "Rate limited by the provider" as if nothing could be done.
+ */
+function googleRetryAfterSec(errBody: GoogleResponse): number | undefined {
+  for (const d of errBody.error?.details ?? []) {
+    if (typeof d?.retryDelay !== "string") continue;
+    const secs = Number.parseFloat(d.retryDelay);
+    if (Number.isFinite(secs) && secs >= 0) return secs;
+  }
+  return undefined;
 }
 
 interface GoogleGroundingChunk {
@@ -373,7 +404,13 @@ interface GoogleResponse {
     thoughtsTokenCount?: number;
     totalTokenCount?: number;
   };
-  error?: { code?: number; message?: string; status?: string };
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+    // google.rpc error details; RetryInfo is the one we act on.
+    details?: { "@type"?: string; retryDelay?: string }[];
+  };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -386,6 +423,7 @@ function resolveGoogleModel(model: string): string {
 
 async function googleFetch(realModel: string, apiKey: string, body: unknown): Promise<GoogleResponse> {
   let lastErr: unknown;
+  let sleptMs = 0;
   for (let attempt = 0; attempt < GOOGLE_MAX_ATTEMPTS; attempt++) {
     try {
       const res = await fetch(`${GOOGLE_API_BASE}/models/${realModel}:generateContent`, {
@@ -400,6 +438,7 @@ async function googleFetch(realModel: string, apiKey: string, body: unknown): Pr
         res.status,
         errBody.error?.message ?? `Google API error (${res.status}).`,
         errBody.error?.status,
+        googleRetryAfterSec(errBody),
       );
       // Retry transient statuses; surface auth/quota/bad-request immediately.
       if (!GOOGLE_RETRYABLE.has(res.status)) throw gerr;
@@ -410,7 +449,19 @@ async function googleFetch(realModel: string, apiKey: string, body: unknown): Pr
       if (err instanceof GoogleAPIError && !GOOGLE_RETRYABLE.has(err.status)) throw err;
       lastErr = err;
     }
-    if (attempt < GOOGLE_MAX_ATTEMPTS - 1) await sleep(400 * 2 ** attempt);
+    if (attempt >= GOOGLE_MAX_ATTEMPTS - 1) break;
+
+    // Honour Google's own RetryInfo when it gave one — a 429's quota window
+    // does not care about our exponential backoff. Two guards keep that from
+    // becoming a hang: a single wait longer than GOOGLE_MAX_RETRY_WAIT_MS is
+    // not worth blocking a request for, and the waits across one call are
+    // capped so the run route's 300s budget still covers the other prompts.
+    const advised = lastErr instanceof GoogleAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > GOOGLE_MAX_RETRY_WAIT_MS || sleptMs + waitMs > GOOGLE_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
   }
   throw lastErr ?? new Error("Google request failed.");
 }
@@ -953,7 +1004,19 @@ export function humanError(err: unknown): string {
   if (err instanceof GoogleAPIError) {
     // Google returns a bad key as 400 INVALID_ARGUMENT with an "API key not
     // valid" message (not 401), so match on the message as well as the status.
-    if (err.status === 429) return "Rate limited by the provider.";
+    if (err.status === 429) {
+      // "Rate limited" alone reads as "we went too fast, try again" — but a
+      // Gemini 429 is almost always a spent per-minute or per-day quota on the
+      // key, which retrying will not fix. Say which, and say what to do.
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` Google asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `Google rejected the request: this key's quota is used up.${wait} ` +
+        `Free-tier and trial keys allow only a few requests per minute — check the key's quota in Google AI Studio, or wait and run again.`
+      );
+    }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
     if (err.status === 401 || /api[_ ]?key.*(not valid|invalid)|api_key_invalid/i.test(err.message)) {
       return "Invalid API key.";
