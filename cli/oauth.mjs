@@ -9,17 +9,21 @@ import { loadConfig, saveConfig } from "./config.mjs";
 
 const CLIENT_ID = "lt_cli";
 export const DEFAULT_SCOPE =
-  "projects:read projects:write runs:read runs:trigger offline_access";
+  "projects:read projects:write runs:read runs:trigger keys:read keys:write offline_access";
 
 const b64url = (buf) => buf.toString("base64url");
 
 /** Thrown when a resource has no usable credential; the caller may prompt a
- *  login for exactly that audience. */
+ *  login for exactly that audience. `detail` explains why when the reason is
+ *  something other than "you never logged in" — e.g. a stored token that
+ *  predates a scope the deployment has since started requiring. */
 export class NeedsLogin extends Error {
-  constructor(resource) {
-    super(`Not authenticated for "${resource}". Run: lettertrace login${resource === "mcp" ? " --mcp" : ""}`);
+  constructor(resource, detail) {
+    const how = `Run: lettertrace login${resource === "mcp" ? " --mcp" : ""}`;
+    super(detail ? `${detail} ${how}` : `Not authenticated for "${resource}". ${how}`);
     this.name = "NeedsLogin";
     this.resource = resource;
+    this.detail = detail ?? null;
   }
 }
 
@@ -213,6 +217,15 @@ export async function getAccessToken(base, resource, { force = false } = {}) {
     throw new NeedsLogin(resource);
   }
   return storeCredential(base, resource, tokens).access_token;
+}
+
+/** Drop the stored credential for one audience without touching the others, so
+ *  the next command re-runs the browser flow and re-consents from scratch. */
+export function forget(resource) {
+  const cfg = loadConfig();
+  if (!cfg.credentials[resource]) return;
+  delete cfg.credentials[resource];
+  saveConfig(cfg);
 }
 
 export function logout() {

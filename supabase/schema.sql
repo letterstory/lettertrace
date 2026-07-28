@@ -558,7 +558,8 @@ insert into public.oauth_clients
 values
   ('lt_cli', true, 'Lettertrace CLI & MCP', 'public', 'none',
    array['http://127.0.0.1/callback', 'http://[::1]/callback'],
-   array['projects:read', 'projects:write', 'runs:read', 'runs:trigger', 'offline_access'])
+   array['projects:read', 'projects:write', 'runs:read', 'runs:trigger',
+         'keys:read', 'keys:write', 'offline_access'])
 on conflict (client_id) do update set
   is_first_party = excluded.is_first_party,
   client_name = excluded.client_name,

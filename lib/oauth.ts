@@ -44,6 +44,12 @@ export const DATA_SCOPES = [
   "projects:write",
   "runs:read",
   "runs:trigger",
+  // BYOK provider keys get their own pair rather than riding on projects:write.
+  // Handing someone the ability to swap the key that every run is billed to is
+  // a different decision from letting them add a prompt, and the consent screen
+  // is the only place a user ever gets to make it.
+  "keys:read",
+  "keys:write",
 ] as const;
 export const OFFLINE_ACCESS = "offline_access";
 export const KNOWN_SCOPES = [...DATA_SCOPES, OFFLINE_ACCESS] as const;
@@ -54,6 +60,8 @@ export const SCOPE_DESCRIPTIONS: Record<string, string> = {
   "projects:write": "Create organizations and add or edit prompts",
   "runs:read": "Read your monitoring runs and share-of-voice reports",
   "runs:trigger": "Start new monitoring runs (spends your provider key)",
+  "keys:read": "See which AI provider keys you've stored (masked, never the key itself)",
+  "keys:write": "Replace or remove the AI provider keys your runs are billed to",
   [OFFLINE_ACCESS]: "Stay connected without you signing in again",
 };
 
