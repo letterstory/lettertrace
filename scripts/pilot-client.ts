@@ -104,7 +104,7 @@ const webSearch = flag("web-search", "on") !== "off";
 const ANSWER_MODEL: Record<Provider, string> = {
   anthropic: "claude-opus-4-8",
   openai: "gpt-4o",
-  google: "gemini-2.5-pro",
+  google: "gemini-pro-latest",
 };
 
 // Rough blended $/1M tokens, only for an order-of-magnitude spend estimate.
@@ -173,11 +173,13 @@ interface ClientReport {
 // --- pipeline -------------------------------------------------------------
 
 function keyFor(provider: Provider): string {
-  const k =
-    provider === "anthropic"
-      ? process.env.TRIAL_ANTHROPIC_API_KEY
-      : process.env.TRIAL_OPENAI_API_KEY;
-  if (!k) throw new Error(`Missing TRIAL_${provider.toUpperCase()}_API_KEY in .env.local`);
+  const env: Record<Provider, string> = {
+    anthropic: "TRIAL_ANTHROPIC_API_KEY",
+    openai: "TRIAL_OPENAI_API_KEY",
+    google: "TRIAL_GOOGLE_API_KEY",
+  };
+  const k = process.env[env[provider]];
+  if (!k) throw new Error(`Missing ${env[provider]} in .env.local`);
   return k;
 }
 
