@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { safePath } from "@/lib/utils";
+import { resolveRedirectBase, safePath } from "@/lib/utils";
 
 // Longest provider error we'll echo back onto the sign-in screen. The text is
 // attacker-influenceable via the query string (it renders as escaped text, so
@@ -16,10 +16,10 @@ export async function GET(request: Request) {
   const code = searchParams.get("code");
   const next = safePath(searchParams.get("next"));
 
-  // Behind a proxy (Vercel) the `origin` parsed off the request can be the
-  // internal deployment host rather than the public domain, which would strand
-  // the user on the wrong URL. Prefer the configured site URL when we have one.
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? origin;
+  // Prefer the configured site URL — behind a proxy the origin parsed off the
+  // request can be the internal deployment host — but never follow it to
+  // loopback from a deployed request. See resolveRedirectBase.
+  const base = resolveRedirectBase(process.env.NEXT_PUBLIC_SITE_URL, origin);
 
   const failed = (reason: string) => {
     const url = new URL("/login", base);
