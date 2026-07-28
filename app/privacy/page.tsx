@@ -14,7 +14,7 @@ export default function PrivacyPage() {
     <LegalPage
       title="Privacy Policy"
       updated={UPDATED}
-      intro="Lettertrace is operated by The Letter Company. This policy explains what we collect when you use the hosted service at lettertrace.com, why we collect it, and who else sees it. Lettertrace is also open source — if you self-host it, this policy does not apply to your deployment, because we never receive your data."
+      intro="Lettertrace is operated by The Letter Company. This policy explains what we collect when you use the hosted service at lettertrace.com, why we collect it, and who else sees it."
     >
       <Section n={1} title="Information we collect">
         <p><strong>Account information.</strong> Your email address, and — if you sign in with Google or GitHub — the name and profile picture that provider returns. We never receive your Google or GitHub password.</p>
@@ -96,8 +96,8 @@ export default function PrivacyPage() {
         <p>The Letter Company operates in the United States, and our service providers process data in the United States and other countries. Using Lettertrace means your information may be transferred to and processed in those countries.</p>
       </Section>
 
-      <Section n={12} title="Self-hosting">
-        <p>Lettertrace is open source under the MIT licence. If you run your own instance, your data stays in your own infrastructure and we receive none of it. This policy covers only the hosted service we operate at lettertrace.com.</p>
+      <Section n={12} title="Scope of this policy">
+        <p>This policy covers the hosted Lettertrace service that we operate at lettertrace.com. It does not cover any separately operated deployment of the software, where we would neither hold nor receive the data.</p>
       </Section>
 
       <Section n={13} title="Changes to this policy">
