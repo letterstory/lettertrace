@@ -238,6 +238,66 @@ create table if not exists public.sources (
   created_at timestamptz not null default now()
 );
 
+-- ---------- competitor de-duplication --------------------------------
+-- The competitor suggester could name the same company twice and nothing
+-- rejected the second copy. computeEntityStats keys on competitor_id and sums
+-- mention_count across every row, so a duplicate inflated the share-of-voice
+-- DENOMINATOR — quietly understating the brand's own share rather than the
+-- competitor's. Collapse anything already stored, then make it impossible.
+--
+-- Note mentions.competitor_id is ON DELETE SET NULL, so simply deleting the
+-- duplicate row would orphan its mentions to the entity_name fallback in
+-- entityKey() and leave the double-count in place. Re-point first, then delete.
+-- Safe to re-run: every statement is a no-op once the data is clean.
+
+-- 1. Re-point mentions from each duplicate onto the oldest copy of that name.
+with canonical as (
+  select project_id,
+         lower(name) as lname,
+         (array_agg(id order by created_at, id))[1] as keep_id
+  from public.competitors
+  group by project_id, lower(name)
+),
+dupes as (
+  select c.id as dup_id, k.keep_id
+  from public.competitors c
+  join canonical k on k.project_id = c.project_id and k.lname = lower(c.name)
+  where c.id <> k.keep_id
+)
+update public.mentions m
+set competitor_id = d.keep_id
+from dupes d
+where m.competitor_id = d.dup_id;
+
+-- 2. Drop the mention rows that re-pointing just made redundant (one entity
+--    counted twice in the same response), keeping the earliest of each pair.
+delete from public.mentions m
+using public.mentions keep
+where m.entity_type = 'competitor'
+  and m.competitor_id is not null
+  and m.competitor_id = keep.competitor_id
+  and m.response_id = keep.response_id
+  and m.id > keep.id;
+
+-- 3. Remove the duplicate competitor rows themselves.
+with canonical as (
+  select project_id,
+         lower(name) as lname,
+         (array_agg(id order by created_at, id))[1] as keep_id
+  from public.competitors
+  group by project_id, lower(name)
+)
+delete from public.competitors c
+using canonical k
+where k.project_id = c.project_id
+  and k.lname = lower(c.name)
+  and c.id <> k.keep_id;
+
+-- 4. One competitor name per project, case-insensitive. POST /api/competitors
+--    turns the resulting 23505 into a 409.
+create unique index if not exists competitors_project_name_uniq
+  on public.competitors (project_id, lower(name));
+
 -- ---------- indexes --------------------------------------------------
 create index if not exists idx_projects_user on public.projects (user_id);
 create index if not exists idx_competitors_project on public.competitors (project_id);

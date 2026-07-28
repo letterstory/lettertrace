@@ -190,10 +190,23 @@ async function anthropicWebSearch(
 ): Promise<QueryResult> {
   const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
   // web_search is a server-side tool not in older SDK typings; cast the params.
+  //
+  // Keep the 20250305 tool version. The newer web_search_20260209 runs dynamic
+  // filtering through code execution and returns results in a shape this parser
+  // doesn't read: measured against the same prompt it produced 0 inline
+  // citations (vs 11) for 2.6x the tokens, falling back to the "retrieved but
+  // not cited" path below. Upgrading needs the citation parsing reworked first.
   const params = {
     model,
     max_tokens: ANSWER_MAX_TOKENS,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }],
+    // Force the browse, matching the OpenAI path. Left to choose, the model
+    // answers well-known questions from memory and cites nothing — in a live
+    // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
+    // which made the two providers' mention rates measure different things.
+    // use_web_search is opt-in per project, so when it's on the user has asked
+    // us to check the live web. Costs roughly 4x the tokens of a memory answer.
+    tool_choice: { type: "tool", name: "web_search" },
     messages: [{ role: "user", content: prompt }],
   };
   const msg = await client.messages.create(
@@ -358,6 +371,61 @@ const ANALYZE_SYSTEM = `You analyze how brands are portrayed inside an AI assist
 Only judge based on the provided answer text. Return ONLY JSON.`;
 
 /**
+ * Map a model's raw analysis rows back onto the entities we asked about.
+ *
+ * Models are unreliable about which identifier they echo: Claude returns the
+ * `key` we supplied, while gpt-4o-mini routinely returns the entity's *name*
+ * instead ("Cloudflare" rather than "brand"). Keying purely off `key` silently
+ * dropped every OpenAI row, so the caller fell back to neutral / not-recommended
+ * for the whole project. Resolve on key first, then name, and drop anything that
+ * matches neither rather than inventing a verdict.
+ *
+ * Exported for tests; `analyzeResponse` is the real entry point.
+ */
+export function parseAnalysis(entities: AnalyzeEntity[], raw: unknown): AnalyzedResult[] {
+  let parsed = raw;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    parsed = (parsed as { results?: unknown }).results ?? [];
+  }
+  const rows = Array.isArray(parsed) ? parsed : [];
+
+  // Both lookups point at the canonical key. Keys win: an entity whose *name*
+  // collides with another entity's key must not steal its row.
+  const byName = new Map<string, string>();
+  const byKey = new Map<string, string>();
+  for (const e of entities) {
+    byKey.set(e.key.trim().toLowerCase(), e.key);
+    const name = e.name.trim().toLowerCase();
+    if (name && !byName.has(name)) byName.set(name, e.key);
+  }
+
+  const results: AnalyzedResult[] = [];
+  const seen = new Set<string>();
+  for (const item of rows) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+
+    const candidates = [o.key, o.name, o.entity]
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => v.trim().toLowerCase());
+    let key: string | undefined;
+    for (const c of candidates) {
+      key = byKey.get(c) ?? byName.get(c);
+      if (key) break;
+    }
+    // A row we can't attribute is worse than no row: it would be applied to the
+    // wrong entity. Drop it and let the caller default.
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const sentiment: Sentiment =
+      o.sentiment === "positive" || o.sentiment === "negative" ? o.sentiment : "neutral";
+    results.push({ key, sentiment, recommended: Boolean(o.recommended) });
+  }
+  return results;
+}
+
+/**
  * Given an assistant answer and the entities that were detected in it, classify
  * sentiment + whether each was recommended. Only pass entities already known to
  * be mentioned (saves tokens; an entity not in the text has no sentiment).
@@ -398,23 +466,7 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
         ? await anthropicChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
         : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
 
-    let parsed: unknown = extractJson(res.text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      parsed = (parsed as { results?: unknown }).results ?? [];
-    }
-    const arr = Array.isArray(parsed) ? parsed : [];
-    const valid: AnalyzedResult[] = [];
-    for (const item of arr) {
-      if (!item || typeof item !== "object") continue;
-      const o = item as Record<string, unknown>;
-      const key = typeof o.key === "string" ? o.key : null;
-      const sentiment = o.sentiment;
-      if (!key) continue;
-      const s: Sentiment =
-        sentiment === "positive" || sentiment === "negative" ? sentiment : "neutral";
-      valid.push({ key, sentiment: s, recommended: Boolean(o.recommended) });
-    }
-    return { results: valid, tokens: res.tokens };
+    return { results: parseAnalysis(opts.entities, extractJson(res.text)), tokens: res.tokens };
   } catch {
     // Sentiment is best-effort enrichment; never fail a run over it.
     return {
@@ -544,11 +596,18 @@ export async function suggestCompetitors(
     }
     const arr = Array.isArray(parsed) ? parsed : [];
     const suggestions: CompetitorSuggestion[] = [];
+    // Models occasionally list the same company twice in one response. Two rows
+    // for one competitor become two entities in computeEntityStats, which
+    // inflates the share-of-voice denominator and understates the brand.
+    const seen = new Set<string>();
     for (const item of arr) {
       if (!item || typeof item !== "object") continue;
       const o = item as Record<string, unknown>;
       const name = typeof o.name === "string" ? o.name.trim() : "";
       if (!name) continue;
+      const dedupeKey = name.toLowerCase();
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
       suggestions.push({
         name,
         domain:
