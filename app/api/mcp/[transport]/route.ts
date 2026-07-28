@@ -1,7 +1,7 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
-import { authenticateApiKey } from "@/lib/api-auth";
+import { allowsAudience, authenticateApiKey, type Scope } from "@/lib/api-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getProjects } from "@/lib/data";
 import {
@@ -17,6 +17,7 @@ import { humanError } from "@/lib/llm";
 // since SSE is disabled). Connect with:
 //   claude mcp add --transport http lettertrace https://<host>/api/mcp/mcp \
 //     -H "Authorization: Bearer lt_live_..."
+// or with an OAuth access token (aud=mcp) obtained via the OAuth flow.
 // Tools are read/trigger only: Lettertrace reports how a brand shows up in AI
 // answers; it deliberately offers no recommendations.
 
@@ -30,6 +31,13 @@ function userIdOf(extra: { authInfo?: AuthInfo }): string {
   return userId;
 }
 
+/** Scopes granted to the current caller, forwarded from verifyToken. A classic
+ *  API key carries the full set; an OAuth token carries only what was consented. */
+function scopesOf(extra: { authInfo?: AuthInfo }): string[] {
+  const s = extra.authInfo?.extra?.scopes;
+  return Array.isArray(s) ? (s as string[]) : [];
+}
+
 function json(data: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -39,8 +47,19 @@ function json(data: unknown) {
 function toolError(message: string) {
   return {
     content: [{ type: "text" as const, text: message }],
-    isError: true,
+    isError: true as const,
   };
+}
+
+/** Enforce a scope inside a tool, mirroring the REST guard. Returns a tool
+ *  error to short-circuit the callback, or null when the scope is held. */
+function requireScope(
+  extra: { authInfo?: AuthInfo },
+  scope: Scope,
+): ReturnType<typeof toolError> | null {
+  return scopesOf(extra).includes(scope)
+    ? null
+    : toolError(`This token is missing the required "${scope}" scope.`);
 }
 
 const handler = createMcpHandler(
@@ -50,6 +69,8 @@ const handler = createMcpHandler(
       "List the organizations (projects) this Lettertrace account monitors, including brand name, domain, and when each last ran.",
       {},
       async (_args, extra) => {
+        const denied = requireScope(extra, "projects:read");
+        if (denied) return denied;
         const supabase = createServiceClient();
         const projects = await getProjects(supabase, userIdOf(extra));
         return json({ projects: projects.map(projectSummary) });
@@ -70,6 +91,8 @@ const handler = createMcpHandler(
           .describe("Max runs to return (default 20)"),
       },
       async ({ project_id, limit }, extra) => {
+        const denied = requireScope(extra, "runs:read");
+        if (denied) return denied;
         const supabase = createServiceClient();
         const runs = await listRuns(
           supabase,
@@ -98,6 +121,8 @@ const handler = createMcpHandler(
           .describe("If run_id is omitted: use this project's latest completed run"),
       },
       async ({ run_id, project_id }, extra) => {
+        const denied = requireScope(extra, "runs:read");
+        if (denied) return denied;
         const supabase = createServiceClient();
         const userId = userIdOf(extra);
 
@@ -128,6 +153,8 @@ const handler = createMcpHandler(
         project_id: z.string().uuid().describe("Project id from list_projects"),
       },
       async ({ project_id }, extra) => {
+        const denied = requireScope(extra, "runs:trigger");
+        if (denied) return denied;
         const supabase = createServiceClient();
         try {
           const outcome = await triggerRunForProject(
@@ -156,19 +183,30 @@ const handler = createMcpHandler(
   },
 );
 
-// Bearer auth with Lettertrace API keys. verifyToken stashes the owner's user
-// id in AuthInfo.extra, which tool callbacks read via extra.authInfo.
+// Bearer auth with Lettertrace credentials (classic API keys or OAuth access
+// tokens). verifyToken stashes the owner's user id, the granted scopes, and the
+// OAuth client id in AuthInfo.extra, which tool callbacks read via
+// extra.authInfo. An OAuth token minted for the REST API (aud=v1) is rejected
+// here so a token can only ever drive the surface it was consented for.
 const verifyToken = async (
   _req: Request,
   token?: string,
 ): Promise<AuthInfo | undefined> => {
   const auth = await authenticateApiKey(token);
   if (!auth) return undefined;
+  if (!allowsAudience(auth, "mcp")) return undefined;
   return {
     token: token!,
-    clientId: auth.userId,
-    scopes: [],
-    extra: { userId: auth.userId, keyId: auth.keyId },
+    // Prefer the real OAuth client id for audit; fall back to the user id for a
+    // classic API key (preserving prior behavior for withMcpAuth).
+    clientId: auth.clientId ?? auth.userId,
+    scopes: auth.scopes ?? [],
+    extra: {
+      userId: auth.userId,
+      keyId: auth.keyId,
+      scopes: auth.scopes ?? [],
+      clientId: auth.clientId,
+    },
   };
 };
 

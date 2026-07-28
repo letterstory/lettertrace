@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { getRunReport } from "@/lib/api-service";
 
 export const dynamic = "force-dynamic";
@@ -9,15 +9,8 @@ export async function GET(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "runs:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const report = await getRunReport(auth.supabase, auth.userId, params.id);
   if (!report) {

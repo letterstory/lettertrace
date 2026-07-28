@@ -233,13 +233,94 @@ claude mcp add --transport http lettertrace https://your-app.com/api/mcp/mcp \
 
 Tools: `list_projects`, `list_runs`, `get_share_of_voice_report`, `trigger_run`. (The write endpoints above are REST-only for now.)
 
+### Command-line client (`cli/`)
+
+A full CLI ships in [`cli/`](./cli/). Its only sign-in step is the OAuth flow
+below (no API keys): the first command that needs access opens your browser to
+**sign in or create an account**, then stores a scoped, auto-refreshing token.
+Everything after that runs over the REST and MCP APIs, so an agent like Claude
+Code can set up an account end to end after that one human approval.
+
+```bash
+npm run cli -- help                 # or: node cli/lettertrace.mjs help
+npm run cli -- login --url https://your-app.com   # browser sign-in / create account
+npm run cli -- whoami --json        # machine-readable auth status (no browser)
+
+# Set up an account over the API — the agent-drivable part:
+npm run cli -- projects create --name "Acme" --brand "Acme" --domains acme.io
+npm run cli -- prompts add <projectId> --text "best crm for startups" --topic CRM
+npm run cli -- runs trigger <projectId>
+npm run cli -- runs get <runId>          # share-of-voice report (--json for full)
+
+# Talk to the MCP endpoint over the real protocol (mints an mcp-audience token):
+npm run cli -- mcp tools
+npm run cli -- mcp call get_share_of_voice_report --project_id <projectId>
+```
+
+Every command takes `--json` for scripting, exits non-zero on error, and
+resolves the deployment from `--url`, then `$LETTERTRACE_URL`, then the URL saved
+at login. Tokens live in `~/.lettertrace/config.json` (one per audience). The
+data commands use REST v1; the `mcp` commands speak the Model Context Protocol
+directly. The mechanism underneath is:
+
+### OAuth: delegated access for CLIs and external systems
+
+Rather than hand-minting an API key and pasting it around, a CLI or external
+system can obtain a **scoped, expiring, revocable** token through Lettertrace's
+built-in **OAuth 2.1 Authorization Server**. Supabase stays the identity
+provider: the user approves the grant from a normal logged-in browser session,
+and the token that comes back flows through the same bearer path as an API key —
+so `/api/v1` and `/api/mcp` accept it unchanged.
+
+The full CLI above is the everyday tool; [`scripts/oauth-login.mjs`](./scripts/oauth-login.mjs)
+is a minimal, single-file login example if you want to see just the token
+exchange (Authorization Code + PKCE over a 127.0.0.1 loopback, no key pasted):
+
+```bash
+node scripts/oauth-login.mjs --url https://your-app.com
+node scripts/oauth-login.mjs --resource mcp     # bind the token to the MCP surface
+node scripts/oauth-login.mjs --refresh          # silently rotate using the refresh token
+```
+
+The flow: the client opens `/api/oauth/authorize`, you approve on the consent
+screen (which lists exactly what's being granted and where the code is
+delivered), and the CLI exchanges the code at `/api/oauth/token` for an access
+token (+ a refresh token when `offline_access` is requested).
+
+- **Scopes** — `projects:read`, `projects:write`, `runs:read`, `runs:trigger`,
+  and `offline_access` (asks for a refresh token). Enforced on **every** REST
+  route and MCP tool, reads included; a classic `lt_live_` key implicitly holds
+  all of them, so nothing about existing keys changes.
+- **Audience** — pass `resource=v1` (default) or `resource=mcp`. A token is
+  bound to one surface: an MCP token can't call the REST API, and vice versa.
+- **Discovery** — MCP/OAuth clients can auto-configure from
+  `/.well-known/oauth-authorization-server` (RFC 8414). Device-code and dynamic
+  client registration (for MCP hosts that self-register) are the next phase.
+- **Revoke** — `POST /api/oauth/revoke` with a token, or (soon) from Settings →
+  Connected apps.
+
+Self-hosting a **confidential** external server? Register it with a hashed
+secret via SQL (public/loopback clients like the CLI need no secret):
+
+```sql
+insert into public.oauth_clients
+  (client_id, client_name, client_type, token_endpoint_auth_method,
+   redirect_uris, allowed_scopes, client_secret_hash)
+values
+  ('my-service', 'My Service', 'confidential', 'client_secret_basic',
+   array['https://my-service.example.com/oauth/callback'],
+   array['projects:read','runs:read','offline_access'],
+   encode(digest('THE_PLAINTEXT_SECRET', 'sha256'), 'hex'));
+```
+
 Notes:
 
 - API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only.
 - Projects created via the API start with `schedule: "off"` — trigger runs explicitly (or flip the schedule in the dashboard).
 - API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
 - Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
-- Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table (safe to re-run).
+- OAuth tokens are scoped and audience-bound; a classic `lt_live_` API key stays full-access across all of the account's organizations. Revoke either anytime (API keys from Settings; OAuth grants via `/api/oauth/revoke`).
+- Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table and the OAuth tables (`oauth_clients`, `oauth_access_tokens`, …) plus the seeded `lt_cli` client (all safe to re-run).
 
 ## Deployment
 

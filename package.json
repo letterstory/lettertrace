@@ -7,13 +7,17 @@
   "engines": {
     "node": ">=20 <23"
   },
+  "bin": {
+    "lettertrace": "cli/lettertrace.mjs"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cli": "node cli/lettertrace.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

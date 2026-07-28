@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { setPromptActive } from "@/lib/api-service";
 import { humanError } from "@/lib/llm";
 
@@ -10,15 +10,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "projects:write", "v1");
+  if (auth instanceof Response) return auth;
 
   let body: unknown;
   try {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { listRuns, triggerRunForProject } from "@/lib/api-service";
 import { isProvider, PROVIDERS } from "@/lib/models";
 import { humanError } from "@/lib/llm";
@@ -13,15 +13,8 @@ export async function GET(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "runs:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const limit = Number(new URL(request.url).searchParams.get("limit")) || 20;
   const runs = await listRuns(auth.supabase, auth.userId, params.id, limit);
@@ -38,15 +31,8 @@ export async function POST(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "runs:trigger", "v1");
+  if (auth instanceof Response) return auth;
 
   // An absent (or empty) body is the common case and must keep working.
   const options: { provider?: Provider; model?: string } = {};
