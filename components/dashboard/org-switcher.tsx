@@ -91,7 +91,7 @@ export function OrgSwitcher({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 rounded-2xl border border-ink/10 bg-paper-shade/50 px-4 py-3 text-left transition hover:border-ink/25"
+        className="flex w-full items-center justify-between gap-2 rounded border border-ink/10 bg-paper-shade/50 px-4 py-3 text-left transition hover:border-ink/25"
       >
         <span className="min-w-0">
           <span className="block truncate font-serif text-sm font-semibold text-ink">
@@ -116,7 +116,7 @@ export function OrgSwitcher({
           />
           <div
             role="listbox"
-            className="absolute left-0 right-0 z-20 mt-2 overflow-hidden rounded-2xl border border-ink/10 bg-paper shadow-card"
+            className="absolute left-0 right-0 z-20 mt-2 overflow-hidden rounded border border-ink/10 bg-paper shadow-card"
           >
             <p className="px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-ink-faint">
               Organizations
@@ -187,8 +187,8 @@ export function OrgSwitcher({
           aria-live="polite"
         >
           <div className="relative flex h-16 w-16 items-center justify-center">
-            <span className="absolute inset-0 animate-ping rounded-full bg-terracotta/20" />
-            <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-terracotta/10 text-terracotta">
+            <span className="absolute inset-0 animate-ping rounded bg-terracotta/20" />
+            <span className="flex h-16 w-16 items-center justify-center rounded bg-terracotta/10 text-terracotta">
               <ArrowLeftRight className="h-7 w-7" aria-hidden />
             </span>
           </div>

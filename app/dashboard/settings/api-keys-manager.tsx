@@ -81,12 +81,12 @@ export default function ApiKeysManager({ keys }: { keys: ApiKeyPublic[] }) {
     <div className="space-y-4">
       {/* One-time reveal of a freshly created key */}
       {freshKey && (
-        <div className="rounded-xl border border-emerald-700/20 bg-mint/30 p-4">
+        <div className="rounded border border-emerald-700/20 bg-mint/30 p-4">
           <p className="text-sm font-medium text-ink">
             Copy your new key now — it won&apos;t be shown again.
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="min-w-0 flex-1 truncate rounded-lg bg-paper px-3 py-2 font-mono text-sm text-ink">
+            <code className="min-w-0 flex-1 truncate rounded bg-paper px-3 py-2 font-mono text-sm text-ink">
               {freshKey}
             </code>
             <Button type="button" size="sm" variant="secondary" onClick={handleCopy}>
@@ -99,7 +99,7 @@ export default function ApiKeysManager({ keys }: { keys: ApiKeyPublic[] }) {
 
       {/* Existing keys */}
       {keys.length > 0 && (
-        <ul className="divide-y divide-ink/10 rounded-xl border border-ink/10 bg-paper">
+        <ul className="divide-y divide-ink/10 rounded border border-ink/10 bg-paper">
           {keys.map((k) => (
             <li key={k.id} className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">

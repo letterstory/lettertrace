@@ -56,7 +56,7 @@ function useChartTheme() {
     ...p,
     axisTick: { fill: p.faint, fontSize: 12 },
     tooltipStyle: {
-      borderRadius: 12,
+      borderRadius: 4,
       border: `1px solid ${p.grid}`,
       background: p.surface,
       boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
@@ -70,7 +70,7 @@ function useChartTheme() {
 function Placeholder({ label, height }: { label: string; height: number }) {
   return (
     <div
-      className="flex items-center justify-center rounded-2xl border border-dashed border-ink/10 bg-paper-shade/40 text-sm text-ink-faint"
+      className="flex items-center justify-center rounded border border-dashed border-ink/10 bg-paper-shade/40 text-sm text-ink-faint"
       style={{ height }}
     >
       {label}
@@ -175,7 +175,7 @@ export function ShareBars({
           contentStyle={t.tooltipStyle}
           formatter={(value: number) => [`${Math.round(value)}%`, "Share of voice"]}
         />
-        <Bar dataKey="value" radius={[0, 8, 8, 0]}>
+        <Bar dataKey="value" radius={[0, 4, 4, 0]}>
           {data.map((entry, i) => (
             <Cell key={i} fill={entry.isBrand ? BRAND : TEAL} />
           ))}

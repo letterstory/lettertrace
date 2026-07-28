@@ -182,7 +182,7 @@ export function LogsExplorer({
                 setQ("");
                 router.push(pathname);
               }}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-ink/15 px-3 py-2 text-sm text-ink-soft transition hover:bg-ink/[0.03]"
+              className="inline-flex items-center gap-1.5 rounded border border-ink/15 px-3 py-2 text-sm text-ink-soft transition hover:bg-ink/[0.03]"
             >
               <X className="h-3.5 w-3.5" /> Clear
             </button>
@@ -350,7 +350,7 @@ function PageButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-9 items-center rounded-lg border border-ink/15 px-3 text-sm text-ink-soft transition hover:bg-ink/[0.03] disabled:opacity-40 disabled:pointer-events-none"
+      className="inline-flex h-9 items-center rounded border border-ink/15 px-3 text-sm text-ink-soft transition hover:bg-ink/[0.03] disabled:opacity-40 disabled:pointer-events-none"
     >
       {children}
     </button>
@@ -381,7 +381,7 @@ function LogRow({
       >
         <span
           className={cn(
-            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded",
             row.status === "failure" ? "bg-terracotta/10 text-terracotta-dark" : "bg-ink/[0.05] text-ink-soft",
           )}
         >
@@ -462,7 +462,7 @@ function LogRow({
               <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-ink-soft">
                 <Braces className="h-3 w-3" /> Metadata
               </p>
-              <pre className="overflow-x-auto rounded-lg border border-ink/10 bg-surface p-3 text-xs text-ink-soft">
+              <pre className="overflow-x-auto rounded border border-ink/10 bg-surface p-3 text-xs text-ink-soft">
                 {JSON.stringify(row.metadata, null, 2)}
               </pre>
             </div>

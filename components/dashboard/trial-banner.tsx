@@ -22,7 +22,7 @@ export function TrialBanner({
   return (
     <div
       className={cn(
-        "mb-6 rounded-2xl border px-5 py-4",
+        "mb-6 rounded border px-5 py-4",
         exhausted ? "border-terracotta/30 bg-terracotta/[0.07]" : "border-teal/25 bg-teal/[0.06]",
       )}
     >
@@ -30,7 +30,7 @@ export function TrialBanner({
         <div className="flex items-start gap-3">
           <span
             className={cn(
-              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded",
               exhausted ? "bg-terracotta/15 text-terracotta-dark" : "bg-teal/15 text-teal-dark",
             )}
           >
@@ -53,7 +53,7 @@ export function TrialBanner({
                   <span
                     key={i}
                     className={cn(
-                      "h-1.5 w-6 rounded-full",
+                      "h-1.5 w-6 rounded-sm",
                       i < used ? "bg-teal" : "bg-ink/[0.08]",
                     )}
                   />
@@ -73,7 +73,7 @@ export function TrialBanner({
       </div>
 
       {exhausted && videoUrl && (
-        <div className="mt-4 overflow-hidden rounded-xl border border-ink/10">
+        <div className="mt-4 overflow-hidden rounded border border-ink/10">
           <iframe
             src={videoUrl}
             title="Why you bring your own key"

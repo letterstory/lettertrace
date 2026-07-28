@@ -38,7 +38,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-mint-tint p-2 text-mint-ink">
+            <span className="mt-0.5 rounded bg-mint-tint p-2 text-mint-ink">
               <KeyRound className="h-5 w-5" />
             </span>
             <div>
@@ -57,7 +57,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-butter-tint p-2 text-butter-ink">
+            <span className="mt-0.5 rounded bg-butter-tint p-2 text-butter-ink">
               <Building2 className="h-5 w-5" />
             </span>
             <div>
@@ -76,7 +76,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-teal/15 p-2 text-teal-dark">
+            <span className="mt-0.5 rounded bg-teal/15 p-2 text-teal-dark">
               <Plug className="h-5 w-5" />
             </span>
             <div>
@@ -97,7 +97,7 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 rounded-xl bg-sand-tint p-2 text-ink-soft">
+            <span className="mt-0.5 rounded bg-sand-tint p-2 text-ink-soft">
               <Palette className="h-5 w-5" />
             </span>
             <div>

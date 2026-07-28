@@ -196,7 +196,7 @@ export function CompetitorsClient({ competitors }: { competitors: Competitor[] }
         <CardBody>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 rounded-xl bg-terracotta/10 p-2 text-terracotta">
+              <span className="mt-0.5 rounded bg-terracotta/10 p-2 text-terracotta">
                 <Sparkles className="h-5 w-5" />
               </span>
               <div>
@@ -226,7 +226,7 @@ export function CompetitorsClient({ competitors }: { competitors: Competitor[] }
               {suggestions.map((s) => (
                 <li
                   key={s.name}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-paper p-4"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded border border-ink/10 bg-paper p-4"
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -261,7 +261,7 @@ export function CompetitorsClient({ competitors }: { competitors: Competitor[] }
                     <button
                       type="button"
                       onClick={() => dismissSuggestion(s.name)}
-                      className="rounded-lg p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
+                      className="rounded p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
                       aria-label={`Dismiss ${s.name}`}
                     >
                       <X className="h-4 w-4" />

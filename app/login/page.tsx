@@ -38,11 +38,11 @@ export default async function LoginPage({
       {/* Left: branded panel */}
       <aside className="relative hidden w-1/2 flex-col justify-between overflow-hidden bg-paper-shade px-12 py-14 lg:flex">
         <div
-          className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-butter/50 blur-3xl"
+          className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded bg-butter/50 blur-3xl"
           aria-hidden
         />
         <div
-          className="pointer-events-none absolute -bottom-24 -left-16 h-80 w-80 rounded-full bg-mint/40 blur-3xl"
+          className="pointer-events-none absolute -bottom-24 -left-16 h-80 w-80 rounded bg-mint/40 blur-3xl"
           aria-hidden
         />
 
@@ -62,7 +62,7 @@ export default async function LoginPage({
           <ul className="mt-10 space-y-5">
             {bullets.map(({ icon: Icon, title, body }) => (
               <li key={title} className="flex gap-3.5">
-                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-terracotta/12 text-terracotta-dark">
+                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded bg-terracotta/12 text-terracotta-dark">
                   <Icon className="h-5 w-5" aria-hidden />
                 </span>
                 <div>

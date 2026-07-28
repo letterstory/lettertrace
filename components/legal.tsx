@@ -76,7 +76,7 @@ export function Section({
         <span className="mr-2 text-ink-faint/70">{n}.</span>
         {title}
       </h2>
-      <div className="mt-4 space-y-4 text-base leading-relaxed text-ink-soft [&_a]:text-terracotta-dark [&_a:hover]:text-terracotta [&_code]:rounded [&_code]:bg-ink/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-sm [&_li]:leading-relaxed [&_strong]:font-semibold [&_strong]:text-ink [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
+      <div className="mt-4 space-y-4 text-base leading-relaxed text-ink-soft [&_a]:text-terracotta-dark [&_a:hover]:text-terracotta [&_code]:rounded-sm [&_code]:bg-ink/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-sm [&_li]:leading-relaxed [&_strong]:font-semibold [&_strong]:text-ink [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
         {children}
       </div>
     </section>

@@ -180,7 +180,7 @@ export default async function DashboardPage() {
                   <li key={step.title}>
                     <Link
                       href={step.href}
-                      className="group flex items-start gap-4 rounded-2xl border border-ink/10 bg-paper p-4 transition hover:border-ink/25 hover:shadow-card"
+                      className="group flex items-start gap-4 rounded border border-ink/10 bg-paper p-4 transition hover:border-ink/25 hover:shadow-card"
                     >
                       <span className="mt-0.5 shrink-0">
                         {step.done ? (
@@ -411,7 +411,7 @@ export default async function DashboardPage() {
                 voice yet" gave no hint of that — say which of the two is
                 actually the problem. */}
             {competitors === 0 ? (
-              <div className="mt-4 rounded-2xl border border-dashed border-ink/15 px-5 py-8 text-center">
+              <div className="mt-4 rounded border border-dashed border-ink/15 px-5 py-8 text-center">
                 <p className="text-sm text-ink-soft">
                   No competitors tracked yet, so there is nothing to compare against.
                 </p>
@@ -439,7 +439,7 @@ export default async function DashboardPage() {
                 >
                   <span className="flex items-center gap-2 truncate">
                     <span
-                      className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                      className={`h-2.5 w-2.5 shrink-0 rounded-sm ${
                         s.type === "brand" ? "bg-terracotta" : "bg-teal"
                       }`}
                     />
@@ -494,9 +494,9 @@ export default async function DashboardPage() {
                           </td>
                           <td className="py-2.5 pl-3">
                             <div className="flex items-center gap-2">
-                              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-ink/[0.08]">
+                              <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-ink/[0.08]">
                                 <div
-                                  className="h-full rounded-full bg-terracotta"
+                                  className="h-full rounded-sm bg-terracotta"
                                   style={{
                                     width: `${Math.round(t.mentionRate * 100)}%`,
                                   }}
@@ -519,7 +519,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Latest run caption */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-paper-shade/50 px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-ink/10 bg-paper-shade/50 px-5 py-4">
         <p className="text-sm text-ink-faint">
           Latest run:{" "}
           <span className="font-medium text-ink">

@@ -118,7 +118,7 @@ export function AuthForm({
   if (confirmSent) {
     return (
       <div className="space-y-5 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-mint-tint text-mint-ink">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded bg-mint-tint text-mint-ink">
           <CheckCircle2 className="h-6 w-6" aria-hidden />
         </div>
         <div>
@@ -156,7 +156,7 @@ export function AuthForm({
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-terracotta/30 bg-terracotta/10 px-3.5 py-3 text-sm text-terracotta-dark">
+        <div className="flex items-start gap-2 rounded border border-terracotta/30 bg-terracotta/10 px-3.5 py-3 text-sm text-terracotta-dark">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>{error}</span>
         </div>

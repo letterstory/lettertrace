@@ -25,16 +25,16 @@ const GITHUB_URL = "https://github.com/letterstory/lettertrace";
 function TerminalDots() {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="h-3 w-3 rounded-full bg-[#FF5F57]" />
-      <span className="h-3 w-3 rounded-full bg-[#FEBC2E]" />
-      <span className="h-3 w-3 rounded-full bg-[#28C840]" />
+      <span className="h-3 w-3 rounded-sm bg-[#FF5F57]" />
+      <span className="h-3 w-3 rounded-sm bg-[#FEBC2E]" />
+      <span className="h-3 w-3 rounded-sm bg-[#28C840]" />
     </div>
   );
 }
 
 function Terminal() {
   return (
-    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
+    <div className="overflow-hidden rounded border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <TerminalDots />
         <span className="font-mono text-[11px] text-white/40">lettertrace · monitor</span>
@@ -170,8 +170,8 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="relative overflow-hidden bg-grid">
-        <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-terracotta/50 glow-blob" />
-        <div className="pointer-events-none absolute right-0 top-40 h-72 w-72 rounded-full bg-mint glow-blob" />
+        <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded bg-terracotta/50 glow-blob" />
+        <div className="pointer-events-none absolute right-0 top-40 h-72 w-72 rounded bg-mint glow-blob" />
         <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-5 py-20 lg:grid-cols-2 lg:py-28">
           <div className="animate-fade-up">
             <Badge tone="terracotta">
@@ -220,7 +220,7 @@ export default function LandingPage() {
               <Card key={step.n} className="p-6">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-sm text-ink-faint">{step.n}</span>
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink/[0.04] text-terracotta-dark">
+                  <span className="flex h-9 w-9 items-center justify-center rounded bg-ink/[0.04] text-terracotta-dark">
                     <Icon className="h-5 w-5" />
                   </span>
                 </div>
@@ -286,7 +286,7 @@ export default function LandingPage() {
             return (
               <Card key={f.title} className="p-6">
                 <span
-                  className={`flex h-10 w-10 items-center justify-center rounded-xl ${toneBg[f.tone]}`}
+                  className={`flex h-10 w-10 items-center justify-center rounded ${toneBg[f.tone]}`}
                 >
                   <Icon className="h-5 w-5" />
                 </span>
@@ -312,7 +312,7 @@ export default function LandingPage() {
               <OSPoint icon={Layers}>Your data lives in your own Supabase, no vendor lock-in.</OSPoint>
             </ul>
           </div>
-          <div className="overflow-hidden rounded-2xl border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
+          <div className="overflow-hidden rounded border border-ink/10 bg-terminal text-terminal-ink shadow-lift">
             <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
               <TerminalDots />
               <span className="ml-2 font-mono text-[11px] text-white/40">self-host</span>
@@ -331,7 +331,7 @@ export default function LandingPage() {
 
       {/* Final CTA */}
       <section className="relative overflow-hidden">
-        <div className="pointer-events-none absolute left-1/2 top-0 h-64 w-[36rem] -translate-x-1/2 rounded-full bg-terracotta/50 glow-blob" />
+        <div className="pointer-events-none absolute left-1/2 top-0 h-64 w-[36rem] -translate-x-1/2 rounded bg-terracotta/50 glow-blob" />
         <div className="relative mx-auto max-w-3xl px-5 py-24 text-center">
           <h2 className="text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
             Find out what AI says about you.
@@ -397,14 +397,14 @@ export default function LandingPage() {
 
 function Mark({ children }: { children: React.ReactNode }) {
   // butter is a light amber in both themes, so the highlight text stays dark.
-  return <mark className="rounded bg-butter px-1 text-[#1A1917]">{children}</mark>;
+  return <mark className="rounded-sm bg-butter px-1 text-[#1A1917]">{children}</mark>;
 }
 
 function PreviewStat({ label, value, dot }: { label: string; value: string; dot: string }) {
   return (
-    <div className="rounded-xl border border-ink/10 bg-surface p-4">
+    <div className="rounded border border-ink/10 bg-surface p-4">
       <div className="flex items-center gap-2">
-        <span className={`h-2 w-2 rounded-full ${dot}`} />
+        <span className={`h-2 w-2 rounded-sm ${dot}`} />
         <span className="text-xs font-medium text-ink-faint">{label}</span>
       </div>
       <p className="mt-1.5 font-serif text-2xl font-semibold text-ink">{value}</p>
@@ -416,9 +416,9 @@ function ShareRow({ name, pct, brand = false }: { name: string; pct: number; bra
   return (
     <div className="flex items-center gap-3 text-sm">
       <span className="w-16 shrink-0 truncate text-ink-soft">{name}</span>
-      <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink/[0.06]">
+      <div className="h-2 flex-1 overflow-hidden rounded-sm bg-ink/[0.06]">
         <div
-          className={`h-full rounded-full ${brand ? "bg-terracotta" : "bg-teal"}`}
+          className={`h-full rounded-sm ${brand ? "bg-terracotta" : "bg-teal"}`}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -430,7 +430,7 @@ function ShareRow({ name, pct, brand = false }: { name: string; pct: number; bra
 function OSPoint({ icon: Icon, children }: { icon: typeof ShieldCheck; children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-3">
-      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-mint-tint text-mint-ink">
+      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded bg-mint-tint text-mint-ink">
         <Icon className="h-3.5 w-3.5" />
       </span>
       <span className="text-sm">{children}</span>

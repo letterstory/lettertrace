@@ -70,9 +70,6 @@ const config: Config = {
         serif: ["var(--font-serif)", "ui-serif", "Georgia", "serif"],
         mono: ["var(--font-dm-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
-      borderRadius: {
-        "4xl": "2rem",
-      },
       boxShadow: {
         card: "0 1px 2px rgba(26,25,23,0.04), 0 6px 20px rgba(26,25,23,0.05)",
         lift: "0 2px 4px rgba(26,25,23,0.05), 0 16px 40px rgba(26,25,23,0.09)",
