@@ -65,8 +65,14 @@ function storeCredential(base, resource, tokens) {
   return cfg.credentials[resource];
 }
 
-/** Run the full loopback Authorization Code + PKCE flow and store the tokens. */
-export async function login(base, resource = "v1", scope = DEFAULT_SCOPE) {
+/**
+ * Run the full loopback Authorization Code + PKCE flow and store the tokens.
+ * Uses the IPv4 loopback (127.0.0.1) by default; pass { ipv6: true } to use the
+ * IPv6 loopback ([::1]) instead, which some deployments register/accept while a
+ * stale build may reject 127.0.0.1.
+ */
+export async function login(base, resource = "v1", { scope = DEFAULT_SCOPE, ipv6 = false } = {}) {
+  const host = ipv6 ? "::1" : "127.0.0.1";
   const codeVerifier = b64url(crypto.randomBytes(48));
   const codeChallenge = b64url(crypto.createHash("sha256").update(codeVerifier).digest());
   const state = b64url(crypto.randomBytes(16));
@@ -109,8 +115,11 @@ export async function login(base, resource = "v1", scope = DEFAULT_SCOPE) {
     });
 
     server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      redirectUri = `http://127.0.0.1:${server.address().port}/callback`;
+    server.listen(0, host, () => {
+      const port = server.address().port;
+      redirectUri = ipv6
+        ? `http://[::1]:${port}/callback`
+        : `http://127.0.0.1:${port}/callback`;
       const authorize = new URL(`${base}/api/oauth/authorize`);
       authorize.searchParams.set("response_type", "code");
       authorize.searchParams.set("client_id", CLIENT_ID);

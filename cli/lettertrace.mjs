@@ -43,6 +43,8 @@ function parseArgs(argv) {
 const { positionals, flags } = parseArgs(process.argv.slice(2));
 const [command, ...rest_] = positionals;
 const JSON_OUT = Boolean(flags.json);
+// Use the IPv6 loopback ([::1]) for the OAuth redirect instead of 127.0.0.1.
+const IPV6 = Boolean(flags.ipv6);
 const base = resolveBase(typeof flags.url === "string" ? flags.url : undefined);
 
 // --- helpers --------------------------------------------------------
@@ -90,7 +92,7 @@ async function withAutoLogin(fn) {
   } catch (e) {
     if (e instanceof NeedsLogin) {
       info(c.yellow(`Not authenticated for "${e.resource}". Launching login...`));
-      await login(base, e.resource);
+      await login(base, e.resource, { ipv6: IPV6 });
       return await fn();
     }
     throw e;
@@ -100,14 +102,15 @@ async function withAutoLogin(fn) {
 // --- commands -------------------------------------------------------
 const commands = {
   async login() {
+    const opts = { scope: scopeFlag(), ipv6: IPV6 };
     if (flags.both) {
-      await login(base, "v1", scopeFlag());
-      await login(base, "mcp", scopeFlag());
+      await login(base, "v1", opts);
+      await login(base, "mcp", opts);
       ok(`Logged in to ${c.cyan(base)} for both REST (v1) and MCP.`);
       return;
     }
     const resource = flags.mcp ? "mcp" : "v1";
-    const cred = await login(base, resource, scopeFlag());
+    const cred = await login(base, resource, opts);
     ok(`Logged in to ${c.cyan(base)} for ${resource.toUpperCase()} (expires ${rel(cred.expires_at)}).`);
     if (resource === "v1") info(c.dim("Tip: `lettertrace login --mcp` to also use the MCP commands."));
   },
@@ -348,7 +351,7 @@ async function withAutoLoginMcp(fn) {
   } catch (e) {
     if (e instanceof NeedsLogin) {
       info(c.yellow(`Not authenticated for "mcp". Launching login...`));
-      await login(base, "mcp");
+      await login(base, "mcp", { ipv6: IPV6 });
       return await fn();
     }
     throw e;
@@ -363,7 +366,8 @@ function printHelp() {
     "  lettertrace <command> [args] [--json] [--url <base>]",
     "",
     c.bold("AUTH"),
-    "  login [--mcp] [--both] [--scope <s>]   Browser OAuth login (default: REST/v1)",
+    "  login [--mcp] [--both] [--ipv6] [--scope <s>]  Browser OAuth login (default REST/v1)",
+    "         --ipv6 uses the http://[::1]:<port>/callback redirect instead of 127.0.0.1",
     "  logout                                 Forget and revoke stored tokens",
     "  whoami                                 Show stored credentials",
     "",

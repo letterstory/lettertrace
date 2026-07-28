@@ -548,14 +548,24 @@ create index if not exists oauth_clients_user_idx on public.oauth_clients (user_
 
 -- Seed the first-party CLI / MCP client. Loopback redirect templates: the host
 -- and path must match exactly; only the port varies at authorize time (RFC
--- 8252). Safe to re-run.
+-- 8252). This is a canonical, product-owned client, so re-applying the schema
+-- RESETS its fields (on conflict do UPDATE, not do nothing): that way a stale or
+-- partially-seeded lt_cli row — e.g. one whose redirect_uris don't include the
+-- loopback templates, which surfaces to users as "The redirect URI is not
+-- registered for this client" — is repaired simply by re-running this file.
 insert into public.oauth_clients
   (client_id, is_first_party, client_name, client_type, token_endpoint_auth_method, redirect_uris, allowed_scopes)
 values
   ('lt_cli', true, 'Lettertrace CLI & MCP', 'public', 'none',
    array['http://127.0.0.1/callback', 'http://[::1]/callback'],
    array['projects:read', 'projects:write', 'runs:read', 'runs:trigger', 'offline_access'])
-on conflict (client_id) do nothing;
+on conflict (client_id) do update set
+  is_first_party = excluded.is_first_party,
+  client_name = excluded.client_name,
+  client_type = excluded.client_type,
+  token_endpoint_auth_method = excluded.token_endpoint_auth_method,
+  redirect_uris = excluded.redirect_uris,
+  allowed_scopes = excluded.allowed_scopes;
 
 -- ---------- oauth_authorizations ------------------------------------
 -- The standing user<->client grant. One row per (user, client, resource); it is
