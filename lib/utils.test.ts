@@ -15,9 +15,23 @@ describe("resolveRedirectBase", () => {
     expect(resolveRedirectBase("http://localhost", PROD)).toBe(PROD);
   });
 
-  it("still honours a loopback site URL for a genuinely local request", () => {
+  it("keeps a loopback site URL when it already agrees with the request", () => {
     expect(resolveRedirectBase(LOCAL, LOCAL)).toBe(LOCAL);
-    expect(resolveRedirectBase(LOCAL, "http://127.0.0.1:3000")).toBe(LOCAL);
+  });
+
+  // The second outage: the port is part of the origin, so a dev server on any
+  // port other than the configured one stamped the wrong `iss` on its OAuth
+  // callback and every CLI login died on "Issuer mismatch" (RFC 9207 requires
+  // the client to reject that). A loopback config value can never be the
+  // deployment's public identity, so it must never override the real origin.
+  it("defers to the actual origin for a loopback request on another port", () => {
+    expect(resolveRedirectBase(LOCAL, "http://localhost:3100")).toBe("http://localhost:3100");
+    expect(resolveRedirectBase(LOCAL, "http://localhost:3200")).toBe("http://localhost:3200");
+    expect(resolveRedirectBase(LOCAL, "http://127.0.0.1:3000")).toBe("http://127.0.0.1:3000");
+  });
+
+  it("keeps the configured value when the request origin is unusable", () => {
+    expect(resolveRedirectBase(LOCAL, "")).toBe(LOCAL);
   });
 
   it("prefers the configured URL over the request origin behind a proxy", () => {

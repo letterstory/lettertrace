@@ -398,6 +398,35 @@ Notes:
 - OAuth tokens are scoped and audience-bound; a classic `lt_live_` API key stays full-access across all of the account's organizations. Revoke either anytime (API keys from Settings; OAuth grants via `/api/oauth/revoke`).
 - Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table and the OAuth tables (`oauth_clients`, `oauth_access_tokens`, …) plus the seeded `lt_cli` client, and widens that client's `allowed_scopes` to include `keys:read` / `keys:write` (all safe to re-run). Without the re-run, `lettertrace keys` fails at consent with `invalid_scope`.
 
+## Tests
+
+```bash
+npm test          # unit + route tests, all mocked, no network, no keys spent
+npm run typecheck
+```
+
+Two harnesses go further than `npm test` and are deliberately excluded from it,
+because they need a live server and spend real provider tokens:
+
+```bash
+# End-to-end BYOK key management: drives the real cli/lettertrace.mjs binary
+# against a running deployment and asserts on what lands in Postgres.
+npx next dev -p 3200 &
+npx tsx scripts/harness-provider-keys.ts --url http://localhost:3200
+
+# Measurement pilot: runs a real brand through scrape → topics → prompts →
+# query → mention detection, without writing to the database.
+npx tsx scripts/pilot-client.ts cloudflare --providers google,anthropic
+```
+
+The key harness needs `SUPABASE_SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`, and
+`TRIAL_ANTHROPIC_API_KEY` in `.env.local`. It creates one throwaway user and
+deletes it in a `finally`, so a failed assertion still cleans up. What it covers
+that mocks can't: that a key entered at the CLI decrypts back byte-for-byte at
+run time, that `keys:read` can't write, that a plaintext key reaches neither
+stdout nor the activity log, and that the deployment advertises the origin it
+was actually reached on.
+
 ## Deployment
 
 Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env vars from `.env.example`, and deploy. Runs execute synchronously inside the API route, so for large prompt sets prefer a Node server or bump the function's `maxDuration`.
