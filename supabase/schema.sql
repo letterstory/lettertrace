@@ -148,6 +148,40 @@ end $$;
 alter table public.profiles
   add column if not exists active_project_id uuid references public.projects (id) on delete set null;
 
+-- Backfill: every auth user MUST have a profile row. Accounts created before the
+-- signup trigger existed (or provisioned out of band) can be missing one, which
+-- silently breaks org switching: setActiveProject updates profiles by id, and
+-- with no row that update matches zero rows (no error), so active_project_id
+-- never changes and the dashboard's org switcher spins forever. Safe to re-run.
+insert into public.profiles (id, email)
+select u.id, u.email
+from auth.users u
+left join public.profiles p on p.id = u.id
+where p.id is null;
+
+-- Point the dashboard at one of the caller's own organizations. SECURITY
+-- DEFINER so it can guarantee a profile row exists (the client-write guard below
+-- forbids client inserts) and self-scoped via auth.uid(), so a caller can only
+-- move their OWN pointer, and only to a project they own. This makes switching
+-- self-healing even if a profile row is somehow still missing. Safe to re-run.
+create or replace function public.set_active_project(p_project_id uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id) values (auth.uid())
+    on conflict (id) do nothing;
+  update public.profiles
+    set active_project_id = p_project_id
+    where id = auth.uid()
+      and exists (
+        select 1 from public.projects
+        where id = p_project_id and user_id = auth.uid()
+      );
+end;
+$$;
+
 -- How many times each active prompt is asked per run. Answers vary between
 -- identical calls, so a single ask can't distinguish "not mentioned" from
 -- "mentioned, unlucky this time" — at a true 50% mention rate one ask reads

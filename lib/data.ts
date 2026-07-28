@@ -59,12 +59,25 @@ export const getProject = cache(async function getProject(
   return (data as Project | null) ?? null;
 });
 
-/** Point the dashboard at another of the user's organizations. */
+/**
+ * Point the dashboard at another of the user's organizations.
+ *
+ * Goes through the set_active_project RPC, which is SECURITY DEFINER and first
+ * guarantees a profile row exists — without that, an account whose profile row
+ * is missing (older signups) silently no-ops here, leaving active_project_id
+ * unchanged and the org switcher spinning forever. If the RPC isn't present yet
+ * (deployment hasn't re-applied the schema), fall back to a direct update; the
+ * schema's profile backfill keeps that row present.
+ */
 export async function setActiveProject(
   supabase: SupabaseClient,
   userId: string,
   projectId: string,
 ): Promise<void> {
+  const { error } = await supabase.rpc("set_active_project", {
+    p_project_id: projectId,
+  });
+  if (!error) return;
   await supabase
     .from("profiles")
     .update({ active_project_id: projectId })
