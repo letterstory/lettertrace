@@ -351,12 +351,33 @@ describe("POST /api/v1/projects/:id/runs", () => {
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", {
         method: "POST",
-        body: JSON.stringify({ provider: "gemini" }),
+        body: JSON.stringify({ provider: "mistral" }),
       }),
       { params: { id: "p1" } },
     );
     expect(res.status).toBe(400);
     expect(triggerRunForProject).not.toHaveBeenCalled();
+  });
+
+  it("passes a google provider override through", async () => {
+    vi.mocked(triggerRunForProject).mockResolvedValue({
+      ok: true,
+      result: { runId: "r3", status: "completed", totalResponses: 3, tokensUsed: 10 },
+    });
+    const res = await postRunRoute(
+      req("/api/v1/projects/p1/runs", {
+        method: "POST",
+        body: JSON.stringify({ provider: "google", model: "google-ai-overviews" }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(200);
+    // Overrides ride alongside the caller attribution master's activity log adds.
+    expect(triggerRunForProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
+      provider: "google",
+      model: "google-ai-overviews",
+      context: RUN_CTX,
+    });
   });
 
   it("passes a provider/model override through", async () => {

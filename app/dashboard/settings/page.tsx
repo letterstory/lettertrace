@@ -44,9 +44,9 @@ export default async function SettingsPage() {
             <div>
               <h3 className="text-lg font-semibold text-ink">Your model keys</h3>
               <p className="mt-1 text-sm text-ink-faint">
-                Claude and ChatGPT are the assistants Lettertrace queries. Bring a
-                key for each one you want to monitor with. They&apos;re encrypted at
-                rest.
+                Claude, ChatGPT, and Gemini are the assistants Lettertrace queries.
+                Your Google key also powers Google AI Overviews. Bring a key for each
+                one you want to monitor with. They&apos;re encrypted at rest.
               </p>
             </div>
           </div>

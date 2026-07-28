@@ -35,6 +35,12 @@ const PROVIDER_STYLE: Record<
     mark: "G",
     markClass: "bg-teal/15 text-teal-dark",
   },
+  google: {
+    title: "Gemini",
+    subtitle: "Google AI key · also powers AI Overviews",
+    mark: "✦",
+    markClass: "bg-butter-tint text-butter-ink",
+  },
 };
 
 export default function KeysManager({
