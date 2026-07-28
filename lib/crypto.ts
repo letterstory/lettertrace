@@ -7,17 +7,36 @@ import crypto from "node:crypto";
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12;
 
+/**
+ * The deployment is misconfigured — nothing the end user did is wrong.
+ *
+ * Distinguished from ordinary errors so routes can say so. Without it a broken
+ * ENCRYPTION_KEY surfaces under the "Anthropic API key" field as though the
+ * user pasted a bad key, which is the opposite of what happened: the key was
+ * verified against the provider first and only then failed to encrypt.
+ */
+export class ConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationError";
+  }
+}
+
 function getKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
   if (!raw) {
-    throw new Error(
+    throw new ConfigurationError(
       "ENCRYPTION_KEY is not set. Generate one with: openssl rand -base64 32",
     );
   }
   const key = Buffer.from(raw, "base64");
   if (key.length !== 32) {
-    throw new Error(
-      "ENCRYPTION_KEY must decode to 32 bytes (base64 of 32 random bytes).",
+    // Buffer.from(..., "base64") is lenient, so a hex key decodes happily to
+    // 48 bytes rather than failing — the usual cause is `openssl rand -hex 32`
+    // (meant for CRON_SECRET) being used here instead of `-base64 32`.
+    throw new ConfigurationError(
+      `ENCRYPTION_KEY must decode to 32 bytes, but decoded to ${key.length}. ` +
+        "Generate one with: openssl rand -base64 32",
     );
   }
   return key;
