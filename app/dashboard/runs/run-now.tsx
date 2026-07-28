@@ -7,11 +7,14 @@ import { Play } from "lucide-react";
 import { Button, Spinner } from "@/components/ui";
 
 export function RunNow({
-  hasKey,
+  canRun,
+  keySource,
   activePrompts,
   providerLabel,
 }: {
-  hasKey: boolean;
+  canRun: boolean;
+  /** Why we can or can't run, so the hint names the actual blocker. */
+  keySource: "own" | "trial" | "none" | "exhausted";
   activePrompts: number;
   providerLabel: string;
 }) {
@@ -19,7 +22,7 @@ export function RunNow({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const disabled = loading || !hasKey || activePrompts === 0;
+  const disabled = loading || !canRun || activePrompts === 0;
 
   async function run() {
     setLoading(true);
@@ -54,16 +57,25 @@ export function RunNow({
         )}
       </Button>
 
-      {!hasKey && (
+      {keySource === "exhausted" && (
         <p className="text-xs text-ink-faint">
-          Add a {providerLabel} key in{" "}
+          Your free runs are used up. Add your {providerLabel} key in{" "}
+          <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
+            Settings
+          </Link>{" "}
+          to keep going.
+        </p>
+      )}
+      {keySource === "none" && (
+        <p className="text-xs text-ink-faint">
+          Add your {providerLabel} key in{" "}
           <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
             Settings
           </Link>{" "}
           to run.
         </p>
       )}
-      {hasKey && activePrompts === 0 && (
+      {canRun && activePrompts === 0 && (
         <p className="text-xs text-ink-faint">
           Add active prompts in{" "}
           <Link href="/dashboard/topics" className="text-terracotta-dark hover:text-terracotta">

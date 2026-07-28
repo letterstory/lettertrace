@@ -1,6 +1,7 @@
 import { ArrowRight, PlayCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { getProject, getConfiguredProviders } from "@/lib/data";
+import { getProject } from "@/lib/data";
+import { resolveKey } from "@/lib/trial";
 import { PROVIDERS, modelLabel } from "@/lib/models";
 import { timeAgo } from "@/lib/utils";
 import type { Run, RunStatus } from "@/lib/types";
@@ -48,8 +49,16 @@ export default async function RunsPage() {
     );
   }
 
-  const configuredProviders = await getConfiguredProviders(supabase, user.id);
-  const hasKey = configuredProviders.includes(project.default_provider);
+  // Ask the same resolver the run endpoint uses. Gating the button on a BYOK
+  // key alone disabled it for trial users who had free runs left — the server
+  // would have accepted the request the UI refused to send.
+  const key = await resolveKey(
+    supabase,
+    user.id,
+    project.default_provider,
+    project.default_model,
+  );
+  const canRun = key.source === "own" || key.source === "trial";
 
   const { count: activePrompts } = await supabase
     .from("prompts")
@@ -68,13 +77,17 @@ export default async function RunsPage() {
     <div className="space-y-8">
       <SectionHeading
         title="Runs"
+        // The model that will ACTUALLY run: a trial run is forced onto the
+        // provider's cheap model, so naming the project default here told
+        // users to expect Opus and then handed them Haiku.
         description={`Each run asks your active prompts to ${modelLabel(
-          project.default_provider,
-          project.default_model,
+          key.provider,
+          key.model,
         )} and records where your brand shows up.`}
         action={
           <RunNow
-            hasKey={hasKey}
+            canRun={canRun}
+            keySource={key.source}
             activePrompts={activePrompts ?? 0}
             providerLabel={PROVIDERS[project.default_provider].label}
           />
