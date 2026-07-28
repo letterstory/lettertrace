@@ -60,17 +60,36 @@ export async function POST(request: Request) {
       : null;
   const brand_aliases = toStringArray(body.brand_aliases);
 
+  // toStringArray already drops blank entries, so an unused question input is
+  // simply ignored — but a topic with NO usable question, or no name, is a
+  // mistake we refuse rather than quietly drop. Silently filtering these meant
+  // a caller could send three topics, get 201, and find one saved.
   const topics: TopicInput[] = Array.isArray(body.topics)
-    ? (body.topics as unknown[])
-        .map((t) => {
-          const o = (t ?? {}) as Record<string, unknown>;
-          return {
-            name: typeof o.name === "string" ? o.name.trim() : "",
-            prompts: toStringArray(o.prompts),
-          };
-        })
-        .filter((t) => t.name.length > 0 && t.prompts.length > 0)
+    ? (body.topics as unknown[]).map((t) => {
+        const o = (t ?? {}) as Record<string, unknown>;
+        return {
+          name: typeof o.name === "string" ? o.name.trim() : "",
+          prompts: toStringArray(o.prompts),
+        };
+      })
     : [];
+
+  const incomplete = topics
+    .map((t, i) => ({ i, t }))
+    .filter(({ t }) => !t.name || t.prompts.length === 0);
+
+  if (incomplete.length > 0) {
+    const { i, t } = incomplete[0];
+    return NextResponse.json(
+      {
+        error: !t.name
+          ? `Topic ${i + 1} needs a name.`
+          : `Topic "${t.name}" needs at least one question.`,
+        incompleteTopics: incomplete.map(({ i }) => i),
+      },
+      { status: 400 },
+    );
+  }
 
   const provider = pickDefaultProvider();
   const model = defaultModelFor(provider);
