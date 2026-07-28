@@ -4,6 +4,7 @@ import { getProjects } from "@/lib/data";
 import {
   createProject,
   createPrompts,
+  getProjectHistory,
   getRunReport,
   getRunResponses,
   listProjectPrompts,
@@ -25,6 +26,7 @@ import {
 } from "@/app/api/v1/projects/[id]/prompts/route";
 import { PATCH as patchPromptRoute } from "@/app/api/v1/prompts/[id]/route";
 import { GET as getReportRoute } from "@/app/api/v1/runs/[id]/route";
+import { GET as getHistoryRoute } from "@/app/api/v1/projects/[id]/history/route";
 import { GET as getResponsesRoute } from "@/app/api/v1/runs/[id]/responses/route";
 
 vi.mock("@/lib/api-auth", async (importOriginal) => ({
@@ -38,6 +40,7 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   createPrompts: vi.fn(),
   listProjectPrompts: vi.fn(),
   listRuns: vi.fn(),
+  getProjectHistory: vi.fn(),
   getRunReport: vi.fn(),
   getRunResponses: vi.fn(),
   setPromptActive: vi.fn(),
@@ -60,6 +63,7 @@ beforeEach(() => {
   vi.mocked(createPrompts).mockReset();
   vi.mocked(listProjectPrompts).mockReset();
   vi.mocked(listRuns).mockReset();
+  vi.mocked(getProjectHistory).mockReset();
   vi.mocked(getRunReport).mockReset();
   vi.mocked(getRunResponses).mockReset();
   vi.mocked(setPromptActive).mockReset();
@@ -369,11 +373,29 @@ describe("GET /api/v1/runs/:id", () => {
       totalResponses: 2,
       summary: {
         brandMentionRate: 0.5,
+        brandMentionRateInterval: { low: 0.09, high: 0.91 },
+        brandResponsesMentioned: 1,
+        totalResponses: 2,
         brandShareOfVoice: 0.25,
         brandSentimentScore: 1,
         brandAvgProminence: 0.9,
       },
       entities: [],
+      citations: {
+        responsesWithOwnedSource: 1,
+        totalResponses: 2,
+        ownedCitationRate: 0.5,
+        ownedCitationRateInterval: { low: 0.09, high: 0.91 },
+        distinctOwnedUrls: 1,
+        totalSources: 3,
+      },
+      quality: {
+        totalResponses: 2,
+        responsesNamingSomeone: 2,
+        responsesNamingNobody: 0,
+        informativeRate: 1,
+      },
+      topics: [],
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });
     expect(res.status).toBe(200);
@@ -421,5 +443,86 @@ describe("GET /api/v1/runs/:id/responses", () => {
     const body = await res.json();
     expect(body.responses[0].sources[0].url).toBe("https://credal.ai/blog");
     expect(getRunResponses).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "r1");
+  });
+});
+
+describe("GET /api/v1/projects/:id/history", () => {
+  const point = (over: Record<string, unknown> = {}) => ({
+    runId: "r1",
+    createdAt: "2026-07-01T00:00:00Z",
+    provider: "anthropic" as const,
+    model: "claude-opus-4-8",
+    totalResponses: 10,
+    brandResponsesMentioned: 0,
+    brandMentionRate: 0,
+    brandMentionRateInterval: { low: 0, high: 0.28 },
+    ownedCitationRate: 0,
+    informativeRate: 0.9,
+    ...over,
+  });
+
+  it("401s without a valid key", async () => {
+    vi.mocked(authenticateApiKey).mockResolvedValue(null);
+    const res = await getHistoryRoute(req("/api/v1/projects/p1/history"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(401);
+    expect(getProjectHistory).not.toHaveBeenCalled();
+  });
+
+  it("404s for a project that isn't the caller's", async () => {
+    vi.mocked(getProjectHistory).mockResolvedValue(null);
+    const res = await getHistoryRoute(req("/api/v1/projects/p1/history"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("400s on a nonsense limit rather than silently defaulting", async () => {
+    const res = await getHistoryRoute(req("/api/v1/projects/p1/history?limit=-3"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(400);
+    expect(getProjectHistory).not.toHaveBeenCalled();
+  });
+
+  it("reports never-mentioned as a real state, not an empty one", async () => {
+    vi.mocked(getProjectHistory).mockResolvedValue({
+      projectId: "p1",
+      brandName: "Acme",
+      points: [point(), point({ runId: "r2" })],
+      firstMentionAt: null,
+      everMentioned: false,
+    });
+    const res = await getHistoryRoute(req("/api/v1/projects/p1/history"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.everMentioned).toBe(false);
+    expect(body.firstMentionAt).toBeNull();
+    expect(body.points).toHaveLength(2);
+    // The interval is what makes a zero readable — it must survive the wire.
+    expect(body.points[0].brandMentionRateInterval.high).toBeCloseTo(0.28);
+  });
+
+  it("surfaces when the first mention landed", async () => {
+    vi.mocked(getProjectHistory).mockResolvedValue({
+      projectId: "p1",
+      brandName: "Acme",
+      points: [
+        point(),
+        point({ runId: "r2", createdAt: "2026-07-08T00:00:00Z", brandResponsesMentioned: 2, brandMentionRate: 0.2 }),
+      ],
+      firstMentionAt: "2026-07-08T00:00:00Z",
+      everMentioned: true,
+    });
+    const res = await getHistoryRoute(req("/api/v1/projects/p1/history?limit=5"), {
+      params: { id: "p1" },
+    });
+    const body = await res.json();
+    expect(body.everMentioned).toBe(true);
+    expect(body.firstMentionAt).toBe("2026-07-08T00:00:00Z");
+    expect(getProjectHistory).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", 5);
   });
 });

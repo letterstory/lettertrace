@@ -9,10 +9,16 @@ import type {
   Source,
 } from "@/lib/types";
 import {
+  computeCitationStats,
   computeEntityStats,
+  computeMeasurementQuality,
   computeRunSummary,
+  computeTopicStats,
+  type CitationStat,
   type EntityStat,
+  type MeasurementQuality,
   type RunSummary,
+  type TopicStat,
 } from "@/lib/metrics";
 import { executeRun, type RunResult } from "@/lib/engine";
 import { pickDefaultProvider, resolveKey, resolveRunKey } from "@/lib/trial";
@@ -34,6 +40,7 @@ export function projectSummary(p: Project) {
     default_model: p.default_model,
     schedule: p.schedule,
     use_web_search: p.use_web_search,
+    replicates: p.replicates,
     last_run_at: p.last_run_at,
     created_at: p.created_at,
   };
@@ -144,6 +151,9 @@ export async function createProject(
       schedule: "off",
       ...(typeof input.use_web_search === "boolean"
         ? { use_web_search: input.use_web_search }
+        : {}),
+      ...(typeof input.replicates === "number"
+        ? { replicates: Math.min(Math.max(Math.trunc(input.replicates), 1), 10) }
         : {}),
       user_id: userId,
     })
@@ -389,6 +399,15 @@ export interface RunReport {
   totalResponses: number;
   summary: RunSummary;
   entities: EntityStat[];
+  /** Whether the models read the brand's own pages. Moves before mentions do,
+   *  so it's the only progress signal a young brand has. */
+  citations: CitationStat;
+  /** How many answers named any tracked company. A run that named nobody
+   *  measured nothing — read this before believing a zero mention rate. */
+  quality: MeasurementQuality;
+  /** Per-topic brand visibility. Letterstory plans by topic, so this is the
+   *  join between "we published about X" and "are we surfacing for X". */
+  topics: (TopicStat & { topic: string | null })[];
 }
 
 /** The most recent completed run for a project, if any. */
@@ -422,22 +441,50 @@ export async function getRunReport(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [{ count }, { data: mentionRows }] = await Promise.all([
+  const [
+    { count },
+    { data: mentionRows },
+    { data: sourceRows },
+    { data: responseTopicRows },
+    { data: topicRows },
+  ] = await Promise.all([
     supabase
       .from("responses")
       .select("id", { count: "exact", head: true })
       .eq("run_id", runId),
     supabase.from("mentions").select("*").eq("run_id", runId),
+    supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
+    supabase.from("responses").select("topic_id").eq("run_id", runId),
+    supabase.from("topics").select("id, name").eq("project_id", run.project_id),
   ]);
 
   const mentions = (mentionRows ?? []) as Mention[];
+  const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
   const totalResponses = count ?? 0;
+
+  const responsesByTopic = new Map<string | null, number>();
+  for (const r of (responseTopicRows ?? []) as { topic_id: string | null }[]) {
+    responsesByTopic.set(r.topic_id, (responsesByTopic.get(r.topic_id) ?? 0) + 1);
+  }
+  const topicNames = new Map(
+    ((topicRows ?? []) as { id: string; name: string }[]).map((t) => [t.id, t.name]),
+  );
+  const topicStats = computeTopicStats(mentions, responsesByTopic).map((t) => ({
+    ...t,
+    topic: t.topicId ? topicNames.get(t.topicId) ?? null : null,
+  }));
 
   return {
     run,
     totalResponses,
-    summary: computeRunSummary(mentions, totalResponses),
-    entities: computeEntityStats(mentions, totalResponses),
+    // Pass the brand name so a run with no brand mentions still reports a brand
+    // row (rate 0 with an interval) rather than omitting it — an API consumer
+    // tracking "have we been mentioned yet" needs the zero, not a missing key.
+    summary: computeRunSummary(mentions, totalResponses, project.brand_name),
+    entities: computeEntityStats(mentions, totalResponses, project.brand_name),
+    citations: computeCitationStats(sources, totalResponses),
+    quality: computeMeasurementQuality(mentions, totalResponses),
+    topics: topicStats,
   };
 }
 
@@ -602,4 +649,121 @@ export async function triggerRunForProject(
     apiKey: key.apiKey!,
   });
   return { ok: true, result };
+}
+
+/** One completed run, reduced to the numbers that matter across time. */
+export interface HistoryPoint {
+  runId: string;
+  createdAt: string;
+  provider: Provider;
+  model: string;
+  totalResponses: number;
+  brandResponsesMentioned: number;
+  brandMentionRate: number;
+  brandMentionRateInterval: { low: number; high: number };
+  ownedCitationRate: number;
+  /** Share of answers that named any tracked company; a low value means this
+   *  run's prompts measured little, so read its rates with suspicion. */
+  informativeRate: number;
+}
+
+export interface ProjectHistory {
+  projectId: string;
+  brandName: string;
+  points: HistoryPoint[];
+  /** When the brand was first mentioned in any run, or null if never. This is
+   *  the event Letterstory is waiting on: publish, re-run, watch for it to flip. */
+  firstMentionAt: string | null;
+  /** True once any run has recorded a brand mention. */
+  everMentioned: boolean;
+}
+
+/**
+ * Brand visibility across the project's completed runs, oldest first.
+ *
+ * The single-run report can't answer "is this working yet" — that needs the
+ * series. A client with no mentions is the normal case for months, so the
+ * question is whether the rate is inching up, whether their pages have started
+ * being cited, and whether the first mention has landed.
+ */
+export async function getProjectHistory(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  limit = 30,
+): Promise<ProjectHistory | null> {
+  const project = await getOwnedProject(supabase, userId, projectId);
+  if (!project) return null;
+
+  const capped = Math.min(Math.max(Math.trunc(limit) || 30, 1), 100);
+  const { data: runRows } = await supabase
+    .from("runs")
+    .select("*")
+    .eq("project_id", projectId)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(capped);
+
+  const runs = ((runRows ?? []) as Run[]).slice().reverse(); // oldest first
+  if (runs.length === 0) {
+    return {
+      projectId,
+      brandName: project.brand_name,
+      points: [],
+      firstMentionAt: null,
+      everMentioned: false,
+    };
+  }
+
+  const runIds = runs.map((r) => r.id);
+  const [{ data: mentionRows }, { data: sourceRows }] = await Promise.all([
+    supabase.from("mentions").select("*").in("run_id", runIds),
+    supabase.from("sources").select("run_id, response_id, url, is_owned").in("run_id", runIds),
+  ]);
+
+  const mentionsByRun = new Map<string, Mention[]>();
+  for (const m of (mentionRows ?? []) as Mention[]) {
+    const list = mentionsByRun.get(m.run_id) ?? [];
+    list.push(m);
+    mentionsByRun.set(m.run_id, list);
+  }
+  const sourcesByRun = new Map<string, Pick<Source, "response_id" | "url" | "is_owned">[]>();
+  for (const s of (sourceRows ?? []) as (Pick<Source, "response_id" | "url" | "is_owned"> & {
+    run_id: string;
+  })[]) {
+    const list = sourcesByRun.get(s.run_id) ?? [];
+    list.push({ response_id: s.response_id, url: s.url, is_owned: s.is_owned });
+    sourcesByRun.set(s.run_id, list);
+  }
+
+  const points: HistoryPoint[] = runs.map((run) => {
+    const mentions = mentionsByRun.get(run.id) ?? [];
+    // completed_count is the engine's own tally of stored answers, so it needs
+    // no extra query per run — the whole point of keeping this cheap.
+    const totalResponses = run.completed_count;
+    const summary = computeRunSummary(mentions, totalResponses, project.brand_name);
+    const citations = computeCitationStats(sourcesByRun.get(run.id) ?? [], totalResponses);
+    const quality = computeMeasurementQuality(mentions, totalResponses);
+    return {
+      runId: run.id,
+      createdAt: run.created_at,
+      provider: run.provider,
+      model: run.model,
+      totalResponses,
+      brandResponsesMentioned: summary.brandResponsesMentioned,
+      brandMentionRate: summary.brandMentionRate,
+      brandMentionRateInterval: summary.brandMentionRateInterval,
+      ownedCitationRate: citations.ownedCitationRate,
+      informativeRate: quality.informativeRate,
+    };
+  });
+
+  const first = points.find((p) => p.brandResponsesMentioned > 0);
+  return {
+    projectId,
+    brandName: project.brand_name,
+    points,
+    firstMentionAt: first?.createdAt ?? null,
+    everMentioned: Boolean(first),
+  };
 }

@@ -101,7 +101,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
     sourcesByResponse.set(s.response_id, list);
   }
 
-  const stats = computeEntityStats(mentions, responses.length);
+  const stats = computeEntityStats(mentions, responses.length, project.brand_name);
   const brand = stats.find((s) => s.type === "brand");
   const topCompetitor = stats.find((s) => s.type === "competitor");
 

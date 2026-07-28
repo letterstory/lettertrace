@@ -22,6 +22,7 @@ import { Onboarding } from "./onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { getConfiguredProviders, getProject } from "@/lib/data";
 import {
+  computeCitationStats,
   computeEntityStats,
   computeRunSummary,
   computeTopicStats,
@@ -29,7 +30,7 @@ import {
 } from "@/lib/metrics";
 import { modelLabel } from "@/lib/models";
 import { formatDate, pct, timeAgo } from "@/lib/utils";
-import type { Mention, Run, Topic } from "@/lib/types";
+import type { Mention, Run, Source, Topic } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -227,12 +228,16 @@ export default async function DashboardPage() {
   const trendRuns = runs.slice(0, 10);
   const trendIds = trendRuns.map((r) => r.id);
 
-  const [mentionsResult, latestResponsesResult, topicsList] = await Promise.all([
+  const [mentionsResult, latestResponsesResult, topicsList, latestSourcesResult] = await Promise.all([
     // NOTE: capped at 1000 rows by PostgREST; fine for 10 runs of mention rows
     // (only detected entities produce rows). Revisit if trend depth grows.
     supabase.from("mentions").select("*").in("run_id", trendIds),
     supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
     supabase.from("topics").select("*").eq("project_id", project.id),
+    supabase
+      .from("sources")
+      .select("response_id, url, is_owned")
+      .eq("run_id", latestRun.id),
   ]);
 
   const allMentions = (mentionsResult.data as Mention[] | null) ?? [];
@@ -252,9 +257,16 @@ export default async function DashboardPage() {
   const latestMentions = mentionsByRun.get(latestRun.id) ?? [];
   const totalResponses = latestRun.completed_count;
 
-  const stats = computeEntityStats(latestMentions, totalResponses);
+  const stats = computeEntityStats(latestMentions, totalResponses, project.brand_name);
   const brand = stats.find((s) => s.type === "brand");
-  const summary = computeRunSummary(latestMentions, totalResponses);
+  const summary = computeRunSummary(latestMentions, totalResponses, project.brand_name);
+
+  // Citations move before mentions do — for a brand with no mentions yet, this
+  // is the only card on this page that will change.
+  const citations = computeCitationStats(
+    (latestSourcesResult.data as Pick<Source, "response_id" | "url" | "is_owned">[] | null) ?? [],
+    totalResponses,
+  );
 
   // Trend across the last 10 completed runs (chronological).
   const trendData = trendRuns
@@ -306,12 +318,28 @@ export default async function DashboardPage() {
       {heading}
 
       {/* Headline stats */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Brand visibility"
           value={pct(brand?.mentionRate ?? 0)}
           accent="terracotta"
-          hint="of monitored answers mention you"
+          // Show the sample behind the rate. A 0% from three answers and a 0%
+          // from thirty look identical without it, and only one is a finding.
+          hint={`${summary.brandResponsesMentioned} of ${totalResponses} answers · 95% CI ${pct(
+            summary.brandMentionRateInterval.low,
+          )}–${pct(summary.brandMentionRateInterval.high)}`}
+        />
+        <StatCard
+          label="Cited your site"
+          value={pct(citations.ownedCitationRate)}
+          accent="teal"
+          hint={
+            citations.distinctOwnedUrls > 0
+              ? `${citations.responsesWithOwnedSource} of ${totalResponses} answers · ${citations.distinctOwnedUrls} page${
+                  citations.distinctOwnedUrls === 1 ? "" : "s"
+                } cited`
+              : "models haven't read your pages yet"
+          }
         />
         <StatCard
           label="Share of voice"

@@ -148,6 +148,15 @@ end $$;
 alter table public.profiles
   add column if not exists active_project_id uuid references public.projects (id) on delete set null;
 
+-- How many times each active prompt is asked per run. Answers vary between
+-- identical calls, so a single ask can't distinguish "not mentioned" from
+-- "mentioned, unlucky this time" — at a true 50% mention rate one ask reads
+-- zero half the time. Replicates buy confidence at a linear cost in tokens,
+-- so the default stays 1 and raising it is opt-in per project.
+alter table public.projects
+  add column if not exists replicates integer not null default 1
+  check (replicates between 1 and 10);
+
 -- ---------- competitors ----------------------------------------------
 create table if not exists public.competitors (
   id uuid primary key default gen_random_uuid(),
@@ -192,6 +201,12 @@ create table if not exists public.runs (
   finished_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Replicates the run was executed with, recorded so a historical run can still
+-- be read correctly after the project's setting changes. prompt_count counts
+-- planned ANSWERS (prompts x replicates), which is what the UI reports.
+alter table public.runs
+  add column if not exists replicates integer not null default 1;
 
 -- ---------- responses ------------------------------------------------
 create table if not exists public.responses (

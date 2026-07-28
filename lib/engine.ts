@@ -74,6 +74,14 @@ export async function executeRun(params: {
     .eq("project_id", project.id);
   const competitors = (competitorRows ?? []) as Competitor[];
 
+  // Ask each prompt `replicates` times. Provider answers vary between identical
+  // calls, so one ask can't tell "not mentioned" from "mentioned, unlucky" — at
+  // a true 50% rate a single ask reads zero half the time, and the whole point
+  // of the product is that a zero is believable. Each ask is its own response
+  // row, so the mention rate is over answers rather than over prompts.
+  const replicates = Math.min(Math.max(Math.trunc(project.replicates ?? 1), 1), 10);
+  const jobs = prompts.flatMap((p) => Array.from({ length: replicates }, () => p));
+
   // Create the run row up front so the UI can show progress.
   const { data: runRow, error: runErr } = await supabase
     .from("runs")
@@ -82,8 +90,10 @@ export async function executeRun(params: {
       status: "running",
       provider,
       model,
-      prompt_count: prompts.length,
+      // Planned ANSWERS, not prompts — this is what the UI counts against.
+      prompt_count: jobs.length,
       completed_count: 0,
+      replicates,
       started_at: new Date().toISOString(),
     })
     .select("id")
@@ -107,12 +117,12 @@ export async function executeRun(params: {
   const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domains[0] ?? null);
   // Every domain (main + phantoms) counts when flagging cited sources as "yours".
   const ownedHosts = project.brand_domains.map(hostOf).filter(Boolean);
-  let processed = 0; // prompts attempted (success or failure)
+  let processed = 0; // asks attempted (success or failure)
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
   let hardError: string | undefined;
 
-  await mapPool(prompts, CONCURRENCY, async (prompt) => {
+  await mapPool(jobs, CONCURRENCY, async (prompt) => {
     try {
       const { text: answer, tokens: qTokens, sources } = await runQuery({
         provider,
@@ -227,12 +237,12 @@ export async function executeRun(params: {
         await supabase.from("mentions").insert(mentionRows);
       }
     } catch (err) {
-      // A single failed prompt shouldn't kill the whole run.
+      // A single failed ask shouldn't kill the whole run.
       if (!hardError) hardError = humanError(err);
     } finally {
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
-      if (processed % CONCURRENCY === 0 || processed === prompts.length) {
+      if (processed % CONCURRENCY === 0 || processed === jobs.length) {
         await supabase.from("runs").update({ completed_count: succeeded }).eq("id", runId);
       }
     }
