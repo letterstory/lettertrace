@@ -386,10 +386,24 @@ describe("createProject", () => {
     const outcome = await createProject(db as never, "user-1", {
       name: "Acme",
       brand_name: "Acme",
-      default_provider: "gemini",
+      default_provider: "mistral",
     });
     expect(outcome).toMatchObject({ ok: false, code: "invalid" });
     expect(db.queries).toHaveLength(0);
+  });
+
+  it("honors google as a valid default_provider", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    const outcome = await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+      default_provider: "google",
+    });
+    expect(outcome).toMatchObject({ ok: true, project: { id: "proj-1" } });
+    expect(insertedValues(db, "projects")).toMatchObject({
+      default_provider: "google",
+      default_model: "gemini-2.5-pro", // defaultModelFor("google")
+    });
   });
 
   it("inserts with the dashboard defaults, tied to the caller", async () => {

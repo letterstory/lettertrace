@@ -116,7 +116,7 @@ export default async function DashboardPage() {
       {
         done: hasKey,
         title: "Add an API key",
-        description: "Bring your own OpenAI or Anthropic key, it stays encrypted.",
+        description: "Bring your own OpenAI, Anthropic, or Google key, it stays encrypted.",
         href: "/dashboard/settings",
         icon: KeyRound,
       },

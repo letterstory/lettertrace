@@ -95,7 +95,7 @@ const maxPrompts = Number(flag("max-prompts", "10"));
 const providers = flag("providers", "anthropic,openai")
   .split(",")
   .map((p) => p.trim())
-  .filter((p): p is Provider => p === "anthropic" || p === "openai");
+  .filter((p): p is Provider => p === "anthropic" || p === "openai" || p === "google");
 const webSearch = flag("web-search", "on") !== "off";
 
 // Answer models: the flagship of each provider, i.e. what a real user asking
@@ -104,12 +104,14 @@ const webSearch = flag("web-search", "on") !== "off";
 const ANSWER_MODEL: Record<Provider, string> = {
   anthropic: "claude-opus-4-8",
   openai: "gpt-4o",
+  google: "gemini-2.5-pro",
 };
 
 // Rough blended $/1M tokens, only for an order-of-magnitude spend estimate.
 const BLENDED_COST_PER_MTOK: Record<Provider, number> = {
   anthropic: 10,
   openai: 7,
+  google: 5,
 };
 
 // --- concurrency ----------------------------------------------------------

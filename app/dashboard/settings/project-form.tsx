@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { Button, Input, Textarea, Select, Label, Spinner } from "@/components/ui";
+import { PROVIDER_LIST } from "@/lib/models";
 import type { Project, Schedule } from "@/lib/types";
 
 const SCHEDULE_LABELS: Record<Schedule, string> = {
@@ -11,6 +12,17 @@ const SCHEDULE_LABELS: Record<Schedule, string> = {
   daily: "Daily",
   weekly: "Weekly",
 };
+
+// The answer engine is stored as a (provider, model) pair; the picker packs
+// both into one "provider:model" option value and unpacks on submit.
+const DEFAULT_ENGINE = `${PROVIDER_LIST[0].id}:${PROVIDER_LIST[0].models[0].id}`;
+
+function splitEngine(value: string): { provider: string; model: string } {
+  const sep = value.indexOf(":");
+  return sep === -1
+    ? { provider: value, model: "" }
+    : { provider: value.slice(0, sep), model: value.slice(sep + 1) };
+}
 
 export default function ProjectForm({ project }: { project: Project | null }) {
   const router = useRouter();
@@ -26,6 +38,9 @@ export default function ProjectForm({ project }: { project: Project | null }) {
   const [description, setDescription] = useState(project?.description ?? "");
   const [schedule, setSchedule] = useState<Schedule>(project?.schedule ?? "off");
   const [useWebSearch, setUseWebSearch] = useState(project?.use_web_search ?? true);
+  const [engine, setEngine] = useState(
+    project ? `${project.default_provider}:${project.default_model}` : DEFAULT_ENGINE,
+  );
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -42,6 +57,8 @@ export default function ProjectForm({ project }: { project: Project | null }) {
         .map((a) => a.trim())
         .filter((a) => a.length > 0);
 
+      const { provider: default_provider, model: default_model } = splitEngine(engine);
+
       const res = await fetch("/api/project", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -53,6 +70,8 @@ export default function ProjectForm({ project }: { project: Project | null }) {
           description,
           schedule,
           use_web_search: useWebSearch,
+          default_provider,
+          default_model,
         }),
       });
       const data = await res.json();
@@ -150,6 +169,34 @@ export default function ProjectForm({ project }: { project: Project | null }) {
             ))}
           </Select>
         </div>
+      </div>
+
+      <div>
+        <Label htmlFor="p-engine">Answer engine</Label>
+        <Select
+          id="p-engine"
+          value={engine}
+          onChange={(e) => {
+            setEngine(e.target.value);
+            setSaved(false);
+          }}
+        >
+          {PROVIDER_LIST.map((info) => (
+            <optgroup key={info.id} label={info.label}>
+              {info.models.map((m) => (
+                <option key={`${info.id}:${m.id}`} value={`${info.id}:${m.id}`}>
+                  {m.label}
+                  {m.note ? ` · ${m.note}` : ""}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </Select>
+        <p className="mt-1.5 text-xs text-ink-faint">
+          Which assistant we query for this brand. You&apos;ll need a key for the
+          matching provider in the section above. Google AI Overviews and Gemini both
+          use your Google key.
+        </p>
       </div>
 
       <div>

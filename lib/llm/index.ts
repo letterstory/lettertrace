@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { Provider, Sentiment } from "@/lib/types";
-import { analysisModelFor } from "@/lib/models";
+import { GOOGLE_AI_OVERVIEWS_MODEL, analysisModelFor } from "@/lib/models";
 
 // ------------------------------------------------------------------
 // Provider adapters. Every call here uses the *user's own* API key (BYOK).
@@ -151,6 +151,8 @@ export async function verifyKey(
   try {
     if (provider === "anthropic") {
       await anthropicChat(apiKey, "claude-haiku-4-5", undefined, "ping", 4);
+    } else if (provider === "google") {
+      await googleChat(apiKey, "gemini-2.5-flash-lite", undefined, "ping", 8);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -169,6 +171,11 @@ export async function verifyKey(
 export async function runQuery(
   opts: BaseCall & { prompt: string; webSearch?: boolean },
 ): Promise<QueryResult> {
+  // Google's answer path handles its own grounding (and forces it for the AI
+  // Overviews engine), so route it before the shared web-search branch.
+  if (opts.provider === "google") {
+    return googleRunQuery(opts.apiKey, opts.model, opts.prompt, opts.webSearch ?? false);
+  }
   if (!opts.webSearch) {
     const res =
       opts.provider === "anthropic"
@@ -308,6 +315,229 @@ async function openaiWebSearch(
   throw lastErr ?? new Error("OpenAI web search failed.");
 }
 
+// --- Google (Gemini) low-level chat + grounding ---------------------------
+// Talks to the Gemini REST API with raw fetch (no SDK), the same way
+// openaiWebSearch talks to the Responses API: zero extra dependencies and full
+// control over error mapping. One Google key powers both the Gemini models and
+// the "Google AI Overviews" pseudo-model.
+
+const GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_TIMEOUT_MS = 60_000;
+const GOOGLE_MAX_ATTEMPTS = 4;
+// HTTP statuses worth retrying (transient); everything else fails fast.
+const GOOGLE_RETRYABLE = new Set([429, 500, 503, 504]);
+// The real Gemini model the "Google AI Overviews" engine runs on. AI Overviews
+// are served by a fast Gemini model over Google Search, so we back them with
+// Flash and always ground the answer in Search.
+const AI_OVERVIEWS_BACKING_MODEL = "gemini-2.5-flash";
+// Gemini 2.5 "thinking" tokens are billed as output and drawn from the same
+// budget as the visible answer, so a small maxOutputTokens can be spent on
+// thoughts, leaving an empty answer (finishReason MAX_TOKENS). On the flash
+// models we turn thinking off; on models that can't disable it (e.g. pro) we
+// give the output budget generous headroom instead.
+const GOOGLE_THINKING_HEADROOM = 4096;
+
+// A Gemini HTTP error carrying the status + google.rpc status name so
+// humanError can map it (an invalid key is 400 with an "API key not valid"
+// message, a rate limit is 429 RESOURCE_EXHAUSTED, etc.).
+export class GoogleAPIError extends Error {
+  status: number;
+  googleStatus?: string;
+  constructor(status: number, message: string, googleStatus?: string) {
+    super(message);
+    this.name = "GoogleAPIError";
+    this.status = status;
+    this.googleStatus = googleStatus;
+  }
+}
+
+interface GoogleGroundingChunk {
+  web?: { uri?: string; title?: string };
+}
+
+interface GoogleResponse {
+  candidates?: {
+    content?: { parts?: { text?: string; thought?: boolean }[] };
+    finishReason?: string;
+    groundingMetadata?: { groundingChunks?: GoogleGroundingChunk[] };
+  }[];
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
+  error?: { code?: number; message?: string; status?: string };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Map the "google-ai-overviews" pseudo-model onto a real Gemini model so it
+// never reaches the wire; every other id passes through untouched.
+function resolveGoogleModel(model: string): string {
+  return model === GOOGLE_AI_OVERVIEWS_MODEL ? AI_OVERVIEWS_BACKING_MODEL : model;
+}
+
+// Flash / Flash-Lite (2.5) can fully disable thinking with thinkingBudget: 0;
+// pro and the 3.x line can't, so detect the flash family by id.
+function googleThinkingOff(realModel: string): boolean {
+  return /^gemini-2\.5-flash/.test(realModel);
+}
+
+async function googleFetch(realModel: string, apiKey: string, body: unknown): Promise<GoogleResponse> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < GOOGLE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${GOOGLE_API_BASE}/models/${realModel}:generateContent`, {
+        method: "POST",
+        headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as GoogleResponse;
+      const errBody = (await res.json().catch(() => ({}))) as GoogleResponse;
+      const gerr = new GoogleAPIError(
+        res.status,
+        errBody.error?.message ?? `Google API error (${res.status}).`,
+        errBody.error?.status,
+      );
+      // Retry transient statuses; surface auth/quota/bad-request immediately.
+      if (!GOOGLE_RETRYABLE.has(res.status)) throw gerr;
+      lastErr = gerr;
+    } catch (err) {
+      // Non-retryable HTTP errors bubble straight out; network/timeout drops
+      // and retryable HTTP errors fall through to a backoff + retry.
+      if (err instanceof GoogleAPIError && !GOOGLE_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt < GOOGLE_MAX_ATTEMPTS - 1) await sleep(400 * 2 ** attempt);
+  }
+  throw lastErr ?? new Error("Google request failed.");
+}
+
+interface GoogleGenOpts {
+  system?: string;
+  json?: boolean;
+  grounding?: boolean;
+  maxTokens: number;
+}
+
+async function googleGenerate(
+  apiKey: string,
+  model: string,
+  user: string,
+  opts: GoogleGenOpts,
+): Promise<{ text: string; tokens: number; groundingChunks: GoogleGroundingChunk[] }> {
+  const realModel = resolveGoogleModel(model);
+  const thinkingOff = googleThinkingOff(realModel);
+  const generationConfig: Record<string, unknown> = {
+    maxOutputTokens: thinkingOff
+      ? opts.maxTokens
+      : Math.max(opts.maxTokens, GOOGLE_THINKING_HEADROOM),
+  };
+  // JSON response mode and Google Search grounding can't be combined on Gemini
+  // 2.5, but we never ask for both at once: utility calls are JSON without
+  // search, monitored answers are grounded free-text.
+  if (opts.json) generationConfig.responseMimeType = "application/json";
+  if (thinkingOff) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+  const body: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: user }] }],
+    generationConfig,
+  };
+  if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
+  if (opts.grounding) body.tools = [{ google_search: {} }];
+
+  const data = await googleFetch(realModel, apiKey, body);
+  const cand = data.candidates?.[0];
+  // parts may include a separate "thought" summary part; keep only answer text.
+  const text = (cand?.content?.parts ?? [])
+    .filter((p) => typeof p.text === "string" && p.thought !== true)
+    .map((p) => p.text as string)
+    .join("")
+    .trim();
+  const tokens =
+    data.usageMetadata?.totalTokenCount ??
+    (data.usageMetadata?.promptTokenCount ?? 0) + (data.usageMetadata?.candidatesTokenCount ?? 0);
+  return { text, tokens, groundingChunks: cand?.groundingMetadata?.groundingChunks ?? [] };
+}
+
+// Chat helper matching anthropicChat / openaiChat so the utility calls branch
+// on provider uniformly.
+async function googleChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const { text, tokens } = await googleGenerate(apiKey, model, user, { system, json, maxTokens });
+  return { text, tokens };
+}
+
+// A Gemini grounding chunk's web.title is the source DOMAIN (e.g. "uefa.com"),
+// while web.uri is a Google redirect link (vertexaisearch.cloud.google.com/...)
+// that resolves to the real page. Keep the redirect as the clickable url but
+// take the domain from the title so ownership / attribution works. (Those
+// redirect links expire after ~30 days; resolving them to the final URL for
+// durable citations is a possible future enhancement.)
+export function domainFromTitle(title: string | null | undefined): string | null {
+  if (!title) return null;
+  const t = title.trim().toLowerCase().replace(/^www\./, "");
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(t) ? t : null;
+}
+
+// Google serves grounding links through its own redirect host, so the URI never
+// carries the real domain. The title usually does.
+const GOOGLE_REDIRECT_HOST = "vertexaisearch.cloud.google.com";
+
+export function googleGroundingSources(chunks: GoogleGroundingChunk[]): CitedSource[] {
+  const raw: CitedSource[] = [];
+  for (const c of chunks) {
+    const uri = c.web?.uri;
+    if (!uri) continue;
+    const validated = safeSource(uri, c.web?.title ?? null, null);
+    if (!validated) continue;
+    const domain = domainFromTitle(c.web?.title);
+
+    // A redirect URI whose title isn't a hostname leaves nothing to attribute
+    // the citation to. Falling back to validated.domain would record Google's
+    // own redirect host: it can never match a brand's domain, so is_owned would
+    // silently under-report, and it would crowd the cited-domain leaderboard
+    // with a host nobody published to. Drop the chunk instead — sources.domain
+    // is NOT NULL, and a wrong domain is worse than a missing row.
+    if (!domain && validated.domain === GOOGLE_REDIRECT_HOST) continue;
+
+    raw.push({ ...validated, domain: domain ?? validated.domain });
+  }
+  return dedupeSources(raw);
+}
+
+const AI_OVERVIEW_SYSTEM = `You are Google's AI Overview, the AI-generated summary shown at the top of a Google Search results page. Given the user's search query, write the overview Google would surface.
+- Answer directly and immediately. No preamble, no "as an AI", no restating the question.
+- Synthesize current information from the web. Name the specific brands, products, tools, companies, or sources that are genuinely relevant to the query.
+- Keep it tight: a short paragraph or two, or a brief bulleted list, the way an AI Overview reads.
+- Neutral, informational tone.`;
+
+// Google's runQuery path: the AI-Overviews engine always grounds in Search with
+// the overview-style system prompt; a plain Gemini model grounds only when web
+// search is on.
+async function googleRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  const isOverview = model === GOOGLE_AI_OVERVIEWS_MODEL;
+  const grounding = isOverview || webSearch;
+  const { text, tokens, groundingChunks } = await googleGenerate(apiKey, model, prompt, {
+    system: isOverview ? AI_OVERVIEW_SYSTEM : undefined,
+    grounding,
+    maxTokens: ANSWER_MAX_TOKENS,
+  });
+  return { text, tokens, sources: grounding ? googleGroundingSources(groundingChunks) : [] };
+}
+
 // Prompt shape is the single biggest lever on whether a run measures anything.
 // Measured against a stealth-stage brand (24 queries per shape, both providers):
 //
@@ -351,14 +581,23 @@ Generate ${opts.count} distinct questions a person might ask an AI assistant rel
   const res =
     opts.provider === "anthropic"
       ? await anthropicChat(opts.apiKey, opts.model, VARIATION_SYSTEM, user, UTILITY_MAX_TOKENS)
-      : await openaiChat(
-          opts.apiKey,
-          opts.model,
-          VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }.",
-          user,
-          UTILITY_MAX_TOKENS,
-          true,
-        );
+      : opts.provider === "google"
+        ? await googleChat(
+            opts.apiKey,
+            opts.model,
+            VARIATION_SYSTEM + "\nReturn a JSON array of strings.",
+            user,
+            UTILITY_MAX_TOKENS,
+            true,
+          )
+        : await openaiChat(
+            opts.apiKey,
+            opts.model,
+            VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }.",
+            user,
+            UTILITY_MAX_TOKENS,
+            true,
+          );
 
   let parsed: unknown = extractJson(res.text);
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -482,7 +721,9 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
     const res =
       opts.provider === "anthropic"
         ? await anthropicChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
-        : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
+        : opts.provider === "google"
+          ? await googleChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true)
+          : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
 
     return { results: parseAnalysis(opts.entities, extractJson(res.text)), tokens: res.tokens };
   } catch {
@@ -524,7 +765,9 @@ Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company
   const res =
     opts.provider === "anthropic"
       ? await anthropicChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000)
-      : await openaiChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true);
+      : opts.provider === "google"
+        ? await googleChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true)
+        : await openaiChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true);
 
   try {
     const parsed = extractJson<Record<string, unknown>>(res.text);
@@ -605,7 +848,9 @@ export async function suggestCompetitors(
   const res =
     opts.provider === "anthropic"
       ? await anthropicChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
-      : await openaiChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
+      : opts.provider === "google"
+        ? await googleChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true)
+        : await openaiChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
 
   try {
     let parsed: unknown = extractJson(res.text);
@@ -657,6 +902,18 @@ export function humanError(err: unknown): string {
     if (err.status === 429) return "Rate limited by the provider.";
     if (err.status === 403) return "This key lacks access to the requested model.";
     if (err.status && err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof GoogleAPIError) {
+    // Google returns a bad key as 400 INVALID_ARGUMENT with an "API key not
+    // valid" message (not 401), so match on the message as well as the status.
+    if (err.status === 429) return "Rate limited by the provider.";
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 401 || /api[_ ]?key.*(not valid|invalid)|api_key_invalid/i.test(err.message)) {
+      return "Invalid API key.";
+    }
+    if (err.status === 403) return "This key lacks access to the requested model.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof Error) {
