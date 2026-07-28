@@ -3,6 +3,28 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Refreshes the Supabase auth session on every request and guards /dashboard.
 export async function updateSession(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+
+  // Machine and metadata endpoints must never be touched by session handling:
+  // no cookie refresh (a Set-Cookie on a token response is noise at best), no
+  // redirect (a 302-to-login would break discovery for an MCP client), and no
+  // getUser() network hop. These carry their own credential (a client secret,
+  // PKCE, a device code) or are fully public.
+  //
+  // The INTERACTIVE OAuth endpoints are deliberately NOT listed here —
+  // /api/oauth/authorize, /oauth/consent, and /activate need the Supabase
+  // session to identify the human approving the grant, so they must fall
+  // through to the normal handling below.
+  if (
+    path.startsWith("/.well-known/") ||
+    path === "/api/oauth/token" ||
+    path === "/api/oauth/device" ||
+    path === "/api/oauth/register" ||
+    path === "/api/oauth/revoke"
+  ) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -34,8 +56,6 @@ export async function updateSession(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const path = request.nextUrl.pathname;
 
   // Gate the app behind auth.
   if (!user && path.startsWith("/dashboard")) {

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { getProjects } from "@/lib/data";
 import { createProject, projectSummary } from "@/lib/api-service";
+import { logApiRequest } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -9,17 +10,17 @@ export const dynamic = "force-dynamic";
 // GET /api/v1/projects — list the caller's organizations.
 // Auth: Authorization: Bearer <lettertrace api key>
 export async function GET(request: Request) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "projects:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const projects = await getProjects(auth.supabase, auth.userId);
+  await logApiRequest(auth, request, "v1", {
+    category: "project",
+    action: "api.list_projects",
+    summary: `Listed ${projects.length} organization${projects.length === 1 ? "" : "s"} via the API`,
+    statusCode: 200,
+    metadata: { count: projects.length },
+  });
   return NextResponse.json({ projects: projects.map(projectSummary) });
 }
 
@@ -27,15 +28,8 @@ export async function GET(request: Request) {
 // Body: { name, brand_name, brand_aliases?, brand_domains?, description?,
 //         default_provider?, default_model?, use_web_search? }
 export async function POST(request: Request) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "projects:write", "v1");
+  if (auth instanceof Response) return auth;
 
   let body: unknown;
   try {
@@ -51,13 +45,36 @@ export async function POST(request: Request) {
       (body ?? {}) as Record<string, unknown>,
     );
     if (!outcome.ok) {
+      await logApiRequest(auth, request, "v1", {
+        category: "project",
+        action: "api.create_project",
+        status: "failure",
+        statusCode: 400,
+        summary: `Organization not created via the API: ${outcome.message}`,
+      });
       return NextResponse.json({ error: outcome.message }, { status: 400 });
     }
+    await logApiRequest(auth, request, "v1", {
+      category: "project",
+      action: "project.created",
+      statusCode: 201,
+      projectId: outcome.project.id,
+      targetType: "project",
+      targetId: outcome.project.id,
+      summary: `Created organization "${outcome.project.name}" via the API`,
+    });
     return NextResponse.json(
       { project: projectSummary(outcome.project) },
       { status: 201 },
     );
   } catch (e) {
+    await logApiRequest(auth, request, "v1", {
+      category: "project",
+      action: "api.create_project",
+      status: "failure",
+      statusCode: 500,
+      summary: `Organization creation failed via the API: ${humanError(e)}`,
+    });
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
   }
 }

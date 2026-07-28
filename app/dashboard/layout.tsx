@@ -4,7 +4,7 @@ import { DashboardNav } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
-import { ThemeSwitch, ThemeToggle } from "@/components/theme";
+import { ThemeToggle } from "@/components/theme";
 import { createClient } from "@/lib/supabase/server";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
@@ -47,7 +47,10 @@ export default async function DashboardLayout({
     <div className="min-h-screen bg-paper md:flex">
       <aside className="flex flex-col border-b border-ink/10 bg-paper md:h-screen md:w-[260px] md:shrink-0 md:border-b-0 md:border-r">
         <div className="flex flex-col gap-6 px-5 py-6 md:h-full">
-          <Logo />
+          <div className="flex items-center justify-between gap-2">
+            <Logo />
+            <ThemeToggle className="hidden md:inline-flex" />
+          </div>
 
           {project ? (
             <OrgSwitcher
@@ -68,11 +71,10 @@ export default async function DashboardLayout({
           <DashboardNav />
 
           <div className="mt-auto hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
-            <ThemeSwitch />
             <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
               {user.email}
             </p>
-            <SignOutButton />
+            <SignOutButton className="w-full justify-start" />
           </div>
 
           <div className="flex items-center justify-between gap-2 border-t border-ink/10 pt-4 md:hidden">

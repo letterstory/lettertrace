@@ -80,6 +80,12 @@ async function handle(request: Request) {
         provider: project.default_provider,
         model: project.default_model,
         apiKey,
+        context: {
+          channel: "cron",
+          actorType: "cron",
+          actorId: "scheduler",
+          actorLabel: "Scheduler",
+        },
       });
       results.push({
         projectId: project.id,

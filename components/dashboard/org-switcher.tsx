@@ -48,6 +48,18 @@ export function OrgSwitcher({
     }
   }, [pendingOrg, activeId, isPending]);
 
+  // Safety net: never let the overlay spin forever. If the switch hasn't taken
+  // effect within a few seconds (e.g. the write silently no-op'd), drop the
+  // loader and resync from the server instead of hanging.
+  useEffect(() => {
+    if (!pendingOrg) return;
+    const timer = setTimeout(() => {
+      setPendingOrg(null);
+      router.refresh();
+    }, 12000);
+    return () => clearTimeout(timer);
+  }, [pendingOrg, router]);
+
   async function switchTo(org: OrgOption) {
     setOpen(false);
     if (!active || org.id === active.id) return;

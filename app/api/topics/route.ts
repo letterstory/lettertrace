@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
+import { logDashboard } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,14 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logDashboard(user, request, {
+      category: "topic",
+      action: "topic.created",
+      summary: `Created topic "${name.trim()}"`,
+      projectId: project.id,
+      targetType: "topic",
+      targetId: (data as { id: string }).id,
+    });
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

@@ -16,7 +16,7 @@ import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 
-const GITHUB_URL = "https://github.com";
+const GITHUB_URL = "https://github.com/letterstory/lettertrace";
 
 // ------------------------------------------------------------------
 // Small presentational helpers (local to the landing page)
@@ -148,11 +148,13 @@ const toneBg: Record<string, string> = {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-paper text-ink">
+    <div id="top" className="min-h-screen bg-paper text-ink">
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/80 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-          <Logo />
+          <a href="#top" aria-label="Back to top" className="w-fit">
+            <Logo />
+          </a>
           <nav className="hidden items-center gap-8 text-sm text-ink-soft md:flex">
             <a href="#how" className="transition hover:text-ink">How it works</a>
             <a href="#features" className="transition hover:text-ink">Features</a>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { getProjectHistory } from "@/lib/api-service";
+import { logApiRequest } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -15,15 +16,8 @@ export async function GET(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "projects:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const limitParam = new URL(request.url).searchParams.get("limit");
   const limit = limitParam ? Number(limitParam) : 30;
@@ -38,5 +32,14 @@ export async function GET(
   if (!history) {
     return NextResponse.json({ error: "Project not found." }, { status: 404 });
   }
+  await logApiRequest(auth, request, "v1", {
+    category: "run",
+    action: "api.read_history",
+    summary: `Read brand-visibility history (${history.points.length} runs) via the API`,
+    statusCode: 200,
+    projectId: params.id,
+    targetType: "project",
+    targetId: params.id,
+  });
   return NextResponse.json(history);
 }

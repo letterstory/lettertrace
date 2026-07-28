@@ -55,6 +55,11 @@ describe("MCP endpoint auth", () => {
       supabase: {} as never,
       userId: "user-1",
       keyId: "key-1",
+      tokenType: "api_key",
+      scopes: ["projects:read", "projects:write", "runs:read", "runs:trigger"],
+      clientId: null,
+      expiresAt: null,
+      aud: null,
     });
     const res = await mcpPost(rpc(INITIALIZE, "lt_live_valid"));
     expect(res.status).toBe(200);

@@ -47,7 +47,25 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   triggerRunForProject: vi.fn(),
 }));
 
-const AUTH_CTX = { supabase: {} as never, userId: "user-1", keyId: "key-1" };
+const AUTH_CTX = {
+  supabase: {} as never,
+  userId: "user-1",
+  keyId: "key-1",
+  tokenType: "api_key" as const,
+  scopes: ["projects:read", "projects:write", "runs:read", "runs:trigger"],
+  clientId: null,
+  expiresAt: null,
+  aud: null,
+};
+
+// Run attribution the routes derive from AUTH_CTX (a classic key, REST surface)
+// and forward to triggerRunForProject so the run shows up in the activity feed.
+const RUN_CTX = {
+  actorType: "api_key",
+  actorId: "key-1",
+  actorLabel: "API key",
+  channel: "api",
+};
 
 function req(path: string, init?: RequestInit) {
   return new Request(`http://localhost${path}`, {
@@ -319,12 +337,13 @@ describe("POST /api/v1/projects/:id/runs", () => {
     );
     expect(res.status).toBe(200);
     expect((await res.json()).runId).toBe("r1");
-    // No body -> no overrides: the project default stays in charge.
+    // No body -> no overrides, but the run is still attributed to this caller
+    // (channel api / classic key) so it lands in the activity feed.
     expect(triggerRunForProject).toHaveBeenCalledWith(
       AUTH_CTX.supabase,
       "user-1",
       "p1",
-      {},
+      { context: RUN_CTX },
     );
   });
 
@@ -353,9 +372,11 @@ describe("POST /api/v1/projects/:id/runs", () => {
       { params: { id: "p1" } },
     );
     expect(res.status).toBe(200);
+    // Overrides ride alongside the caller attribution master's activity log adds.
     expect(triggerRunForProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
       provider: "google",
       model: "google-ai-overviews",
+      context: RUN_CTX,
     });
   });
 
@@ -375,6 +396,7 @@ describe("POST /api/v1/projects/:id/runs", () => {
     expect(triggerRunForProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
       provider: "openai",
       model: "gpt-4o-mini",
+      context: RUN_CTX,
     });
   });
 });

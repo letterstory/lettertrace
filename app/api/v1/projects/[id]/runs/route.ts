@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { authenticateApiKey, bearerToken } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-guards";
 import { listRuns, triggerRunForProject } from "@/lib/api-service";
+import { apiActor, logApiRequest } from "@/lib/activity";
 import { isProvider, PROVIDERS } from "@/lib/models";
 import { humanError } from "@/lib/llm";
 import type { Provider } from "@/lib/types";
@@ -13,21 +14,23 @@ export async function GET(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "runs:read", "v1");
+  if (auth instanceof Response) return auth;
 
   const limit = Number(new URL(request.url).searchParams.get("limit")) || 20;
   const runs = await listRuns(auth.supabase, auth.userId, params.id, limit);
   if (!runs) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
+  await logApiRequest(auth, request, "v1", {
+    category: "run",
+    action: "api.list_runs",
+    summary: `Listed ${runs.length} run${runs.length === 1 ? "" : "s"} via the API`,
+    statusCode: 200,
+    projectId: params.id,
+    targetType: "project",
+    targetId: params.id,
+  });
   return NextResponse.json({ runs });
 }
 
@@ -38,15 +41,8 @@ export async function POST(
   request: Request,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authenticateApiKey(
-    bearerToken(request.headers.get("authorization")),
-  );
-  if (!auth) {
-    return NextResponse.json(
-      { error: "Invalid or missing API key" },
-      { status: 401 },
-    );
-  }
+  const auth = await requireApiAuth(request, "runs:trigger", "v1");
+  if (auth instanceof Response) return auth;
 
   // An absent (or empty) body is the common case and must keep working.
   const options: { provider?: Provider; model?: string } = {};
@@ -75,18 +71,39 @@ export async function POST(
   }
 
   try {
+    // Attribute the run itself (logged by the engine) to this API/CLI caller.
     const outcome = await triggerRunForProject(
       auth.supabase,
       auth.userId,
       params.id,
-      options,
+      { ...options, context: apiActor(auth, "v1") },
     );
     if (!outcome.ok) {
+      await logApiRequest(auth, request, "v1", {
+        category: "run",
+        action: "api.trigger_run",
+        status: "failure",
+        statusCode: outcome.code === "not_found" ? 404 : 402,
+        projectId: params.id,
+        targetType: "project",
+        targetId: params.id,
+        summary: `Run not triggered via the API: ${outcome.message}`,
+        metadata: { reason: outcome.code },
+      });
       return NextResponse.json(
         { error: outcome.message },
         { status: outcome.code === "not_found" ? 404 : 402 },
       );
     }
+    await logApiRequest(auth, request, "v1", {
+      category: "run",
+      action: "api.trigger_run",
+      statusCode: 200,
+      projectId: params.id,
+      targetType: "run",
+      targetId: outcome.result.runId,
+      summary: `Triggered a run via the API (${outcome.result.status})`,
+    });
     return NextResponse.json(outcome.result);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

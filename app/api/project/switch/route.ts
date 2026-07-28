@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { setActiveProject } from "@/lib/data";
+import { logDashboard } from "@/lib/activity";
 
 // POST /api/project/switch { projectId }
 // Point the dashboard at another of the signed-in user's organizations.
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
   // Only switch to an organization the user actually owns.
   const { data: project } = await supabase
     .from("projects")
-    .select("id")
+    .select("id, name")
     .eq("id", projectId)
     .eq("user_id", user.id)
     .maybeSingle();
@@ -36,5 +37,13 @@ export async function POST(request: Request) {
   }
 
   await setActiveProject(supabase, user.id, projectId);
+  await logDashboard(user, request, {
+    category: "project",
+    action: "project.switched",
+    summary: `Switched to organization "${(project as { name?: string }).name ?? projectId}"`,
+    projectId,
+    targetType: "project",
+    targetId: projectId,
+  });
   return NextResponse.json({ ok: true, projectId });
 }
