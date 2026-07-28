@@ -1,7 +1,7 @@
 // Shared domain + database row types for LetterTrace.
 // Column names mirror supabase/schema.sql exactly.
 
-export type Provider = "anthropic" | "openai" | "google";
+export type Provider = "anthropic" | "openai" | "google" | "perplexity";
 
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 

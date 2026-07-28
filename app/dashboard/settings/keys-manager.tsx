@@ -41,6 +41,12 @@ const PROVIDER_STYLE: Record<
     mark: "✦",
     markClass: "bg-butter-tint text-butter-ink",
   },
+  perplexity: {
+    title: "Perplexity",
+    subtitle: "Sonar API key · answers are always search-grounded",
+    mark: "P",
+    markClass: "bg-mint-tint text-mint-ink",
+  },
 };
 
 export default function KeysManager({
