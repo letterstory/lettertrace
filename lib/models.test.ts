@@ -29,7 +29,7 @@ describe("provider catalog", () => {
   });
 
   it("defaults google to its flagship model", () => {
-    expect(defaultModelFor("google")).toBe("gemini-2.5-pro");
+    expect(defaultModelFor("google")).toBe("gemini-pro-latest");
   });
 
   it("offers Google AI Overviews as a distinct engine under google", () => {
@@ -41,7 +41,7 @@ describe("provider catalog", () => {
   });
 
   it("labels known models and passes through unknown ones", () => {
-    expect(modelLabel("google", "gemini-2.5-flash")).toBe("Gemini 2.5 Flash");
+    expect(modelLabel("google", "gemini-flash-latest")).toBe("Gemini Flash");
     expect(modelLabel("google", "gemini-9-imaginary")).toBe("gemini-9-imaginary");
   });
 });
@@ -50,7 +50,7 @@ describe("analysisModelFor", () => {
   it("defaults to the cheap model for each provider", () => {
     expect(analysisModelFor("anthropic")).toBe("claude-haiku-4-5");
     expect(analysisModelFor("openai")).toBe("gpt-4o-mini");
-    expect(analysisModelFor("google")).toBe("gemini-2.5-flash-lite");
+    expect(analysisModelFor("google")).toBe("gemini-flash-lite-latest");
   });
 
   it("never returns the flagship answer models", () => {
@@ -62,10 +62,10 @@ describe("analysisModelFor", () => {
   it("honors per-provider env overrides", () => {
     vi.stubEnv("ANALYSIS_ANTHROPIC_MODEL", "claude-sonnet-4-6");
     vi.stubEnv("ANALYSIS_OPENAI_MODEL", " gpt-4o ");
-    vi.stubEnv("ANALYSIS_GOOGLE_MODEL", "gemini-2.5-flash");
+    vi.stubEnv("ANALYSIS_GOOGLE_MODEL", "gemini-flash-latest");
     expect(analysisModelFor("anthropic")).toBe("claude-sonnet-4-6");
     expect(analysisModelFor("openai")).toBe("gpt-4o"); // trimmed
-    expect(analysisModelFor("google")).toBe("gemini-2.5-flash");
+    expect(analysisModelFor("google")).toBe("gemini-flash-latest");
   });
 
   it("ignores blank overrides", () => {

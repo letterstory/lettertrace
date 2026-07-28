@@ -402,7 +402,7 @@ describe("createProject", () => {
     expect(outcome).toMatchObject({ ok: true, project: { id: "proj-1" } });
     expect(insertedValues(db, "projects")).toMatchObject({
       default_provider: "google",
-      default_model: "gemini-2.5-pro", // defaultModelFor("google")
+      default_model: "gemini-pro-latest", // defaultModelFor("google")
     });
   });
 

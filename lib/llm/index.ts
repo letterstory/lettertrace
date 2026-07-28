@@ -152,7 +152,7 @@ export async function verifyKey(
     if (provider === "anthropic") {
       await anthropicChat(apiKey, "claude-haiku-4-5", undefined, "ping", 4);
     } else if (provider === "google") {
-      await googleChat(apiKey, "gemini-2.5-flash-lite", undefined, "ping", 8);
+      await googleChat(apiKey, "gemini-flash-lite-latest", undefined, "ping", 8);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -329,7 +329,7 @@ const GOOGLE_RETRYABLE = new Set([429, 500, 503, 504]);
 // The real Gemini model the "Google AI Overviews" engine runs on. AI Overviews
 // are served by a fast Gemini model over Google Search, so we back them with
 // Flash and always ground the answer in Search.
-const AI_OVERVIEWS_BACKING_MODEL = "gemini-2.5-flash";
+const AI_OVERVIEWS_BACKING_MODEL = "gemini-flash-latest";
 // Gemini 2.5 "thinking" tokens are billed as output and drawn from the same
 // budget as the visible answer, so a small maxOutputTokens can be spent on
 // thoughts, leaving an empty answer (finishReason MAX_TOKENS). On the flash
@@ -513,11 +513,22 @@ export function googleGroundingSources(chunks: GoogleGroundingChunk[]): CitedSou
   return dedupeSources(raw);
 }
 
+// Offering the google_search tool does NOT make Gemini use it: measured on
+// gemini-flash-latest, a question it believes it can answer from memory ("List
+// the top companies providing a global CDN") grounded 0 times out of 2, while
+// the same call with this line grounded 2 out of 2. Anthropic needed the same
+// push (there via tool_choice); Gemini exposes no force flag for the built-in
+// search tool, so the instruction is the lever. Without it an "AI Overview"
+// can be pure recall, and use_web_search silently collects no sources at all.
+const ALWAYS_SEARCH =
+  "- ALWAYS search the web before answering, even if you believe you already know the answer. Your answer must reflect current search results, not memory.";
+
 const AI_OVERVIEW_SYSTEM = `You are Google's AI Overview, the AI-generated summary shown at the top of a Google Search results page. Given the user's search query, write the overview Google would surface.
 - Answer directly and immediately. No preamble, no "as an AI", no restating the question.
 - Synthesize current information from the web. Name the specific brands, products, tools, companies, or sources that are genuinely relevant to the query.
 - Keep it tight: a short paragraph or two, or a brief bulleted list, the way an AI Overview reads.
-- Neutral, informational tone.`;
+- Neutral, informational tone.
+${ALWAYS_SEARCH}`;
 
 // Google's runQuery path: the AI-Overviews engine always grounds in Search with
 // the overview-style system prompt; a plain Gemini model grounds only when web
@@ -531,7 +542,11 @@ async function googleRunQuery(
   const isOverview = model === GOOGLE_AI_OVERVIEWS_MODEL;
   const grounding = isOverview || webSearch;
   const { text, tokens, groundingChunks } = await googleGenerate(apiKey, model, prompt, {
-    system: isOverview ? AI_OVERVIEW_SYSTEM : undefined,
+    // A plain Gemini model gets the search push too when the project asked for
+    // web search — otherwise its numbers aren't comparable with Claude's or
+    // ChatGPT's, both of which are forced to browse. Nothing about the answer's
+    // voice is prescribed here, only that it must look things up.
+    system: isOverview ? AI_OVERVIEW_SYSTEM : grounding ? ALWAYS_SEARCH : undefined,
     grounding,
     maxTokens: ANSWER_MAX_TOKENS,
   });

@@ -124,9 +124,9 @@ describe("trial key resolution", () => {
   });
 
   it("falls back to the given model when no google trial model is set", () => {
-    expect(trialModelFor("google", "gemini-2.5-flash")).toBe("gemini-2.5-flash");
-    process.env.TRIAL_GOOGLE_MODEL = "gemini-2.5-flash-lite";
-    expect(trialModelFor("google", "gemini-2.5-flash")).toBe("gemini-2.5-flash-lite");
+    expect(trialModelFor("google", "gemini-flash-latest")).toBe("gemini-flash-latest");
+    process.env.TRIAL_GOOGLE_MODEL = "gemini-flash-lite-latest";
+    expect(trialModelFor("google", "gemini-flash-latest")).toBe("gemini-flash-lite-latest");
   });
 
   it("counts google when deciding whether any trial is offered", () => {

@@ -53,10 +53,16 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
     label: "Google (Gemini)",
     keyUrl: "https://aistudio.google.com/apikey",
     keyPrefix: "AIza",
+    // Google's rolling aliases rather than pinned versions. The pinned 2.5 ids
+    // this shipped with were already rejected on a fresh project — "no longer
+    // available to new users" — so a pin here rots silently and 404s every run
+    // for anyone onboarding after the cut-off. The trade-off is that runs
+    // record the alias, so if Google moves what it points at, a change in the
+    // trend line may be the model rather than the brand.
     models: [
-      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", note: "Most capable" },
-      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Balanced" },
-      { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", note: "Fast & cheap" },
+      { id: "gemini-pro-latest", label: "Gemini Pro", note: "Most capable" },
+      { id: "gemini-flash-latest", label: "Gemini Flash", note: "Balanced" },
+      { id: "gemini-flash-lite-latest", label: "Gemini Flash-Lite", note: "Fast & cheap" },
       {
         id: GOOGLE_AI_OVERVIEWS_MODEL,
         label: "Google AI Overviews",
@@ -85,7 +91,7 @@ const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
 const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4o-mini",
-  google: "gemini-2.5-flash-lite",
+  google: "gemini-flash-lite-latest",
 };
 
 // Sentiment/recommendation enrichment is a simple structured-JSON judgment;
