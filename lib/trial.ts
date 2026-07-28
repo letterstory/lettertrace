@@ -20,27 +20,35 @@ export function trialRunLimit(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TRIAL_RUN_LIMIT;
 }
 
+const TRIAL_KEY_ENV: Record<Provider, string> = {
+  anthropic: "TRIAL_ANTHROPIC_API_KEY",
+  openai: "TRIAL_OPENAI_API_KEY",
+  google: "TRIAL_GOOGLE_API_KEY",
+};
+
+const TRIAL_MODEL_ENV: Record<Provider, string> = {
+  anthropic: "TRIAL_ANTHROPIC_MODEL",
+  openai: "TRIAL_OPENAI_MODEL",
+  google: "TRIAL_GOOGLE_MODEL",
+};
+
 /** The operator's shared key for a provider, if configured. */
 export function trialKeyFor(provider: Provider): string | null {
-  const v =
-    provider === "anthropic"
-      ? process.env.TRIAL_ANTHROPIC_API_KEY
-      : process.env.TRIAL_OPENAI_API_KEY;
+  const v = process.env[TRIAL_KEY_ENV[provider]];
   return v && v.trim() ? v.trim() : null;
 }
 
 /** Optional cheaper model to use during the trial (caps operator cost). */
 export function trialModelFor(provider: Provider, fallback: string): string {
-  const v =
-    provider === "anthropic"
-      ? process.env.TRIAL_ANTHROPIC_MODEL
-      : process.env.TRIAL_OPENAI_MODEL;
+  const v = process.env[TRIAL_MODEL_ENV[provider]];
   return v && v.trim() ? v.trim() : fallback;
 }
 
 /** True if a trial is offered for at least one provider. */
 export function trialEnabled(): boolean {
-  return Boolean(trialKeyFor("anthropic") || trialKeyFor("openai"));
+  return Boolean(
+    trialKeyFor("anthropic") || trialKeyFor("openai") || trialKeyFor("google"),
+  );
 }
 
 /** How many free trial runs this user has already consumed. */
@@ -71,12 +79,14 @@ export interface ResolvedKey {
 export function pickDefaultProvider(): Provider {
   if (trialKeyFor("anthropic")) return "anthropic";
   if (trialKeyFor("openai")) return "openai";
+  if (trialKeyFor("google")) return "google";
   return "anthropic";
 }
 
 const PROVIDER_ORDER: Record<Provider, Provider[]> = {
-  anthropic: ["anthropic", "openai"],
-  openai: ["openai", "anthropic"],
+  anthropic: ["anthropic", "openai", "google"],
+  openai: ["openai", "anthropic", "google"],
+  google: ["google", "anthropic", "openai"],
 };
 
 /**

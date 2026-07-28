@@ -1,8 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getDecryptedKey } from "@/lib/data";
-import { resolveKey } from "@/lib/trial";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 
+// trial.ts pulls in lib/data (getDecryptedKey), which calls React's cache() at
+// module load, unavailable in the node test env. Stub it so the import graph
+// stays clean; resolveKey's own use of it is mocked per-test below.
 vi.mock("@/lib/data", () => ({ getDecryptedKey: vi.fn() }));
+
+import { getDecryptedKey } from "@/lib/data";
+import {
+  resolveKey,
+  trialKeyFor,
+  trialModelFor,
+  trialEnabled,
+  pickDefaultProvider,
+} from "@/lib/trial";
 
 // getTrialRunsUsed reads profiles.trial_runs_used; everything else in resolveKey
 // is env + the mocked key lookup.
@@ -18,15 +28,35 @@ function db(runsUsed: number) {
   } as never;
 }
 
-const ENV = { ...process.env };
+// The trial helpers read shared (operator) keys straight from the environment,
+// so drive them by mutating process.env and restore it afterward.
+const TRIAL_VARS = [
+  "TRIAL_ANTHROPIC_API_KEY",
+  "TRIAL_OPENAI_API_KEY",
+  "TRIAL_GOOGLE_API_KEY",
+  "TRIAL_ANTHROPIC_MODEL",
+  "TRIAL_OPENAI_MODEL",
+  "TRIAL_GOOGLE_MODEL",
+  "TRIAL_RUN_LIMIT",
+] as const;
+
+let saved: Record<string, string | undefined>;
+
 beforeEach(() => {
-  vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
-  delete process.env.TRIAL_ANTHROPIC_API_KEY;
-  delete process.env.TRIAL_OPENAI_API_KEY;
+  saved = {};
+  for (const v of TRIAL_VARS) {
+    saved[v] = process.env[v];
+    delete process.env[v];
+  }
   process.env.TRIAL_RUN_LIMIT = "5";
+  vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
 });
+
 afterEach(() => {
-  process.env = { ...ENV };
+  for (const v of TRIAL_VARS) {
+    if (saved[v] === undefined) delete process.env[v];
+    else process.env[v] = saved[v];
+  }
 });
 
 describe("resolveKey", () => {
@@ -81,5 +111,38 @@ describe("resolveKey", () => {
     process.env.TRIAL_RUN_LIMIT = "2";
     expect((await resolveKey(db(1), "u", "anthropic")).source).toBe("trial");
     expect((await resolveKey(db(2), "u", "anthropic")).source).toBe("exhausted");
+  });
+});
+
+describe("trial key resolution", () => {
+  it("reads the google trial key from TRIAL_GOOGLE_API_KEY, not the openai slot", () => {
+    process.env.TRIAL_GOOGLE_API_KEY = "AIzaTrialGoogle";
+    process.env.TRIAL_OPENAI_API_KEY = "sk-trial-openai";
+    expect(trialKeyFor("google")).toBe("AIzaTrialGoogle");
+    expect(trialKeyFor("openai")).toBe("sk-trial-openai");
+    expect(trialKeyFor("anthropic")).toBeNull();
+  });
+
+  it("falls back to the given model when no google trial model is set", () => {
+    expect(trialModelFor("google", "gemini-flash-latest")).toBe("gemini-flash-latest");
+    process.env.TRIAL_GOOGLE_MODEL = "gemini-flash-lite-latest";
+    expect(trialModelFor("google", "gemini-flash-latest")).toBe("gemini-flash-lite-latest");
+  });
+
+  it("counts google when deciding whether any trial is offered", () => {
+    expect(trialEnabled()).toBe(false);
+    process.env.TRIAL_GOOGLE_API_KEY = "AIzaTrialGoogle";
+    expect(trialEnabled()).toBe(true);
+  });
+
+  it("can pick google as the default provider when only its trial key is set", () => {
+    process.env.TRIAL_GOOGLE_API_KEY = "AIzaTrialGoogle";
+    expect(pickDefaultProvider()).toBe("google");
+  });
+
+  it("still prefers anthropic when it has a trial key too", () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    process.env.TRIAL_GOOGLE_API_KEY = "AIzaTrialGoogle";
+    expect(pickDefaultProvider()).toBe("anthropic");
   });
 });

@@ -1,5 +1,12 @@
 import type { Provider } from "./types";
 
+// Google AI Overviews is exposed as a distinct answer engine, but it runs on
+// the same Google (Gemini) key: it is a pseudo-model under the `google`
+// provider that always grounds in Google Search and answers in the terse,
+// synthesized style Google shows at the top of a results page. The adapter
+// (lib/llm) maps this id onto a real Gemini model for the actual API call.
+export const GOOGLE_AI_OVERVIEWS_MODEL = "google-ai-overviews";
+
 export interface ModelOption {
   id: string;
   label: string;
@@ -41,28 +48,59 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
       { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
     ],
   },
+  google: {
+    id: "google",
+    label: "Google (Gemini)",
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyPrefix: "AIza",
+    // Google's rolling aliases rather than pinned versions. The pinned 2.5 ids
+    // this shipped with were already rejected on a fresh project — "no longer
+    // available to new users" — so a pin here rots silently and 404s every run
+    // for anyone onboarding after the cut-off. The trade-off is that runs
+    // record the alias, so if Google moves what it points at, a change in the
+    // trend line may be the model rather than the brand.
+    models: [
+      { id: "gemini-pro-latest", label: "Gemini Pro", note: "Most capable" },
+      { id: "gemini-flash-latest", label: "Gemini Flash", note: "Balanced" },
+      { id: "gemini-flash-lite-latest", label: "Gemini Flash-Lite", note: "Fast & cheap" },
+      {
+        id: GOOGLE_AI_OVERVIEWS_MODEL,
+        label: "Google AI Overviews",
+        note: "AI Overview-style, grounded in Search",
+      },
+    ],
+  },
 };
 
 export const PROVIDER_LIST: ProviderInfo[] = Object.values(PROVIDERS);
 
 export function isProvider(value: string): value is Provider {
-  return value === "anthropic" || value === "openai";
+  return value === "anthropic" || value === "openai" || value === "google";
 }
 
 export function defaultModelFor(provider: Provider): string {
   return PROVIDERS[provider].models[0].id;
 }
 
+const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
+  anthropic: "ANALYSIS_ANTHROPIC_MODEL",
+  openai: "ANALYSIS_OPENAI_MODEL",
+  google: "ANALYSIS_GOOGLE_MODEL",
+};
+
+const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
+  anthropic: "claude-haiku-4-5",
+  openai: "gpt-4o-mini",
+  google: "gemini-flash-lite-latest",
+};
+
 // Sentiment/recommendation enrichment is a simple structured-JSON judgment;
 // running it on the flagship answer model multiplies run cost for no quality
 // gain. Always classify on the provider's cheap model (overridable via env).
 export function analysisModelFor(provider: Provider): string {
-  const override =
-    provider === "anthropic"
-      ? process.env.ANALYSIS_ANTHROPIC_MODEL
-      : process.env.ANALYSIS_OPENAI_MODEL;
+  const override = process.env[ANALYSIS_MODEL_ENV[provider]];
   if (override && override.trim()) return override.trim();
-  return provider === "anthropic" ? "claude-haiku-4-5" : "gpt-4o-mini";
+  return ANALYSIS_MODEL_DEFAULT[provider];
 }
 
 export function modelLabel(provider: Provider, modelId: string): string {

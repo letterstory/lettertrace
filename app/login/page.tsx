@@ -9,7 +9,7 @@ const bullets = [
   {
     icon: Sparkles,
     title: "Bring your own key",
-    body: "Run prompts against ChatGPT or Claude with your own API key, no middleman.",
+    body: "Run prompts against Claude, ChatGPT, or Gemini with your own API key, no middleman.",
   },
   {
     icon: Users,
