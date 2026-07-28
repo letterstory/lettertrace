@@ -44,6 +44,20 @@ describe("provider catalog", () => {
     expect(modelLabel("google", "gemini-flash-latest")).toBe("Gemini Flash");
     expect(modelLabel("google", "gemini-9-imaginary")).toBe("gemini-9-imaginary");
   });
+
+  it("keeps the google catalog on rolling aliases, never pinned versions", () => {
+    // Every pinned id this shipped with (gemini-2.5-pro/flash/flash-lite,
+    // gemini-2.0-flash, gemini-3-pro-preview) now answers 404 "no longer
+    // available to new users" on a fresh key — a pin rots silently and 404s
+    // every run for anyone onboarding after the cut-off. Only the -latest
+    // aliases and the pseudo-model belong here.
+    for (const { id } of PROVIDERS.google.models) {
+      if (id === GOOGLE_AI_OVERVIEWS_MODEL) continue;
+      expect(id).toMatch(/-latest$/);
+    }
+    // The cheap classification model has to survive the same rule.
+    expect(analysisModelFor("google")).toMatch(/-latest$/);
+  });
 });
 
 describe("analysisModelFor", () => {

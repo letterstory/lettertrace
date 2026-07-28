@@ -330,11 +330,17 @@ const GOOGLE_RETRYABLE = new Set([429, 500, 503, 504]);
 // are served by a fast Gemini model over Google Search, so we back them with
 // Flash and always ground the answer in Search.
 const AI_OVERVIEWS_BACKING_MODEL = "gemini-flash-latest";
-// Gemini 2.5 "thinking" tokens are billed as output and drawn from the same
-// budget as the visible answer, so a small maxOutputTokens can be spent on
-// thoughts, leaving an empty answer (finishReason MAX_TOKENS). On the flash
-// models we turn thinking off; on models that can't disable it (e.g. pro) we
-// give the output budget generous headroom instead.
+// Gemini "thinking" tokens are billed as output and drawn from the same budget
+// as the visible answer, so a small maxOutputTokens gets spent on thoughts and
+// the answer comes back truncated (finishReason MAX_TOKENS) — measured on
+// gemini-flash-latest, a 1200-token budget left 46 answer tokens after 1150
+// thinking tokens. Thinking can't be switched off to avoid this: every model in
+// the catalog rejects thinkingConfig.thinkingBudget: 0 with 400 INVALID_ARGUMENT
+// ("Budget 0 is invalid. This model only works in thinking mode"), so the only
+// lever is to give the budget headroom well above the answer we actually want.
+// The heaviest grounded answer measured spent 2741 tokens, 1823 of them
+// thinking, so 4096 clears it with room. Raise this if MAX_TOKENS starts
+// surfacing (googleGenerate fails the call rather than storing a partial answer).
 const GOOGLE_THINKING_HEADROOM = 4096;
 
 // A Gemini HTTP error carrying the status + google.rpc status name so
@@ -364,6 +370,7 @@ interface GoogleResponse {
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
     totalTokenCount?: number;
   };
   error?: { code?: number; message?: string; status?: string };
@@ -375,12 +382,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // never reaches the wire; every other id passes through untouched.
 function resolveGoogleModel(model: string): string {
   return model === GOOGLE_AI_OVERVIEWS_MODEL ? AI_OVERVIEWS_BACKING_MODEL : model;
-}
-
-// Flash / Flash-Lite (2.5) can fully disable thinking with thinkingBudget: 0;
-// pro and the 3.x line can't, so detect the flash family by id.
-function googleThinkingOff(realModel: string): boolean {
-  return /^gemini-2\.5-flash/.test(realModel);
 }
 
 async function googleFetch(realModel: string, apiKey: string, body: unknown): Promise<GoogleResponse> {
@@ -428,17 +429,15 @@ async function googleGenerate(
   opts: GoogleGenOpts,
 ): Promise<{ text: string; tokens: number; groundingChunks: GoogleGroundingChunk[] }> {
   const realModel = resolveGoogleModel(model);
-  const thinkingOff = googleThinkingOff(realModel);
   const generationConfig: Record<string, unknown> = {
-    maxOutputTokens: thinkingOff
-      ? opts.maxTokens
-      : Math.max(opts.maxTokens, GOOGLE_THINKING_HEADROOM),
+    maxOutputTokens: Math.max(opts.maxTokens, GOOGLE_THINKING_HEADROOM),
   };
-  // JSON response mode and Google Search grounding can't be combined on Gemini
-  // 2.5, but we never ask for both at once: utility calls are JSON without
-  // search, monitored answers are grounded free-text.
+  // JSON response mode and Google Search grounding must never be combined. Asked
+  // for both, Gemini answers 200 with usageMetadata and no `candidates` key at
+  // all — no error, no text, just a bill. We never ask for both: utility calls
+  // are JSON without search, monitored answers are grounded free-text. The guard
+  // below turns the shape into an error if that ever stops being true.
   if (opts.json) generationConfig.responseMimeType = "application/json";
-  if (thinkingOff) generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: user }] }],
@@ -455,10 +454,42 @@ async function googleGenerate(
     .map((p) => p.text as string)
     .join("")
     .trim();
+  // Thinking tokens are billed but are NOT counted in candidatesTokenCount, and
+  // on the thinking models they are routinely the largest part of a call (193 of
+  // 209 tokens on a "ping"). totalTokenCount includes them; the fallback has to
+  // add them back by hand or trial metering under-counts several-fold.
   const tokens =
     data.usageMetadata?.totalTokenCount ??
-    (data.usageMetadata?.promptTokenCount ?? 0) + (data.usageMetadata?.candidatesTokenCount ?? 0);
-  return { text, tokens, groundingChunks: cand?.groundingMetadata?.groundingChunks ?? [] };
+    (data.usageMetadata?.promptTokenCount ?? 0) +
+      (data.usageMetadata?.candidatesTokenCount ?? 0) +
+      (data.usageMetadata?.thoughtsTokenCount ?? 0);
+
+  // A 200 can still carry nothing we can measure, and every one of these shapes
+  // is silent: the call succeeds, the answer is empty or truncated, and the run
+  // stores a response that scans for zero mentions. That reads downstream as
+  // "the brand wasn't mentioned" rather than "we never got an answer", so fail
+  // the call and let the engine record the reason against the prompt.
+  if (!cand) {
+    // Observed live when JSON mode and Search grounding are combined.
+    throw new Error("Gemini returned no answer (the response contained no candidates).");
+  }
+  if (cand.finishReason === "MAX_TOKENS") {
+    // Not merely short: what comes back is the fragment that fit after thinking
+    // spent the budget, and on the flash models it is frequently mid-sentence
+    // deliberation ("…OR pick **Edgio** for") rather than the final answer. That
+    // text would be scanned for brand mentions and counted as the answer.
+    throw new Error(
+      "Gemini ran out of output budget before finishing the answer (finishReason: MAX_TOKENS).",
+    );
+  }
+  if (!text) {
+    // Safety/recitation blocks land here, as does a candidate with no text part.
+    throw new Error(
+      `Gemini returned an empty answer (finishReason: ${cand.finishReason ?? "unspecified"}).`,
+    );
+  }
+
+  return { text, tokens, groundingChunks: cand.groundingMetadata?.groundingChunks ?? [] };
 }
 
 // Chat helper matching anthropicChat / openaiChat so the utility calls branch
@@ -932,6 +963,13 @@ export function humanError(err: unknown): string {
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof Error) {
+    // The Google path caps each attempt with AbortSignal.timeout, which rejects
+    // with a TimeoutError DOMException. It IS an Error, but its message is DOM
+    // boilerplate ("The operation was aborted due to timeout") that the transient
+    // patterns below don't match, so it would reach the user raw.
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
+      return "The AI provider took too long to respond. Please try again.";
+    }
     if (/premature close|socket hang up|ECONNRESET|terminated|fetch failed/i.test(err.message)) {
       return "Couldn't reach the AI provider (connection dropped). Please try again.";
     }
