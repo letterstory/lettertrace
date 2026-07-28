@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { setActiveProject } from "@/lib/data";
+import { getConfiguredProviders, getProjects, setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { resolveRunKey, consumeTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
@@ -49,6 +49,25 @@ export async function POST(request: Request) {
   const brand_name = typeof body.brand_name === "string" ? body.brand_name.trim() : "";
   if (!brand_name) {
     return NextResponse.json({ error: "Brand name is required." }, { status: 400 });
+  }
+
+  // The first organization is free; another one needs the user's own key.
+  // Enforced here as well as in the UI: without it, a second org could be
+  // created by posting straight to this route, and its first monitor would
+  // quietly spend one of the account's free runs.
+  const [existingProjects, providers] = await Promise.all([
+    getProjects(supabase, user.id),
+    getConfiguredProviders(supabase, user.id),
+  ]);
+  if (existingProjects.length > 0 && providers.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Add your own API key before monitoring another brand. Free credits cover your first organization.",
+        needsKey: true,
+      },
+      { status: 403 },
+    );
   }
   const name =
     typeof body.name === "string" && body.name.trim() ? body.name.trim() : brand_name;

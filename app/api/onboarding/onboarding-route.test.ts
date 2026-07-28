@@ -12,7 +12,11 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 // lib/data uses React's cache(), which only exists in a server-component
 // runtime — same treatment the v1 route tests give it.
-vi.mock("@/lib/data", () => ({ setActiveProject: vi.fn() }));
+vi.mock("@/lib/data", () => ({
+  setActiveProject: vi.fn(),
+  getProjects: vi.fn(async () => []),
+  getConfiguredProviders: vi.fn(async () => []),
+}));
 vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => String(e) }));
 vi.mock("@/lib/trial", () => ({
   pickDefaultProvider: () => "anthropic",
@@ -22,6 +26,7 @@ vi.mock("@/lib/trial", () => ({
 }));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 
+const { getProjects, getConfiguredProviders } = await import("@/lib/data");
 const { POST } = await import("@/app/api/onboarding/complete/route");
 
 function req(body: unknown) {
@@ -87,5 +92,39 @@ describe("POST /api/onboarding/complete — topic validation", () => {
   it("still requires a brand name", async () => {
     const res = await POST(req({ topics: [{ name: "CDN", prompts: ["best cdn?"] }] }));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/onboarding/complete — second-organization gate", () => {
+  const good = { ...BASE, topics: [{ name: "CDN", prompts: ["best cdn?"] }] };
+
+  it("refuses a second org on the trial, before spending a free run", async () => {
+    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+    vi.mocked(getConfiguredProviders).mockResolvedValue([]);
+    const res = await POST(req(good));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.needsKey).toBe(true);
+    expect(body.error).toMatch(/own API key/);
+  });
+
+  it("allows a second org once the user has their own key", async () => {
+    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+    vi.mocked(getConfiguredProviders).mockResolvedValue(["anthropic"]);
+    // Reaching the database mock proves the gate let it through.
+    await expect(POST(req(good))).rejects.toThrow(/before touching the database/);
+  });
+
+  it("always allows the first org, key or not", async () => {
+    vi.mocked(getProjects).mockResolvedValue([]);
+    vi.mocked(getConfiguredProviders).mockResolvedValue([]);
+    await expect(POST(req(good))).rejects.toThrow(/before touching the database/);
+  });
+
+  it("gates before validating topics, so no free run is risked either way", async () => {
+    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+    vi.mocked(getConfiguredProviders).mockResolvedValue([]);
+    const res = await POST(req({ ...BASE, topics: [{ name: "", prompts: [] }] }));
+    expect(res.status).toBe(403);
   });
 });
