@@ -124,7 +124,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ### 5. First monitor
 
-1. **Settings** → add your Anthropic, OpenAI, and/or Google API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews).
+1. **Settings** → add your Anthropic, OpenAI, and/or Google API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews). Prefer a terminal? [`lettertrace keys set anthropic`](#setting-your-provider-key-from-the-cli-keys) does the same thing.
 2. **Competitors** → add the brands you want to benchmark against.
 3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
 4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.
@@ -178,6 +178,19 @@ curl https://your-app.com/api/v1/projects/<project-id>/prompts \
 curl -X POST https://your-app.com/api/v1/projects/<project-id>/prompts \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"prompts": [{"text": "best crm for startups", "topic": "CRM"}]}'
+
+# BYOK provider keys: list (masked hints + the supported-provider catalog),
+# set/rotate, remove. Verified against the provider and encrypted before storage.
+# Read the key from a file rather than inlining it — a key typed into a shell
+# command is in your history and in `ps` forever after.
+curl https://your-app.com/api/v1/keys \
+  -H "Authorization: Bearer lt_live_..."
+jq -n --arg k "$(cat ./anthropic.key)" '{api_key: $k}' | \
+  curl -X PUT https://your-app.com/api/v1/keys/anthropic \
+    -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+    --data-binary @-
+curl -X DELETE https://your-app.com/api/v1/keys/openai \
+  -H "Authorization: Bearer lt_live_..."
 
 # Toggle a prompt on or off
 curl -X PATCH https://your-app.com/api/v1/prompts/<prompt-id> \
@@ -246,6 +259,10 @@ npm run cli -- help                 # or: node cli/lettertrace.mjs help
 npm run cli -- login --url https://your-app.com   # browser sign-in / create account
 npm run cli -- whoami --json        # machine-readable auth status (no browser)
 
+# Bring your own key without opening the dashboard (see below):
+npm run cli -- keys                                  # what's stored, masked
+npm run cli -- keys set anthropic                    # hidden prompt, key verified on save
+
 # Set up an account over the API — the agent-drivable part:
 npm run cli -- projects create --name "Acme" --brand "Acme" --domains acme.io
 npm run cli -- prompts add <projectId> --text "best crm for startups" --topic CRM
@@ -262,6 +279,62 @@ resolves the deployment from `--url`, then `$LETTERTRACE_URL`, then the URL save
 at login. Tokens live in `~/.lettertrace/config.json` (one per audience). The
 data commands use REST v1; the `mcp` commands speak the Model Context Protocol
 directly. The mechanism underneath is:
+
+#### Setting your provider key from the CLI (`keys`)
+
+Adding a BYOK key no longer requires the dashboard. `keys set` verifies the key
+against the provider, encrypts it with AES-256-GCM, and stores it exactly as
+Settings does — the same code path, so nothing about the stored key differs by
+where you added it. Only the masked hint (`sk-ant-…4a9c`) ever comes back.
+
+```bash
+npm run cli -- keys                        # every supported provider, and which have a key
+npm run cli -- keys set anthropic          # prompts, input hidden and not echoed
+npm run cli -- keys set anthropic --label "team account"
+npm run cli -- keys remove openai          # forget the stored key
+```
+
+**The key is never a command-line argument.** Anything in `argv` lands in your
+shell history and is readable by every process on the machine, and there's no
+taking that back — so `--key` is rejected outright rather than quietly accepted.
+The key is read from the first of these that's available:
+
+| Source | Use it for |
+|---|---|
+| `--key-file <path>` (`-` = stdin) | a secret manager writing to a file or a pipe |
+| `$LETTERTRACE_PROVIDER_KEY` | CI, where a pipe is awkward |
+| piped stdin (`… \| lettertrace keys set anthropic`) | scripts |
+| hidden interactive prompt | a human at a terminal |
+
+```bash
+# CI
+LETTERTRACE_PROVIDER_KEY="$ANTHROPIC_KEY" npm run cli -- keys set anthropic --json
+
+# From a secret manager, without ever touching disk
+op read "op://vault/anthropic/key" | npm run cli -- keys set anthropic --key-file -
+```
+
+The provider list comes from the **server**, not the CLI, so a provider added to
+`lib/models.ts` shows up in `lettertrace keys` with no CLI change. Under the hood
+these commands call `GET /api/v1/keys`, `PUT /api/v1/keys/<provider>`
+(body `{"api_key": "…", "label": "…"}`), and `DELETE /api/v1/keys/<provider>`,
+which carry the `keys:read` / `keys:write` scopes below. Saving shows up in the
+activity feed as `provider_key.saved` on the **`cli`** channel, so a key added by
+an agent is distinguishable from one you added in the browser.
+
+Two failures are deliberately kept apart, because the fix is different:
+
+- **400** — the provider rejected the key. Yours to fix; get a new one.
+- **503** — the key is valid, but the deployment's `ENCRYPTION_KEY` is missing or
+  malformed, so nothing was stored. The operator's to fix (see
+  `openssl rand -base64 32` in [Configure environment](#3-configure-environment)).
+  You are never told to rotate a key that was fine.
+
+> Upgrading a CLI you'd already logged into? `keys:read`/`keys:write` are new
+> scopes, and a token minted before they existed can't hold them. The CLI detects
+> the resulting `insufficient_scope` challenge, discards the stale token, and
+> relaunches the browser consent by itself — you just approve once more. Re-run
+> `supabase/schema.sql` first so the `lt_cli` client is allowed to request them.
 
 ### OAuth: delegated access for CLIs and external systems
 
@@ -288,9 +361,12 @@ delivered), and the CLI exchanges the code at `/api/oauth/token` for an access
 token (+ a refresh token when `offline_access` is requested).
 
 - **Scopes** — `projects:read`, `projects:write`, `runs:read`, `runs:trigger`,
-  and `offline_access` (asks for a refresh token). Enforced on **every** REST
-  route and MCP tool, reads included; a classic `lt_live_` key implicitly holds
-  all of them, so nothing about existing keys changes.
+  `keys:read`, `keys:write`, and `offline_access` (asks for a refresh token).
+  Enforced on **every** REST route and MCP tool, reads included; a classic
+  `lt_live_` key implicitly holds all of them, so nothing about existing keys
+  changes. The `keys:*` pair is deliberately separate from `projects:write`:
+  swapping the provider key every run is billed to is a different decision from
+  adding a prompt, and the consent screen is where a user gets to make it.
 - **Audience** — pass `resource=v1` (default) or `resource=mcp`. A token is
   bound to one surface: an MCP token can't call the REST API, and vice versa.
 - **Discovery** — MCP/OAuth clients can auto-configure from
@@ -315,12 +391,41 @@ values
 
 Notes:
 
-- API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only.
+- API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only. That key can be set over the API too (`PUT /api/v1/keys/<provider>`, or `lettertrace keys set`), so an agent never has to hand the user back to the browser mid-setup.
 - Projects created via the API start with `schedule: "off"` — trigger runs explicitly (or flip the schedule in the dashboard).
 - API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
 - Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
 - OAuth tokens are scoped and audience-bound; a classic `lt_live_` API key stays full-access across all of the account's organizations. Revoke either anytime (API keys from Settings; OAuth grants via `/api/oauth/revoke`).
-- Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table and the OAuth tables (`oauth_clients`, `oauth_access_tokens`, …) plus the seeded `lt_cli` client (all safe to re-run).
+- Upgrading an existing deployment? Re-run `supabase/schema.sql` — it adds the `api_keys` table and the OAuth tables (`oauth_clients`, `oauth_access_tokens`, …) plus the seeded `lt_cli` client, and widens that client's `allowed_scopes` to include `keys:read` / `keys:write` (all safe to re-run). Without the re-run, `lettertrace keys` fails at consent with `invalid_scope`.
+
+## Tests
+
+```bash
+npm test          # unit + route tests, all mocked, no network, no keys spent
+npm run typecheck
+```
+
+Two harnesses go further than `npm test` and are deliberately excluded from it,
+because they need a live server and spend real provider tokens:
+
+```bash
+# End-to-end BYOK key management: drives the real cli/lettertrace.mjs binary
+# against a running deployment and asserts on what lands in Postgres.
+npx next dev -p 3200 &
+npx tsx scripts/harness-provider-keys.ts --url http://localhost:3200
+
+# Measurement pilot: runs a real brand through scrape → topics → prompts →
+# query → mention detection, without writing to the database.
+npx tsx scripts/pilot-client.ts cloudflare --providers google,anthropic
+```
+
+The key harness needs `SUPABASE_SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`, and
+`TRIAL_ANTHROPIC_API_KEY` in `.env.local`. It creates one throwaway user and
+deletes it in a `finally`, so a failed assertion still cleans up. What it covers
+that mocks can't: that a key entered at the CLI decrypts back byte-for-byte at
+run time, that `keys:read` can't write, that a plaintext key reaches neither
+stdout nor the activity log, and that the deployment advertises the origin it
+was actually reached on.
 
 ## Deployment
 
@@ -328,7 +433,7 @@ Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env v
 
 ## Security notes
 
-- Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to the browser (only a masked hint like `sk-ant-…4a9c`).
+- Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to any client — browser, REST, or CLI (only a masked hint like `sk-ant-…4a9c`). Whichever surface stores one, it goes through the same verify → encrypt → store path in `lib/provider-keys.ts`, and the CLI refuses to take a key as a command-line argument so it can't leak through shell history or `ps`.
 - All data is isolated per user by **Postgres Row Level Security**. The service-role key is used only by the cron endpoint and the API-key-authenticated surface (`/api/v1`, `/api/mcp`), where every query is scoped to the key's owner.
 - Lettertrace API keys are stored as **SHA-256 hashes** (never recoverable); the plaintext is shown once at creation.
 - Nothing is sent to any third party except the AI providers **you** configure, using **your** keys.
@@ -354,6 +459,7 @@ lib/
   mentions.ts            Deterministic mention detection
   metrics.ts             Visibility / share-of-voice / sentiment aggregation
   crypto.ts              AES-256-GCM for BYOK keys
+  provider-keys.ts       Verify → encrypt → store, shared by the dashboard + CLI
   data.ts, types.ts, models.ts, utils.ts
 supabase/schema.sql      Postgres schema + RLS
 ```
