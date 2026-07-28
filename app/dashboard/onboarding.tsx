@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Badge, Button, Card, CardBody, Input, Label, Spinner, Textarea } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 interface Topic {
   name: string;
@@ -32,6 +33,10 @@ export function Onboarding() {
 
   // Step 2: topics
   const [topics, setTopics] = useState<Topic[]>([]);
+  // Per-block validation, keyed by topic index. Blocks used to be dropped
+  // silently when incomplete, so a user could "start monitoring" with three
+  // topics on screen and have one saved.
+  const [issues, setIssues] = useState<Record<number, "name" | "prompts">>({});
   const [note, setNote] = useState<string | null>(null);
 
   const [busy, setBusy] = useState(false);
@@ -118,17 +123,38 @@ export function Onboarding() {
 
   // --- Step 2 -> complete + run ----------------------------------------------
   async function handleStart() {
-    const cleaned = topics
-      .map((t) => ({
-        name: t.name.trim(),
-        prompts: t.prompts.map((p) => p.trim()).filter(Boolean),
-      }))
-      .filter((t) => t.name && t.prompts.length);
+    const cleaned = topics.map((t) => ({
+      name: t.name.trim(),
+      // Blank question rows are fine — they're just unused inputs, so drop
+      // them. A block is only invalid when it has no filled question at all.
+      prompts: t.prompts.map((p) => p.trim()).filter(Boolean),
+    }));
 
     if (cleaned.length === 0) {
       setError("Add at least one topic with a question before you start.");
       return;
     }
+
+    // Flag every incomplete block rather than discarding it. Missing name is
+    // reported first so a block with neither shows the topmost problem.
+    const found: Record<number, "name" | "prompts"> = {};
+    cleaned.forEach((t, i) => {
+      if (!t.name) found[i] = "name";
+      else if (t.prompts.length === 0) found[i] = "prompts";
+    });
+
+    if (Object.keys(found).length > 0) {
+      setIssues(found);
+      const n = Object.keys(found).length;
+      setError(
+        n === 1
+          ? "One topic is incomplete. Every topic needs a name and at least one question."
+          : `${n} topics are incomplete. Every topic needs a name and at least one question.`,
+      );
+      return;
+    }
+
+    setIssues({});
     setError(null);
     setBusy(true);
     setStep("searching");
@@ -265,9 +291,16 @@ export function Onboarding() {
                   <div className="flex items-center gap-2">
                     <Input
                       value={topic.name}
-                      onChange={(e) => setTopicName(ti, e.target.value)}
+                      onChange={(e) => {
+                        setTopicName(ti, e.target.value);
+                        if (issues[ti]) setIssues((m) => ({ ...m, [ti]: undefined! }));
+                      }}
                       placeholder="Topic (e.g. project management software)"
-                      className="font-medium"
+                      aria-invalid={issues[ti] === "name" || undefined}
+                      className={cn(
+                        "font-medium",
+                        issues[ti] === "name" && "border-terracotta focus:border-terracotta",
+                      )}
                     />
                     <button
                       type="button"
@@ -286,9 +319,16 @@ export function Onboarding() {
                         </span>
                         <Input
                           value={prompt}
-                          onChange={(e) => setPrompt(ti, pi, e.target.value)}
+                          onChange={(e) => {
+                            setPrompt(ti, pi, e.target.value);
+                            if (issues[ti]) setIssues((m) => ({ ...m, [ti]: undefined! }));
+                          }}
                           placeholder="A question someone asks an AI assistant"
-                          className="text-sm"
+                          aria-invalid={issues[ti] === "prompts" || undefined}
+                          className={cn(
+                            "text-sm",
+                            issues[ti] === "prompts" && "border-terracotta focus:border-terracotta",
+                          )}
                         />
                         <button
                           type="button"
@@ -309,6 +349,13 @@ export function Onboarding() {
                       Add question
                     </button>
                   </div>
+                  {issues[ti] && (
+                    <p className="text-sm text-terracotta-dark">
+                      {issues[ti] === "name"
+                        ? "Give this topic a name, or remove it."
+                        : "Add at least one question, or remove this topic."}
+                    </p>
+                  )}
                 </CardBody>
               </Card>
             ))}
