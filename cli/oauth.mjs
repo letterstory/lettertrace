@@ -66,13 +66,50 @@ function storeCredential(base, resource, tokens) {
 }
 
 /**
+ * Probe whether the server accepts a given loopback redirect URI, WITHOUT
+ * completing a login. The redirect URI is validated before PKCE, so a request
+ * that omits code_challenge either 302-redirects (redirect accepted) or 400s
+ * ("redirect URI is not registered"), and creates no pending request either way.
+ */
+async function redirectRejected(base, redirectUri) {
+  try {
+    const u = new URL(`${base}/api/oauth/authorize`);
+    u.searchParams.set("response_type", "code");
+    u.searchParams.set("client_id", CLIENT_ID);
+    u.searchParams.set("redirect_uri", redirectUri);
+    const res = await fetch(u, { redirect: "manual" });
+    return res.status === 400;
+  } catch {
+    return false; // a network hiccup shouldn't block login; assume acceptable
+  }
+}
+
+/**
+ * Choose the loopback family the server actually accepts. Prefers 127.0.0.1 and
+ * falls back to [::1] when the server rejects the IPv4 form, so the CLI works
+ * whether the deployment registers/accepts one loopback or the other. --ipv6
+ * forces [::1] and skips the probe.
+ */
+async function pickLoopback(base, ipv6) {
+  const ipv4 = { host: "127.0.0.1", fmt: (p) => `http://127.0.0.1:${p}/callback` };
+  const ip6 = { host: "::1", fmt: (p) => `http://[::1]:${p}/callback` };
+  if (ipv6) return ip6;
+  if ((await redirectRejected(base, ipv4.fmt(1))) && !(await redirectRejected(base, ip6.fmt(1)))) {
+    process.stderr.write(
+      "Note: the server rejected the 127.0.0.1 redirect; using the IPv6 loopback [::1].\n",
+    );
+    return ip6;
+  }
+  return ipv4;
+}
+
+/**
  * Run the full loopback Authorization Code + PKCE flow and store the tokens.
- * Uses the IPv4 loopback (127.0.0.1) by default; pass { ipv6: true } to use the
- * IPv6 loopback ([::1]) instead, which some deployments register/accept while a
- * stale build may reject 127.0.0.1.
+ * The loopback family (127.0.0.1 vs [::1]) is auto-detected against the server;
+ * pass { ipv6: true } to force [::1].
  */
 export async function login(base, resource = "v1", { scope = DEFAULT_SCOPE, ipv6 = false } = {}) {
-  const host = ipv6 ? "::1" : "127.0.0.1";
+  const loop = await pickLoopback(base, ipv6);
   const codeVerifier = b64url(crypto.randomBytes(48));
   const codeChallenge = b64url(crypto.createHash("sha256").update(codeVerifier).digest());
   const state = b64url(crypto.randomBytes(16));
@@ -115,11 +152,9 @@ export async function login(base, resource = "v1", { scope = DEFAULT_SCOPE, ipv6
     });
 
     server.on("error", reject);
-    server.listen(0, host, () => {
+    server.listen(0, loop.host, () => {
       const port = server.address().port;
-      redirectUri = ipv6
-        ? `http://[::1]:${port}/callback`
-        : `http://127.0.0.1:${port}/callback`;
+      redirectUri = loop.fmt(port);
       const authorize = new URL(`${base}/api/oauth/authorize`);
       authorize.searchParams.set("response_type", "code");
       authorize.searchParams.set("client_id", CLIENT_ID);
