@@ -405,9 +405,32 @@ export default async function DashboardPage() {
             <p className="mt-0.5 text-sm text-ink-faint">
               You vs. tracked competitors in the latest run.
             </p>
-            <div className="mt-4">
-              <ShareBars data={shareBarData} />
-            </div>
+            {/* Mention detection only looks for the brand and the competitors
+                this project tracks, so with none configured the chart can
+                never populate no matter what the answers said. "No share of
+                voice yet" gave no hint of that — say which of the two is
+                actually the problem. */}
+            {competitors === 0 ? (
+              <div className="mt-4 rounded-2xl border border-dashed border-ink/15 px-5 py-8 text-center">
+                <p className="text-sm text-ink-soft">
+                  No competitors tracked yet, so there is nothing to compare against.
+                </p>
+                <p className="mt-1 text-sm text-ink-faint">
+                  We only look for brands you list — companies named in an answer are
+                  invisible until you add them.
+                </p>
+                <Link
+                  href="/dashboard/competitors"
+                  className="mt-3 inline-block text-sm font-medium text-terracotta-dark transition hover:text-terracotta"
+                >
+                  Add competitors →
+                </Link>
+              </div>
+            ) : (
+              <div className="mt-4">
+                <ShareBars data={shareBarData} />
+              </div>
+            )}
             <ul className="mt-4 space-y-2">
               {shareEntities.map((s, i) => (
                 <li

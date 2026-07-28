@@ -40,13 +40,13 @@ export const metadata: Metadata = {
     url: siteUrl,
     siteName: "Lettertrace",
     type: "website",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Lettertrace" }],
+    images: [{ url: "/ogImage.png", width: 1200, height: 630, alt: "Lettertrace" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Lettertrace: Monitor how AI talks about your brand",
     description: "Open-source, BYOK monitoring of how AI answers describe your brand.",
-    images: ["/og.png"],
+    images: ["/ogImage.png"],
   },
   icons: {
     icon: "/icon.png",
