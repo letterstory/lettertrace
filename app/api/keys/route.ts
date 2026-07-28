@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { isProvider } from "@/lib/models";
-import { verifyKey, humanError } from "@/lib/llm";
-import { ConfigurationError, encryptSecret, keyHint } from "@/lib/crypto";
+import { setProviderKey } from "@/lib/provider-keys";
 import { logDashboard } from "@/lib/activity";
 
+// Dashboard (cookie-session) path for saving a BYOK provider key. The verify →
+// encrypt → store sequence lives in lib/provider-keys so this route and the
+// CLI-facing /api/v1/keys route cannot drift apart on the part that matters.
 export async function POST(request: Request) {
   const supabase = createClient();
   const {
@@ -27,72 +28,24 @@ export async function POST(request: Request) {
     label?: unknown;
   };
 
-  if (typeof provider !== "string" || !isProvider(provider)) {
-    return NextResponse.json({ error: "Unknown provider" }, { status: 400 });
+  const outcome = await setProviderKey(supabase, user.id, { provider, apiKey, label });
+  if (!outcome.ok) {
+    // `misconfigured` is the deployment's fault, not the user's, so it must not
+    // land on the key field as validation feedback — 503, and the message says
+    // the key itself was fine.
+    const status =
+      outcome.code === "misconfigured" ? 503 : outcome.code === "failed" ? 500 : 400;
+    return NextResponse.json({ error: outcome.message }, { status });
   }
-  if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
-    return NextResponse.json({ error: "An API key is required" }, { status: 400 });
-  }
 
-  const key = apiKey.trim();
-  const cleanLabel =
-    typeof label === "string" && label.trim().length > 0 ? label.trim() : null;
+  await logDashboard(user, request, {
+    category: "provider_key",
+    action: "provider_key.saved",
+    summary: `Saved a ${outcome.key.provider} provider key (${outcome.key.key_hint})`,
+    targetType: "provider_key",
+    targetId: outcome.key.id,
+    metadata: { provider: outcome.key.provider, key_hint: outcome.key.key_hint },
+  });
 
-  try {
-    const v = await verifyKey(provider, key);
-    if (!v.ok) {
-      return NextResponse.json(
-        { error: v.error || "Key verification failed" },
-        { status: 400 },
-      );
-    }
-
-    const encrypted_key = encryptSecret(key);
-    const key_hint = keyHint(key);
-
-    const { data, error } = await supabase
-      .from("provider_keys")
-      .upsert(
-        {
-          user_id: user.id,
-          provider,
-          label: cleanLabel,
-          encrypted_key,
-          key_hint,
-        },
-        { onConflict: "user_id,provider" },
-      )
-      .select("id, provider, label, key_hint, created_at")
-      .single();
-
-    if (error) {
-      return NextResponse.json({ error: humanError(error) }, { status: 500 });
-    }
-
-    await logDashboard(user, request, {
-      category: "provider_key",
-      action: "provider_key.saved",
-      summary: `Saved a ${provider} provider key (${key_hint})`,
-      targetType: "provider_key",
-      targetId: (data as { id: string }).id,
-      metadata: { provider, key_hint },
-    });
-
-    return NextResponse.json(data);
-  } catch (e) {
-    // The key was already verified against the provider above, so a failure
-    // here is ours, not theirs. Say so plainly instead of rendering a server
-    // misconfiguration as validation feedback on the field they just filled in.
-    if (e instanceof ConfigurationError) {
-      console.error("[keys] deployment misconfigured:", e.message);
-      return NextResponse.json(
-        {
-          error:
-            "Your key is valid, but this deployment can't store it yet: the server is missing a working ENCRYPTION_KEY. Nothing was saved. Contact whoever operates this instance.",
-        },
-        { status: 503 },
-      );
-    }
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
-  }
+  return NextResponse.json(outcome.key);
 }

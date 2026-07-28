@@ -22,6 +22,8 @@ export const FULL_SCOPES = [
   "projects:write",
   "runs:read",
   "runs:trigger",
+  "keys:read",
+  "keys:write",
 ] as const;
 
 export type Scope = (typeof FULL_SCOPES)[number];

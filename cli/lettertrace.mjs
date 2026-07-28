@@ -16,6 +16,7 @@ import { resolveBase, loadConfig } from "./config.mjs";
 import { login, logout, getAccessToken, revoke, NeedsLogin } from "./oauth.mjs";
 import { rest, ApiError } from "./http.mjs";
 import { listTools, callTool, renderToolResult } from "./mcp.mjs";
+import { readSecret, SecretInputError, SECRET_ENV } from "./secret.mjs";
 import { c, printJson, table, kv, ok, info, fail } from "./output.mjs";
 
 // --- arg parsing ----------------------------------------------------
@@ -91,7 +92,7 @@ async function withAutoLogin(fn) {
     return await fn();
   } catch (e) {
     if (e instanceof NeedsLogin) {
-      info(c.yellow(`Not authenticated for "${e.resource}". Launching login...`));
+      info(c.yellow(`${e.detail ?? `Not authenticated for "${e.resource}".`} Launching login...`));
       await login(base, e.resource, { ipv6: IPV6 });
       return await fn();
     }
@@ -149,6 +150,86 @@ const commands = {
       { key: "expires_at", label: "ACCESS EXPIRES", map: (v) => rel(v) },
       { key: "refresh_token", label: "REFRESH", map: (v) => (v ? "yes" : "no") },
     ]);
+  },
+
+  // BYOK provider keys. The secret itself never travels through argv (see
+  // cli/secret.mjs); this command only ever handles the masked hint the server
+  // returns. The provider list comes from the server too, so a provider added
+  // to the deployment's catalog works here with no new CLI release.
+  async keys() {
+    const sub = rest_[0] ?? "list";
+
+    // A key passed as a flag is already burned — it is in the shell history and
+    // was visible in `ps` the moment the process started. Refuse loudly rather
+    // than ignoring the flag and letting the user believe it went nowhere.
+    for (const banned of ["key", "api-key", "apikey", "secret"]) {
+      if (flags[banned] !== undefined) {
+        throw new UsageError(
+          `--${banned} is not accepted: a key on the command line leaks into shell history and process lists. ` +
+            `Pipe it in, set $${SECRET_ENV}, or use --key-file <path>. Rotate that key.`,
+        );
+      }
+    }
+
+    if (sub === "set") {
+      const provider = need(rest_[1], "keys set needs a <provider> (see `lettertrace keys`)");
+      // Authenticate and fetch the catalog BEFORE asking for the secret. That
+      // gets any browser consent out of the way while the terminal is still
+      // free, and it rejects a mistyped provider before the user has pasted a
+      // key we would only throw away.
+      const current = await withAutoLogin(() => rest(base, "GET", "/keys"));
+      const supported = current.providers ?? [];
+      const match = supported.find((p) => p.id === provider);
+      if (!match) {
+        throw new UsageError(
+          `Unknown provider "${provider}". This deployment supports: ${supported.map((p) => p.id).join(", ") || "(none)"}.`,
+        );
+      }
+
+      const apiKey = await readSecret({
+        file: typeof flags["key-file"] === "string" ? flags["key-file"] : undefined,
+        label: `${match.label} key (input hidden): `,
+      });
+      const body = { api_key: apiKey };
+      if (typeof flags.label === "string") body.label = flags.label;
+
+      info(c.dim(`Verifying the key against ${match.label}...`));
+      const out = await withAutoLogin(() => rest(base, "PUT", `/keys/${provider}`, { body }));
+      if (JSON_OUT) return printJson(out);
+      ok(`Verified and stored your ${match.label} key (${out.key.key_hint}).`);
+      return;
+    }
+
+    if (sub === "remove" || sub === "rm") {
+      const provider = need(rest_[1], "keys remove needs a <provider>");
+      const out = await withAutoLogin(() => rest(base, "DELETE", `/keys/${provider}`));
+      if (JSON_OUT) return printJson(out);
+      ok(`Removed the ${provider} key (${out.key.key_hint}).`);
+      return;
+    }
+
+    // list: one row per supported provider, set or not, so this doubles as the
+    // answer to "what can I configure here?".
+    const out = await withAutoLogin(() => rest(base, "GET", "/keys"));
+    if (JSON_OUT) return printJson(out);
+    const stored = new Map((out.keys ?? []).map((k) => [k.provider, k]));
+    table(
+      (out.providers ?? []).map((p) => ({
+        provider: p.id,
+        name: p.label,
+        key: stored.get(p.id)?.key_hint ?? c.dim("not set"),
+        added: stored.get(p.id)?.created_at ?? "",
+        where: p.key_url,
+      })),
+      [
+        { key: "provider", label: "PROVIDER" },
+        { key: "name", label: "NAME" },
+        { key: "key", label: "STORED KEY" },
+        { key: "added", label: "ADDED" },
+        { key: "where", label: "GET A KEY" },
+      ],
+    );
+    info(c.dim("\nSet one with: lettertrace keys set <provider>  (the key is never typed as an argument)"));
   },
 
   async projects() {
@@ -397,6 +478,14 @@ function printHelp() {
     "  logout                                 Forget and revoke stored tokens",
     "  whoami                                 Show stored credentials",
     "",
+    c.bold("PROVIDER KEYS (BYOK)"),
+    "  keys                                   Which AI provider keys are stored (masked)",
+    "  keys set <provider> [--key-file <p>] [--label <l>]",
+    "                                         Verify + store a key. The key is read from",
+    `                                         --key-file (- = stdin), $${SECRET_ENV},`,
+    "                                         piped stdin, or a hidden prompt — never a flag.",
+    "  keys remove <provider>                 Forget the stored key for a provider",
+    "",
     c.bold("DATA (REST v1)"),
     "  projects                               List organizations",
     "  projects create --name <n> --brand <b> [--domains a,b] [--description <d>]",
@@ -438,7 +527,7 @@ async function main() {
 }
 
 main().catch((e) => {
-  if (e instanceof UsageError) {
+  if (e instanceof UsageError || e instanceof SecretInputError) {
     fail(e.message);
   } else if (e instanceof ApiError) {
     fail(`API error ${e.status}: ${e.message}`);

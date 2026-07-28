@@ -34,21 +34,29 @@ function isLoopback(url: string): boolean {
 }
 
 /**
- * The absolute base to build post-auth redirects on.
+ * The absolute base to build post-auth redirects and OAuth `iss` stamps on.
  *
  * Prefers the configured site URL, because behind a proxy the origin parsed off
  * the request can be the internal deployment host rather than the public
- * domain. Two cases fall back to the request origin instead:
+ * domain. It falls back to the request origin when the configured value is
+ * unset or unparseable — and, more importantly, whenever it points at loopback.
  *
- *   - the configured value is unset or unparseable
- *   - it points at loopback while the request didn't
+ * A loopback value can never be the deployment's public identity, so it tells
+ * us nothing the request origin doesn't already say. When the two disagree it
+ * does active harm, in two ways we have both actually shipped:
  *
- * That second case is a real outage we shipped: NEXT_PUBLIC_SITE_URL was left
- * at http://localhost:3000 in production, so every OAuth sign-in exchanged its
- * code correctly, set cookies on the real domain, and then redirected the user
- * to their own machine — where those cookies don't exist. It presents as
- * "signing in silently dumps me back on the login page" with no error anywhere,
- * and a deploy should simply not be able to do it.
+ *   - NEXT_PUBLIC_SITE_URL left at http://localhost:3000 in production. Every
+ *     OAuth sign-in exchanged its code, set cookies on the real domain, and
+ *     then redirected the user to their own machine, where those cookies don't
+ *     exist. It presents as "signing in silently dumps me back on the login
+ *     page", with no error anywhere.
+ *   - The same value against a dev server on any other port. The port is part
+ *     of the origin, so a server on :3100 stamped `iss: http://localhost:3000`
+ *     and every CLI login died on "Issuer mismatch" (RFC 9207 requires the
+ *     client to reject exactly that).
+ *
+ * Hence: loopback never overrides the origin. A deploy, or a second dev server,
+ * should simply not be able to do either of those.
  */
 export function resolveRedirectBase(
   configured: string | null | undefined,
@@ -61,7 +69,9 @@ export function resolveRedirectBase(
   } catch {
     return origin; // malformed env var shouldn't break sign-in
   }
-  if (isLoopback(value) && !isLoopback(origin)) return origin;
+  // `origin` is empty only when the request URL itself was unparseable; in that
+  // case even a loopback configured value beats returning nothing.
+  if (isLoopback(value) && origin) return origin;
   return value;
 }
 
