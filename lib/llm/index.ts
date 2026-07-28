@@ -664,6 +664,11 @@ const PERPLEXITY_RETRYABLE = new Set([429, 500, 502, 503, 504]);
 // key starts on a low usage tier, so 429s are a first-run experience, not an
 // edge case.
 const PERPLEXITY_MAX_RETRY_WAIT_MS = 45_000;
+// Perplexity rejects anything smaller with 400 "max_tokens must be at least 16"
+// — measured. The other adapters happily take a 4-8 token probe, so the tiny
+// verifyKey budget copied from them made a VALID key look broken. Clamped here
+// rather than at the call sites so no future caller can reintroduce it.
+const PERPLEXITY_MIN_MAX_TOKENS = 16;
 const PERPLEXITY_RETRY_BUDGET_MS = 90_000;
 
 export class PerplexityAPIError extends Error {
@@ -808,7 +813,7 @@ async function perplexityGenerate(
   const data = await perplexityFetch(apiKey, {
     model,
     messages,
-    max_tokens: opts.maxTokens,
+    max_tokens: Math.max(opts.maxTokens, PERPLEXITY_MIN_MAX_TOKENS),
     // Perplexity searches by default; the utility calls (JSON classification,
     // topic suggestion) must not, both because searching is pure cost there and
     // because a search result could contaminate a judgment about text we gave it.

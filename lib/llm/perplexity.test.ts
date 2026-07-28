@@ -132,6 +132,16 @@ describe("perplexity runQuery — request shape", () => {
     expect(sentBody().disable_search).toBe(true);
   });
 
+  // Measured: Perplexity 400s on anything below 16 with "max_tokens must be at
+  // least 16". verifyKey's probe budget was copied from the Google adapter (8),
+  // which made a perfectly valid key report as invalid — the failure mode this
+  // whole codebase tries hardest to avoid.
+  it("never requests fewer than the 16 tokens Perplexity requires", async () => {
+    mockFetch(jsonResponse(ok("pong")));
+    await verifyKey("perplexity", KEY);
+    expect(sentBody().max_tokens).toBeGreaterThanOrEqual(16);
+  });
+
   it("bounds each attempt with an abort signal so a call can't hang", async () => {
     mockFetch(jsonResponse(ok("hi")));
     await runQuery({ provider: "perplexity", model: "sonar", apiKey: KEY, prompt: "q" });
