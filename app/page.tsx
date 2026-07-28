@@ -355,9 +355,30 @@ export default function LandingPage() {
               Open-source monitoring for how your brand shows up in AI assistant answers.
             </p>
           </div>
-          <FooterCol title="Product" links={["How it works", "Features", "Open source"]} />
-          <FooterCol title="Open source" links={["GitHub", "MIT License", "Self-host guide"]} />
-          <FooterCol title="Company" links={["The Letter Company", "Privacy", "Contact"]} />
+          <FooterCol
+            title="Product"
+            links={[
+              { label: "How it works", href: "#how" },
+              { label: "Features", href: "#features" },
+              { label: "Open source", href: "#open-source" },
+            ]}
+          />
+          <FooterCol
+            title="Open source"
+            links={[
+              { label: "GitHub", href: GITHUB_URL },
+              { label: "MIT License", href: `${GITHUB_URL}/blob/main/LICENSE` },
+              { label: "Self-host guide", href: `${GITHUB_URL}#getting-started` },
+            ]}
+          />
+          <FooterCol
+            title="Company"
+            links={[
+              { label: "Privacy Policy", href: "/privacy" },
+              { label: "Terms of Service", href: "/terms" },
+              { label: "Contact", href: "mailto:support@letterbrace.com" },
+            ]}
+          />
         </div>
         <div className="border-t border-ink/10">
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-5 py-5 text-xs text-ink-faint">
@@ -415,15 +436,21 @@ function OSPoint({ icon: Icon, children }: { icon: typeof ShieldCheck; children:
   );
 }
 
-function FooterCol({ title, links }: { title: string; links: string[] }) {
+function FooterCol({
+  title,
+  links,
+}: {
+  title: string;
+  links: { label: string; href: string }[];
+}) {
   return (
     <div>
       <p className="text-sm font-semibold text-ink">{title}</p>
       <ul className="mt-3 space-y-2">
         {links.map((l) => (
-          <li key={l}>
-            <Link href={GITHUB_URL} className="text-sm text-ink-faint transition hover:text-ink">
-              {l}
+          <li key={l.label}>
+            <Link href={l.href} className="text-sm text-ink-faint transition hover:text-ink">
+              {l.label}
             </Link>
           </li>
         ))}
