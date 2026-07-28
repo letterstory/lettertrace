@@ -85,16 +85,23 @@ export function unknownProviderMessage(): string {
 
 const SUMMARY_COLUMNS = "id, provider, label, key_hint, created_at";
 
-/** The caller's stored keys, hints only. */
+/** The caller's stored keys, hints only.
+ *
+ *  Throws rather than returning [] on a query error. An empty list is a
+ *  meaningful answer here — "you have no keys stored" — so quietly returning it
+ *  for a failed read tells the user something false about their own account,
+ *  and the caller has no way to tell the two apart. Both routes turn a throw
+ *  into a 500. */
 export async function listProviderKeys(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<ProviderKeySummary[]> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("provider_keys")
     .select(SUMMARY_COLUMNS)
     .eq("user_id", userId)
     .order("provider");
+  if (error) throw error;
   return (data as ProviderKeySummary[] | null) ?? [];
 }
 
@@ -173,18 +180,25 @@ export async function setProviderKey(
  * or null when there was nothing stored — the caller can then answer 404 rather
  * than reporting a no-op as a successful removal, which would let a typo'd
  * provider read as "removed".
+ *
+ * A query error throws instead of collapsing into that same null. This is a
+ * revocation path: telling someone "no key is stored" when the delete actually
+ * failed leaves them believing a live credential is gone. Of the two ways to be
+ * wrong about a secret, that is the dangerous one, so a failure has to surface
+ * as a 500 the caller can retry.
  */
 export async function removeProviderKey(
   supabase: SupabaseClient,
   userId: string,
   provider: Provider,
 ): Promise<ProviderKeySummary | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("provider_keys")
     .delete()
     .eq("user_id", userId)
     .eq("provider", provider)
     .select(SUMMARY_COLUMNS)
     .maybeSingle();
+  if (error) throw error;
   return (data as ProviderKeySummary | null) ?? null;
 }

@@ -240,4 +240,21 @@ describe("listProviderKeys / removeProviderKey", () => {
     const db = stubClient({ data: null });
     await expect(removeProviderKey(db.supabase, "user-1", "openai")).resolves.toBeNull();
   });
+
+  // Both of these used to swallow the error and collapse into the same value
+  // the "nothing there" case returns, which made a failed query indistinguishable
+  // from a true answer about the account.
+  it("throws on a failed read instead of claiming the account has no keys", async () => {
+    const db = stubClient({ data: null, error: new Error("connection reset") });
+    await expect(listProviderKeys(db.supabase, "user-1")).rejects.toThrow("connection reset");
+  });
+
+  // The dangerous direction: a delete that failed must never be reported as
+  // "no key is stored", which reads as "already revoked" for a live credential.
+  it("throws on a failed delete rather than reporting nothing was stored", async () => {
+    const db = stubClient({ data: null, error: new Error("connection reset") });
+    await expect(removeProviderKey(db.supabase, "user-1", "anthropic")).rejects.toThrow(
+      "connection reset",
+    );
+  });
 });
