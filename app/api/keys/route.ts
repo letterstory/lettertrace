@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isProvider } from "@/lib/models";
 import { verifyKey, humanError } from "@/lib/llm";
-import { encryptSecret, keyHint } from "@/lib/crypto";
+import { ConfigurationError, encryptSecret, keyHint } from "@/lib/crypto";
 
 export async function POST(request: Request) {
   const supabase = createClient();
@@ -70,6 +70,19 @@ export async function POST(request: Request) {
 
     return NextResponse.json(data);
   } catch (e) {
+    // The key was already verified against the provider above, so a failure
+    // here is ours, not theirs. Say so plainly instead of rendering a server
+    // misconfiguration as validation feedback on the field they just filled in.
+    if (e instanceof ConfigurationError) {
+      console.error("[keys] deployment misconfigured:", e.message);
+      return NextResponse.json(
+        {
+          error:
+            "Your key is valid, but this deployment can't store it yet: the server is missing a working ENCRYPTION_KEY. Nothing was saved. Contact whoever operates this instance.",
+        },
+        { status: 503 },
+      );
+    }
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
   }
 }
