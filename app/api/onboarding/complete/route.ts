@@ -3,7 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 import { getConfiguredProviders, getProjects, setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
-import { resolveRunKey, consumeTrialRun, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
+import {
+  resolveRunKey,
+  consumeTrialRun,
+  recordTrialUsage,
+  pickDefaultProvider,
+  engineKeyMessage,
+} from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
 import { logDashboard } from "@/lib/activity";
 import type { Project } from "@/lib/types";
@@ -111,7 +117,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const provider = pickDefaultProvider();
+  // Start the project on an engine this user can actually run. Runs no longer
+  // substitute another provider's key, so defaulting purely on the operator's
+  // trial config would hand a BYOK user a project whose first monitor can't
+  // execute — with a perfectly good key sitting in Settings. Their own key wins
+  // over the trial; the env default applies only when they have none.
+  const envDefault = pickDefaultProvider();
+  const provider =
+    providers.length === 0 || providers.includes(envDefault) ? envDefault : providers[0];
   const model = defaultModelFor(provider);
 
   const { data: projRow, error: projErr } = await supabase
@@ -175,7 +188,10 @@ export async function POST(request: Request) {
     return NextResponse.json({
       projectId: project.id,
       ran: false,
-      needsKey: key.source === "exhausted" ? "exhausted" : "none",
+      // 'mismatch' = they have a key, just not for the engine this project was
+      // created with, so the message points at the engine rather than at signup.
+      needsKey: key.source === "own" || key.source === "trial" ? "none" : key.source,
+      keyMessage: engineKeyMessage(key),
     });
   }
 

@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { generateVariations, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveRunKey, recordTrialUsage } from "@/lib/trial";
+import { resolveKey, recordTrialUsage } from "@/lib/trial";
 import { logDashboard } from "@/lib/activity";
 import type { Topic } from "@/lib/types";
 
@@ -49,7 +49,10 @@ export async function POST(
   count = Math.max(1, Math.min(20, count));
 
   const providerLabel = PROVIDERS[project.default_provider].label;
-  const key = await resolveRunKey(supabase, user.id, project);
+  // Lenient resolution on purpose: generated prompts are drafts the user edits,
+  // not measurements, so any key they hold will do. Runs are the opposite —
+  // see resolveRunKey.
+  const key = await resolveKey(supabase, user.id, project.default_provider, project.default_model);
 
   if (key.source === "none") {
     return NextResponse.json(

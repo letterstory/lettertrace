@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { Button, Input, Textarea, Select, Label, Spinner } from "@/components/ui";
-import { PROVIDER_LIST } from "@/lib/models";
-import type { Project, Schedule } from "@/lib/types";
+import { PROVIDER_LIST, PROVIDERS } from "@/lib/models";
+import type { Project, Provider, Schedule } from "@/lib/types";
 
 const SCHEDULE_LABELS: Record<Schedule, string> = {
   off: "Manual only",
@@ -24,7 +24,15 @@ function splitEngine(value: string): { provider: string; model: string } {
     : { provider: value.slice(0, sep), model: value.slice(sep + 1) };
 }
 
-export default function ProjectForm({ project }: { project: Project | null }) {
+export default function ProjectForm({
+  project,
+  configuredProviders = [],
+}: {
+  project: Project | null;
+  /** Providers the user has a key for, so the picker can flag an engine that
+   *  can't run before they discover it as a failed run. */
+  configuredProviders?: Provider[];
+}) {
   const router = useRouter();
 
   const [name, setName] = useState(project?.name ?? "");
@@ -45,6 +53,12 @@ export default function ProjectForm({ project }: { project: Project | null }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Reflects the CURRENT dropdown value, not the saved project, so the warning
+  // appears while they're choosing rather than after the next failed run.
+  const selectedProvider = splitEngine(engine).provider as Provider;
+  const engineNeedsKey =
+    Boolean(PROVIDERS[selectedProvider]) && !configuredProviders.includes(selectedProvider);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -192,11 +206,19 @@ export default function ProjectForm({ project }: { project: Project | null }) {
             </optgroup>
           ))}
         </Select>
-        <p className="mt-1.5 text-xs text-ink-faint">
-          Which assistant we query for this brand. You&apos;ll need a key for the
-          matching provider in the section above. Google AI Overviews and Gemini both
-          use your Google key.
-        </p>
+        {engineNeedsKey ? (
+          <p className="mt-1.5 text-xs text-terracotta">
+            No {PROVIDERS[selectedProvider].label} key saved, so runs on this engine
+            will fail. Add one in the section above, or pick an engine you have a key
+            for. We never answer with a different assistant than the one selected.
+          </p>
+        ) : (
+          <p className="mt-1.5 text-xs text-ink-faint">
+            Which assistant we query for this brand. You&apos;ll need a key for the
+            matching provider in the section above. Google AI Overviews and Gemini both
+            use your Google key.
+          </p>
+        )}
       </div>
 
       <div>

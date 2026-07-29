@@ -21,7 +21,7 @@ import {
   type TopicStat,
 } from "@/lib/metrics";
 import { executeRun, type RunContext, type RunResult } from "@/lib/engine";
-import { pickDefaultProvider, resolveKey, resolveRunKey } from "@/lib/trial";
+import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { defaultModelFor, isProvider, PROVIDERS } from "@/lib/models";
 
 // Operations behind the programmatic surface, shared by the REST v1 routes and
@@ -620,24 +620,24 @@ export async function triggerRunForProject(
   }
 
   // A caller-sent provider/model overrides the project default for this run
-  // only (the project row is untouched); key resolution still prefers the
-  // requested provider and falls back like the dashboard does.
-  const key =
-    options?.provider || options?.model
-      ? await resolveKey(
-          supabase,
-          userId,
-          options.provider ?? project.default_provider,
-          options.model,
-        )
-      : await resolveRunKey(supabase, userId, project);
+  // only (the project row is untouched). Resolution is strict either way: an
+  // API caller that asks for gpt-4o and gets Claude back has no way to notice,
+  // and the run row would claim the engine it was actually given.
+  const key = await resolveRunKeyFor(
+    supabase,
+    userId,
+    options?.provider ?? project.default_provider,
+    options?.model ?? (options?.provider ? undefined : project.default_model),
+  );
   if (key.source !== "own") {
-    const providerLabel =
-      PROVIDERS[options?.provider ?? project.default_provider].label;
+    const providerLabel = PROVIDERS[key.requested.provider].label;
     return {
       ok: false,
       code: "no_key",
-      message: `API-triggered runs require your own ${providerLabel} key. Add one in Settings (free-trial runs are dashboard-only).`,
+      message:
+        key.source === "mismatch"
+          ? `${engineKeyMessage(key)} (API-triggered runs are BYOK; free-trial runs are dashboard-only.)`
+          : `API-triggered runs require your own ${providerLabel} key. Add one in Settings (free-trial runs are dashboard-only).`,
     };
   }
 

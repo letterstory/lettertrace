@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { suggestCompetitors, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveRunKey, recordTrialUsage } from "@/lib/trial";
+import { resolveKey, recordTrialUsage } from "@/lib/trial";
 import { logDashboard } from "@/lib/activity";
 import type { Competitor, Topic } from "@/lib/types";
 
@@ -33,7 +33,10 @@ export async function POST(request: Request) {
   const topics = ((topicRows ?? []) as Topic[]).map((t) => t.name);
 
   const providerLabel = PROVIDERS[project.default_provider].label;
-  const key = await resolveRunKey(supabase, user.id, project);
+  // Lenient resolution on purpose: suggesting competitor names is a helper the
+  // user edits before anything is saved, so any key they hold will do. Runs are
+  // the opposite — see resolveRunKey.
+  const key = await resolveKey(supabase, user.id, project.default_provider, project.default_model);
 
   if (key.source === "none") {
     return NextResponse.json(
