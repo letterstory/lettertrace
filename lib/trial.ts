@@ -24,12 +24,14 @@ const TRIAL_KEY_ENV: Record<Provider, string> = {
   anthropic: "TRIAL_ANTHROPIC_API_KEY",
   openai: "TRIAL_OPENAI_API_KEY",
   google: "TRIAL_GOOGLE_API_KEY",
+  perplexity: "TRIAL_PERPLEXITY_API_KEY",
 };
 
 const TRIAL_MODEL_ENV: Record<Provider, string> = {
   anthropic: "TRIAL_ANTHROPIC_MODEL",
   openai: "TRIAL_OPENAI_MODEL",
   google: "TRIAL_GOOGLE_MODEL",
+  perplexity: "TRIAL_PERPLEXITY_MODEL",
 };
 
 /** The operator's shared key for a provider, if configured. */
@@ -80,13 +82,15 @@ export function pickDefaultProvider(): Provider {
   if (trialKeyFor("anthropic")) return "anthropic";
   if (trialKeyFor("openai")) return "openai";
   if (trialKeyFor("google")) return "google";
+  if (trialKeyFor("perplexity")) return "perplexity";
   return "anthropic";
 }
 
 const PROVIDER_ORDER: Record<Provider, Provider[]> = {
-  anthropic: ["anthropic", "openai", "google"],
-  openai: ["openai", "anthropic", "google"],
-  google: ["google", "anthropic", "openai"],
+  anthropic: ["anthropic", "openai", "google", "perplexity"],
+  openai: ["openai", "anthropic", "google", "perplexity"],
+  google: ["google", "anthropic", "openai", "perplexity"],
+  perplexity: ["perplexity", "anthropic", "openai", "google"],
 };
 
 /**

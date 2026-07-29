@@ -153,6 +153,8 @@ export async function verifyKey(
       await anthropicChat(apiKey, "claude-haiku-4-5", undefined, "ping", 4);
     } else if (provider === "google") {
       await googleChat(apiKey, "gemini-flash-lite-latest", undefined, "ping", 8);
+    } else if (provider === "perplexity") {
+      await perplexityChat(apiKey, "sonar", undefined, "ping", 8);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -175,6 +177,10 @@ export async function runQuery(
   // Overviews engine), so route it before the shared web-search branch.
   if (opts.provider === "google") {
     return googleRunQuery(opts.apiKey, opts.model, opts.prompt, opts.webSearch ?? false);
+  }
+  // Perplexity always searches, so it ignores the project toggle entirely.
+  if (opts.provider === "perplexity") {
+    return perplexityRunQuery(opts.apiKey, opts.model, opts.prompt);
   }
   if (!opts.webSearch) {
     const res =
@@ -635,6 +641,242 @@ async function googleRunQuery(
   return { text, tokens, sources: grounding ? googleGroundingSources(groundingChunks) : [] };
 }
 
+// ==================================================================
+// Perplexity (Sonar)
+//
+// Raw fetch rather than the OpenAI SDK. Perplexity does accept
+// /chat/completions as an OpenAI-compatible alias, but the fields we care about
+// most — `search_results` and `citations` — aren't part of the OpenAI response
+// type, so that route means casting past the type system to reach the single
+// most valuable half of the payload. `/v1/sonar` is the canonical endpoint and
+// this adapter needs no SDK at all, same as the Google one.
+//
+// Perplexity is search-native: every answer is grounded, and the sources come
+// back as real URLs with titles and snippets. No redirect host to unwrap (the
+// Gemini grounding problem), so `is_owned` matching works directly.
+// ==================================================================
+
+const PERPLEXITY_API_URL = "https://api.perplexity.ai/v1/sonar";
+const PERPLEXITY_TIMEOUT_MS = 60_000;
+const PERPLEXITY_MAX_ATTEMPTS = 4;
+const PERPLEXITY_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+// Same shape as the Google limits, and for the same reason: a new Perplexity
+// key starts on a low usage tier, so 429s are a first-run experience, not an
+// edge case.
+const PERPLEXITY_MAX_RETRY_WAIT_MS = 45_000;
+// Perplexity rejects anything smaller with 400 "max_tokens must be at least 16"
+// — measured. The other adapters happily take a 4-8 token probe, so the tiny
+// verifyKey budget copied from them made a VALID key look broken. Clamped here
+// rather than at the call sites so no future caller can reintroduce it.
+const PERPLEXITY_MIN_MAX_TOKENS = 16;
+const PERPLEXITY_RETRY_BUDGET_MS = 90_000;
+
+export class PerplexityAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "PerplexityAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+interface PerplexitySearchResult {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  date?: string;
+}
+
+interface PerplexityResponse {
+  choices?: { message?: { content?: string }; finish_reason?: string }[];
+  /** Newer, richer source list. */
+  search_results?: PerplexitySearchResult[];
+  /** Older field: bare URLs. Kept as a fallback. */
+  citations?: string[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    citation_tokens?: number;
+    reasoning_tokens?: number;
+  };
+  error?: { message?: string; type?: string };
+  detail?: unknown;
+}
+
+/** Seconds from a Retry-After header, which may be a delta or an HTTP date. */
+function perplexityRetryAfterSec(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return secs;
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
+  return undefined;
+}
+
+async function perplexityFetch(apiKey: string, body: unknown): Promise<PerplexityResponse> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < PERPLEXITY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(PERPLEXITY_API_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(PERPLEXITY_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as PerplexityResponse;
+      const errBody = (await res.json().catch(() => ({}))) as PerplexityResponse;
+      const perr = new PerplexityAPIError(
+        res.status,
+        errBody.error?.message ??
+          (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
+          `Perplexity API error (${res.status}).`,
+        perplexityRetryAfterSec(res),
+      );
+      if (!PERPLEXITY_RETRYABLE.has(res.status)) throw perr;
+      lastErr = perr;
+    } catch (err) {
+      if (err instanceof PerplexityAPIError && !PERPLEXITY_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= PERPLEXITY_MAX_ATTEMPTS - 1) break;
+
+    // Honour Retry-After for the same reason as Gemini's RetryInfo: a rate
+    // limit's window doesn't care about our exponential backoff, and retrying
+    // inside it just burns the remaining attempts in a couple of seconds.
+    const advised = lastErr instanceof PerplexityAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > PERPLEXITY_MAX_RETRY_WAIT_MS || sleptMs + waitMs > PERPLEXITY_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("Perplexity request failed.");
+}
+
+// sonar-reasoning-pro emits its chain of thought inline, wrapped in <think>
+// tags, ahead of the actual answer. Left in place it would be stored as the
+// response and scanned for brand mentions — so a model musing "the user might
+// be thinking of Cloudflare" would count as a mention that the answer never
+// made. Same failure as Gemini's truncated deliberation, different mechanism.
+export function stripReasoning(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+}
+
+/** Sources from a Perplexity answer, preferring the richer search_results. */
+export function perplexitySources(data: PerplexityResponse): CitedSource[] {
+  const out: CitedSource[] = [];
+  const seen = new Set<string>();
+  const push = (url: string, title: string | null, snippet: string | null) => {
+    const safe = safeSource(url, title, snippet);
+    if (!safe || seen.has(safe.url)) return;
+    seen.add(safe.url);
+    out.push(safe);
+  };
+  for (const r of data.search_results ?? []) {
+    if (typeof r?.url === "string") push(r.url, r.title ?? null, r.snippet ?? null);
+  }
+  // Older responses carry only `citations`; don't lose sources on those.
+  if (out.length === 0) {
+    for (const url of data.citations ?? []) {
+      if (typeof url === "string") push(url, null, null);
+    }
+  }
+  return out;
+}
+
+interface PerplexityCallOpts {
+  system?: string;
+  maxTokens: number;
+  /** Utility calls must not search — they reason over text we supply. */
+  search: boolean;
+}
+
+async function perplexityGenerate(
+  apiKey: string,
+  model: string,
+  user: string,
+  opts: PerplexityCallOpts,
+): Promise<{ text: string; tokens: number; data: PerplexityResponse }> {
+  const messages: { role: string; content: string }[] = [];
+  if (opts.system) messages.push({ role: "system", content: opts.system });
+  messages.push({ role: "user", content: user });
+
+  const data = await perplexityFetch(apiKey, {
+    model,
+    messages,
+    max_tokens: Math.max(opts.maxTokens, PERPLEXITY_MIN_MAX_TOKENS),
+    // Perplexity searches by default; the utility calls (JSON classification,
+    // topic suggestion) must not, both because searching is pure cost there and
+    // because a search result could contaminate a judgment about text we gave it.
+    ...(opts.search ? {} : { disable_search: true }),
+  });
+
+  const choice = data.choices?.[0];
+  const text = stripReasoning(choice?.message?.content ?? "");
+  const usage = data.usage;
+  // citation_tokens and reasoning_tokens are billed on top of completion_tokens
+  // and are not included in it, so the fallback has to add them back — the same
+  // under-count that thinking tokens caused on Gemini.
+  const tokens =
+    usage?.total_tokens ??
+    (usage?.prompt_tokens ?? 0) +
+      (usage?.completion_tokens ?? 0) +
+      (usage?.citation_tokens ?? 0) +
+      (usage?.reasoning_tokens ?? 0);
+
+  // A 200 with nothing usable in it is the failure that matters: the call
+  // succeeds, the stored response is empty, and the run reports "brand not
+  // mentioned" for a question that was never actually answered.
+  if (!choice) {
+    throw new Error("Perplexity returned no answer (the response contained no choices).");
+  }
+  if (!text) {
+    // Seen when a reasoning model spends the whole budget inside <think>.
+    throw new Error("Perplexity returned an empty answer.");
+  }
+  return { text, tokens, data };
+}
+
+async function perplexityChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+): Promise<ChatResult> {
+  const { text, tokens } = await perplexityGenerate(apiKey, model, user, {
+    system,
+    maxTokens,
+    search: false,
+  });
+  return { text, tokens };
+}
+
+async function perplexityRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+): Promise<QueryResult> {
+  // No webSearch branch. Perplexity is a search engine — `disable_search: true`
+  // exists, but an ungrounded Sonar answer doesn't correspond to anything a real
+  // user of Perplexity ever sees, so measuring it would describe a product that
+  // isn't the one being monitored. Always grounded, like Google AI Overviews.
+  const { text, tokens, data } = await perplexityGenerate(apiKey, model, prompt, {
+    maxTokens: ANSWER_MAX_TOKENS,
+    search: true,
+  });
+  return { text, tokens, sources: perplexitySources(data) };
+}
+
 // Prompt shape is the single biggest lever on whether a run measures anything.
 // Measured against a stealth-stage brand (24 queries per shape, both providers):
 //
@@ -686,6 +928,14 @@ Generate ${opts.count} distinct questions a person might ask an AI assistant rel
             user,
             UTILITY_MAX_TOKENS,
             true,
+          )
+        : opts.provider === "perplexity"
+        ? await perplexityChat(
+            opts.apiKey,
+            opts.model,
+            VARIATION_SYSTEM + "\nReturn a JSON array of strings.",
+            user,
+            UTILITY_MAX_TOKENS,
           )
         : await openaiChat(
             opts.apiKey,
@@ -820,6 +1070,8 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
         ? await anthropicChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
         : opts.provider === "google"
           ? await googleChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true)
+          : opts.provider === "perplexity"
+          ? await perplexityChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
           : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
 
     return { results: parseAnalysis(opts.entities, extractJson(res.text)), tokens: res.tokens };
@@ -864,6 +1116,8 @@ Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company
       ? await anthropicChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000)
       : opts.provider === "google"
         ? await googleChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true)
+        : opts.provider === "perplexity"
+        ? await perplexityChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000)
         : await openaiChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true);
 
   try {
@@ -947,6 +1201,8 @@ export async function suggestCompetitors(
       ? await anthropicChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
       : opts.provider === "google"
         ? await googleChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true)
+        : opts.provider === "perplexity"
+        ? await perplexityChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
         : await openaiChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
 
   try {
@@ -1023,6 +1279,25 @@ export function humanError(err: unknown): string {
     }
     if (err.status === 403) return "This key lacks access to the requested model.";
     if (err.status === 404) return "The requested model isn't available for this key.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof PerplexityAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    if (err.status === 402) return "This Perplexity key is out of credit.";
+    if (err.status === 429) {
+      // Perplexity meters by usage tier, so a fresh key rate-limits on its very
+      // first real run. Same reasoning as the Gemini 429 message: "rate limited"
+      // reads as "we went too fast" and invites a pointless immediate retry.
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` Perplexity asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `Perplexity rejected the request: this key is over its rate limit.${wait} ` +
+        `New keys start on a low usage tier — check your tier and credit balance in the Perplexity API settings, or wait and run again.`
+      );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof Error) {

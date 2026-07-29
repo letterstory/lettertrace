@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google keys. They're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini, and Google AI Overviews (both on your Google key). Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys. They're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), and Perplexity Sonar. Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -45,7 +45,7 @@ For each answer the model returns, Lettertrace:
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus a dependency-free Google Gemini REST adapter (Gemini models + Google AI Overviews, via Google Search grounding)
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding) and Perplexity Sonar (always search-grounded, real source URLs)
 
 ## Getting started
 
@@ -124,7 +124,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ### 5. First monitor
 
-1. **Settings** → add your Anthropic, OpenAI, and/or Google API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews). Prefer a terminal? [`lettertrace keys set anthropic`](#setting-your-provider-key-from-the-cli-keys) does the same thing.
+1. **Settings** → add your Anthropic, OpenAI, Google, and/or Perplexity API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews). Prefer a terminal? [`lettertrace keys set anthropic`](#setting-your-provider-key-from-the-cli-keys) does the same thing.
 2. **Competitors** → add the brands you want to benchmark against.
 3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
 4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.

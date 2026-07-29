@@ -70,12 +70,30 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
       },
     ],
   },
+  perplexity: {
+    id: "perplexity",
+    label: "Perplexity (Sonar)",
+    keyUrl: "https://www.perplexity.ai/account/api/keys",
+    keyPrefix: "pplx-",
+    // Named models rather than dated versions, so these don't rot the way the
+    // pinned Gemini ids did. `sonar-deep-research` is deliberately absent: it
+    // runs for minutes on a single question, which exceeds the 300s the run
+    // route allows for an entire run, so offering it would just be a timeout
+    // with a model picker in front of it.
+    models: [
+      { id: "sonar-pro", label: "Sonar Pro", note: "Most capable" },
+      { id: "sonar", label: "Sonar", note: "Fast & cheap" },
+      { id: "sonar-reasoning-pro", label: "Sonar Reasoning Pro", note: "Chain-of-thought" },
+    ],
+  },
 };
 
 export const PROVIDER_LIST: ProviderInfo[] = Object.values(PROVIDERS);
 
 export function isProvider(value: string): value is Provider {
-  return value === "anthropic" || value === "openai" || value === "google";
+  return (
+    value === "anthropic" || value === "openai" || value === "google" || value === "perplexity"
+  );
 }
 
 export function defaultModelFor(provider: Provider): string {
@@ -86,12 +104,15 @@ const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
   anthropic: "ANALYSIS_ANTHROPIC_MODEL",
   openai: "ANALYSIS_OPENAI_MODEL",
   google: "ANALYSIS_GOOGLE_MODEL",
+  perplexity: "ANALYSIS_PERPLEXITY_MODEL",
 };
 
 const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4o-mini",
   google: "gemini-flash-lite-latest",
+  // Sonar is the cheap search model; classification never needs Pro.
+  perplexity: "sonar",
 };
 
 // Sentiment/recommendation enrichment is a simple structured-JSON judgment;

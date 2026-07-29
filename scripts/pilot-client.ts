@@ -95,7 +95,10 @@ const maxPrompts = Number(flag("max-prompts", "10"));
 const providers = flag("providers", "anthropic,openai")
   .split(",")
   .map((p) => p.trim())
-  .filter((p): p is Provider => p === "anthropic" || p === "openai" || p === "google");
+  .filter(
+    (p): p is Provider =>
+      p === "anthropic" || p === "openai" || p === "google" || p === "perplexity",
+  );
 const webSearch = flag("web-search", "on") !== "off";
 
 // Answer models: the flagship of each provider, i.e. what a real user asking
@@ -105,6 +108,7 @@ const ANSWER_MODEL: Record<Provider, string> = {
   anthropic: "claude-opus-4-8",
   openai: "gpt-4o",
   google: "gemini-pro-latest",
+  perplexity: "sonar-pro",
 };
 
 // Rough blended $/1M tokens, only for an order-of-magnitude spend estimate.
@@ -112,6 +116,9 @@ const BLENDED_COST_PER_MTOK: Record<Provider, number> = {
   anthropic: 10,
   openai: 7,
   google: 5,
+  // Perplexity bills per request and per search on top of tokens; this is only
+  // an order-of-magnitude figure for the pilot's spend estimate.
+  perplexity: 6,
 };
 
 // --- concurrency ----------------------------------------------------------
@@ -177,6 +184,7 @@ function keyFor(provider: Provider): string {
     anthropic: "TRIAL_ANTHROPIC_API_KEY",
     openai: "TRIAL_OPENAI_API_KEY",
     google: "TRIAL_GOOGLE_API_KEY",
+    perplexity: "TRIAL_PERPLEXITY_API_KEY",
   };
   const k = process.env[env[provider]];
   if (!k) throw new Error(`Missing ${env[provider]} in .env.local`);

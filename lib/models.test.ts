@@ -14,10 +14,11 @@ afterEach(() => {
 });
 
 describe("provider catalog", () => {
-  it("recognizes all three providers and rejects unknown ones", () => {
+  it("recognizes every provider and rejects unknown ones", () => {
     expect(isProvider("anthropic")).toBe(true);
     expect(isProvider("openai")).toBe(true);
     expect(isProvider("google")).toBe(true);
+    expect(isProvider("perplexity")).toBe(true);
     expect(isProvider("gemini")).toBe(false); // "gemini" is a model line, not our provider id
     expect(isProvider("mistral")).toBe(false);
   });
@@ -38,6 +39,22 @@ describe("provider catalog", () => {
     // It must not be the default (the flagship Gemini model is).
     expect(defaultModelFor("google")).not.toBe(GOOGLE_AI_OVERVIEWS_MODEL);
     expect(modelLabel("google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe("Google AI Overviews");
+  });
+
+  it("exposes perplexity (Sonar) in the catalog", () => {
+    expect(PROVIDERS.perplexity.label).toContain("Sonar");
+    expect(PROVIDERS.perplexity.keyPrefix).toBe("pplx-");
+    expect(PROVIDER_LIST.map((p) => p.id)).toContain("perplexity");
+    expect(defaultModelFor("perplexity")).toBe("sonar-pro");
+  });
+
+  // sonar-deep-research runs for minutes on a single question, well past the
+  // 300s the run route allows for an ENTIRE run. Listing it would offer a
+  // model whose only possible outcome is a timeout mid-run.
+  it("keeps sonar-deep-research out of the catalog", () => {
+    const ids = PROVIDERS.perplexity.models.map((m) => m.id);
+    expect(ids).not.toContain("sonar-deep-research");
+    expect(analysisModelFor("perplexity")).not.toBe("sonar-deep-research");
   });
 
   it("labels known models and passes through unknown ones", () => {
