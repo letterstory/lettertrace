@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { Provider, Sentiment } from "@/lib/types";
 import { GOOGLE_AI_OVERVIEWS_MODEL, analysisModelFor } from "@/lib/models";
+import { normalizeCompetitorList } from "@/lib/competitors";
 
 // ------------------------------------------------------------------
 // Provider adapters. Every call here uses the *user's own* API key (BYOK).
@@ -1084,11 +1085,17 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
   }
 }
 
-const SUGGEST_SYSTEM = `You help set up brand-monitoring. Given a company name and text scraped from its website, infer what the company does, then propose monitoring topics. For each topic, write realistic questions a real person would type into an AI assistant (ChatGPT or Claude) where a company like this could be recommended, compared, or mentioned. Do NOT mention the company's own name in the questions. Return ONLY JSON.`;
+const SUGGEST_SYSTEM = `You help set up brand-monitoring. Given a company name and text scraped from its website, infer what the company does, then propose monitoring topics and the company's direct competitors. For each topic, write realistic questions a real person would type into an AI assistant (ChatGPT or Claude) where a company like this could be recommended, compared, or mentioned. Do NOT mention the company's own name in the questions.
+
+For competitors, act as a strict judge: only name real companies/products you are confident exist and genuinely compete for the same buyers in the same category. Prefer well-known, currently active competitors over obscure or defunct ones. Never include the company itself. Fewer, correct suggestions beat a padded list. Return ONLY JSON.`;
 
 export interface SiteSuggestion {
   description: string;
   topics: { name: string; prompts: string[] }[];
+  /** Direct competitors inferred from the same site read. Share of voice is
+   *  meaningless without something to compare against, so onboarding seeds
+   *  these rather than leaving the user to discover the Competitors page. */
+  competitors: { name: string; aliases: string[]; domain: string | null }[];
 }
 
 /** From scraped site text, infer what the company does and suggest topics + prompts. */
@@ -1107,9 +1114,13 @@ Return a JSON object of this shape:
   "description": "one concise sentence describing what the company does",
   "topics": [
     { "name": "short topic label", "prompts": ["question 1", "question 2", "question 3", "question 4"] }
+  ],
+  "competitors": [
+    { "name": "Competitor Inc", "aliases": ["short name"], "domain": "competitor.com" }
   ]
 }
-Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company's own name in the questions.`;
+Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company's own name in the questions.
+Provide up to 5 competitors. "aliases" are other names an AI answer might use for it (short name, product name, former name) — empty array if none. "domain" is its primary website domain, lowercase, no protocol or path — null if unsure. Return an empty array if you cannot name real competitors with confidence.`;
 
   const res =
     opts.provider === "anthropic"
@@ -1137,9 +1148,18 @@ Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company
       })
       .filter((t) => t.name.length > 0 && t.prompts.length > 0)
       .slice(0, 5);
-    return { description, topics, tokens: res.tokens };
+
+    // Models do name the company as its own competitor, and do repeat one
+    // across the list; both would break the insert, so normalize here rather
+    // than trusting the response.
+    const competitors = normalizeCompetitorList(parsed.competitors, {
+      exclude: [opts.brandName],
+      limit: 5,
+    });
+
+    return { description, topics, competitors, tokens: res.tokens };
   } catch {
-    return { description: "", topics: [], tokens: res.tokens };
+    return { description: "", topics: [], competitors: [], tokens: res.tokens };
   }
 }
 

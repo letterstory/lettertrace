@@ -19,6 +19,13 @@ interface Topic {
   prompts: string[];
 }
 
+interface CompetitorDraft {
+  name: string;
+  /** Comma-separated while editing; split on submit, like the settings form. */
+  aliases: string;
+  domain: string;
+}
+
 type Step = "brand" | "topics" | "searching";
 
 export function Onboarding() {
@@ -31,8 +38,9 @@ export function Onboarding() {
   const [domain, setDomain] = useState("");
   const [description, setDescription] = useState("");
 
-  // Step 2: topics
+  // Step 2: topics + competitors
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [competitors, setCompetitors] = useState<CompetitorDraft[]>([]);
   // Per-block validation, keyed by topic index. Blocks used to be dropped
   // silently when incomplete, so a user could "start monitoring" with three
   // topics on screen and have one saved.
@@ -73,6 +81,21 @@ export function Onboarding() {
       if (data?.description && !description.trim()) {
         setDescription(String(data.description));
       }
+
+      // Seeded from the same site read as the topics — no extra call.
+      setCompetitors(
+        Array.isArray(data?.competitors)
+          ? data.competitors
+              .map((c: { name?: unknown; aliases?: unknown; domain?: unknown }) => ({
+                name: typeof c?.name === "string" ? c.name : "",
+                aliases: Array.isArray(c?.aliases)
+                  ? c.aliases.filter((a: unknown): a is string => typeof a === "string").join(", ")
+                  : "",
+                domain: typeof c?.domain === "string" ? c.domain : "",
+              }))
+              .filter((c: CompetitorDraft) => c.name.trim().length > 0)
+          : [],
+      );
 
       if (suggested.length > 0) {
         setTopics(suggested);
@@ -119,6 +142,16 @@ export function Onboarding() {
   }
   function addTopic() {
     setTopics((prev) => [...prev, { name: "", prompts: [""] }]);
+  }
+
+  function setCompetitorField(i: number, field: keyof CompetitorDraft, value: string) {
+    setCompetitors((prev) => prev.map((c, idx) => (idx === i ? { ...c, [field]: value } : c)));
+  }
+  function removeCompetitor(i: number) {
+    setCompetitors((prev) => prev.filter((_, idx) => idx !== i));
+  }
+  function addCompetitor() {
+    setCompetitors((prev) => [...prev, { name: "", aliases: "", domain: "" }]);
   }
 
   // --- Step 2 -> complete + run ----------------------------------------------
@@ -168,6 +201,18 @@ export function Onboarding() {
           brand_domains: domain.trim() ? [domain.trim()] : [],
           description: description.trim() || null,
           topics: cleaned,
+          // Blank rows are just unused inputs, so drop them rather than
+          // blocking the submit — a nameless competitor holds nothing else.
+          competitors: competitors
+            .map((c) => ({
+              name: c.name.trim(),
+              aliases: c.aliases
+                .split(",")
+                .map((a) => a.trim())
+                .filter(Boolean),
+              domain: c.domain.trim() || null,
+            }))
+            .filter((c) => c.name.length > 0),
         }),
       });
       const data = await res.json();
@@ -372,6 +417,70 @@ export function Onboarding() {
             <Plus className="h-4 w-4" />
             Add topic
           </button>
+
+          {/* Competitors. Optional by design — share of voice needs them, but
+              a user who doesn't know their rivals yet shouldn't be stuck at
+              the last step of setup. */}
+          <div className="mt-10">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-lg font-semibold text-ink">Who do you compete with?</h2>
+              <span className="text-xs text-ink-faint">Optional</span>
+            </div>
+            <p className="mt-1 text-sm text-ink-soft">
+              {competitors.length > 0
+                ? "We spotted these. Edit or remove any before you start — we'll track how often each is named alongside you."
+                : "Add the brands you want to benchmark against, and we'll track how often each is named alongside you."}
+            </p>
+
+            {competitors.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {competitors.map((c, ci) => (
+                  <div key={ci} className="flex items-center gap-2">
+                    <Input
+                      value={c.name}
+                      onChange={(e) => setCompetitorField(ci, "name", e.target.value)}
+                      placeholder="Competitor name"
+                      className="font-medium sm:max-w-[15rem]"
+                      aria-label={`Competitor ${ci + 1} name`}
+                    />
+                    <Input
+                      value={c.aliases}
+                      onChange={(e) => setCompetitorField(ci, "aliases", e.target.value)}
+                      // Short enough not to truncate in this column; a single
+                      // name works too, so the comma rule needn't be spelled out.
+                      placeholder="Other names"
+                      className="hidden text-sm sm:block"
+                      aria-label={`Competitor ${ci + 1} aliases`}
+                    />
+                    <Input
+                      value={c.domain}
+                      onChange={(e) => setCompetitorField(ci, "domain", e.target.value)}
+                      placeholder="domain.com"
+                      className="hidden text-sm sm:block sm:max-w-[12rem]"
+                      aria-label={`Competitor ${ci + 1} domain`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeCompetitor(ci)}
+                      className="shrink-0 rounded p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
+                      aria-label={`Remove ${c.name.trim() || "competitor"}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={addCompetitor}
+              className="mt-4 inline-flex items-center gap-1.5 rounded border border-dashed border-ink/20 px-4 py-2.5 text-sm font-medium text-ink-soft transition hover:border-ink/40 hover:bg-ink/[0.02]"
+            >
+              <Plus className="h-4 w-4" />
+              Add competitor
+            </button>
+          </div>
 
           {error && <p className="mt-4 text-sm text-terracotta-dark">{error}</p>}
 

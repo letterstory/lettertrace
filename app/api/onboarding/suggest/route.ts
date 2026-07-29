@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       scraped: false,
       description: "",
       topics: [],
+      competitors: [],
       reason: key.source === "exhausted" ? "trial_exhausted" : "no_key",
       error: scrape.ok ? undefined : scrape.error,
     });
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       scraped: false,
       description: "",
       topics: [],
+      competitors: [],
       reason: "scrape_failed",
       error: scrape.error,
     });
@@ -67,9 +69,10 @@ export async function POST(request: Request) {
     await logDashboard(user, request, {
       category: "onboarding",
       action: "onboarding.suggested",
-      summary: `Analyzed ${domain || brandName} and suggested ${suggestion.topics.length} topic${suggestion.topics.length === 1 ? "" : "s"} with AI`,
+      summary: `Analyzed ${domain || brandName} and suggested ${suggestion.topics.length} topic${suggestion.topics.length === 1 ? "" : "s"} and ${suggestion.competitors.length} competitor${suggestion.competitors.length === 1 ? "" : "s"} with AI`,
       metadata: {
         topics: suggestion.topics.length,
+        competitors: suggestion.competitors.length,
         tokens: suggestion.tokens,
         keySource: key.source,
         domain,
@@ -79,6 +82,7 @@ export async function POST(request: Request) {
       scraped: suggestion.topics.length > 0,
       description: suggestion.description,
       topics: suggestion.topics,
+      competitors: suggestion.competitors,
       title: scrape.title ?? "",
     });
   } catch (e) {
@@ -86,6 +90,7 @@ export async function POST(request: Request) {
       scraped: false,
       description: "",
       topics: [],
+      competitors: [],
       reason: "ai_failed",
       error: humanError(e),
     });
