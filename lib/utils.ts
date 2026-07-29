@@ -93,3 +93,16 @@ export function formatDate(iso: string | null): string {
     year: "numeric",
   });
 }
+
+/**
+ * "a" or "an" for a following word. Provider labels are user-visible and vary
+ * ("OpenAI (ChatGPT)" vs "Google (Gemini)"), so the copy that names them can't
+ * hardcode the article — "Add a OpenAI key" reads as a typo in the exact
+ * message that's asking someone to go and do something.
+ *
+ * Vowel-letter test only: these are product names, not arbitrary prose, and
+ * none of the ones we ship hit the awkward cases (a "user", an "hour").
+ */
+export function article(word: string): "a" | "an" {
+  return /^[aeiou]/i.test(word.trim()) ? "an" : "a";
+}

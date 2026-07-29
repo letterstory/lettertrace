@@ -14,6 +14,8 @@ import {
   Spinner,
 } from "@/components/ui";
 import type { Competitor } from "@/lib/types";
+import { NeedsKeyNotice } from "@/components/dashboard/needs-key-notice";
+import { article } from "@/lib/utils";
 
 const ALIAS_TONES = ["teal", "sand", "mint"] as const;
 
@@ -31,7 +33,15 @@ function parseAliases(raw: string): string[] {
     .filter((a) => a.length > 0);
 }
 
-export function CompetitorsClient({ competitors }: { competitors: Competitor[] }) {
+export function CompetitorsClient({
+  competitors,
+  hasKey,
+  providerLabel,
+}: {
+  competitors: Competitor[];
+  hasKey: boolean;
+  providerLabel: string;
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
@@ -207,11 +217,27 @@ export function CompetitorsClient({ competitors }: { competitors: Competitor[] }
                 </p>
               </div>
             </div>
-            <Button variant="secondary" onClick={handleSuggest} disabled={suggesting}>
+            <Button
+              variant="secondary"
+              onClick={handleSuggest}
+              // Was enabled without a key, so the only feedback was a server
+              // error after the click. Say so before it's spent instead.
+              disabled={!hasKey || suggesting}
+              title={!hasKey ? `Add ${article(providerLabel)} ${providerLabel} key in Settings to enable` : undefined}
+            >
               {suggesting ? <Spinner /> : <Sparkles className="h-4 w-4" />}
               {suggestions === null ? "Suggest competitors" : "Suggest again"}
             </Button>
           </div>
+
+          {!hasKey && (
+            <NeedsKeyNotice
+              compact
+              className="mt-4"
+              providerLabel={providerLabel}
+              action="suggest competitors"
+            />
+          )}
 
           {suggestError && <p className="mt-4 text-sm text-terracotta-dark">{suggestError}</p>}
 
