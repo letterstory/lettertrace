@@ -163,7 +163,7 @@ export default function LandingPage() {
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <Button href="/login" variant="ghost" size="sm">Sign in</Button>
-            <Button href="/login" size="sm">Start free</Button>
+            <Button href="/login" size="sm">Initialize</Button>
           </div>
         </div>
       </header>
@@ -182,11 +182,11 @@ export default function LandingPage() {
             </h1>
             <p className="mt-5 max-w-xl text-lg text-ink-soft">
               Lettertrace measures how often Claude, ChatGPT, and Gemini mention your
-              company. But there&apos;s a catch: it&apos;s free, developer-first, and open source.
+              company. But there&apos;s a catch: it&apos;s free end-to-end, developer-first, and open source.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Button href="/login" size="lg">
-                Start monitoring for free
+                Start monitoring: it&apos;s free
                 <ArrowRight className="h-4 w-4" />
               </Button>
               <Button href={GITHUB_URL} variant="secondary" size="lg">
