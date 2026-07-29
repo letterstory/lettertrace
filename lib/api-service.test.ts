@@ -360,8 +360,9 @@ describe("triggerRunForProject", () => {
 
   // An override naming only the provider must not carry the PROJECT's model
   // across: "run this on openai" with the project set to claude-sonnet-4-6
-  // would otherwise ask OpenAI for a Claude model id.
-  it("drops the project model when the override changes provider", async () => {
+  // would otherwise ask OpenAI for a Claude model id. It now resolves to that
+  // provider's default explicitly, rather than leaving the resolver to guess.
+  it("resolves the new provider's default when the override omits a model", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
     vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "own",
@@ -378,7 +379,20 @@ describe("triggerRunForProject", () => {
     });
 
     await triggerRunForProject(db as never, "user-1", "proj-1", { provider: "openai" });
-    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", undefined);
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o");
+  });
+
+  // Same validation on the per-run override: an unusable pair would otherwise
+  // be recorded on the run row and then rejected by the provider mid-run.
+  it("rejects a per-run override whose model isn't the provider's", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
+      provider: "openai",
+      model: "claude-opus-4-8",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "invalid_engine" });
+    expect(resolveRunKeyFor).not.toHaveBeenCalled();
+    expect(executeRun).not.toHaveBeenCalled();
   });
 
   it("names the requested provider when an override has no own key", async () => {
@@ -435,6 +449,33 @@ describe("createProject", () => {
       name: "Acme",
       brand_name: "Acme",
       default_provider: "mistral",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "invalid" });
+    expect(db.queries).toHaveLength(0);
+  });
+
+  // LET-169: the model was accepted as any non-empty string, so a pair like
+  // openai + claude-opus-4-8 saved cleanly and then failed at the provider,
+  // as an error naming a model the caller never chose.
+  it("rejects a model the chosen provider doesn't offer", async () => {
+    const db = fakeDb({});
+    const outcome = await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+      default_provider: "openai",
+      default_model: "claude-opus-4-8",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "invalid" });
+    expect((outcome as { message: string }).message).toContain("claude-opus-4-8");
+    expect(db.queries).toHaveLength(0);
+  });
+
+  it("rejects a model that is in no catalog", async () => {
+    const db = fakeDb({});
+    const outcome = await createProject(db as never, "user-1", {
+      name: "Acme",
+      brand_name: "Acme",
+      default_model: "banana",
     });
     expect(outcome).toMatchObject({ ok: false, code: "invalid" });
     expect(db.queries).toHaveLength(0);

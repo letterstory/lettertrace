@@ -7,6 +7,8 @@ import {
   defaultModelFor,
   modelLabel,
   analysisModelFor,
+  isModelFor,
+  resolveEngine,
 } from "@/lib/models";
 
 afterEach(() => {
@@ -102,5 +104,73 @@ describe("analysisModelFor", () => {
   it("ignores blank overrides", () => {
     vi.stubEnv("ANALYSIS_ANTHROPIC_MODEL", "   ");
     expect(analysisModelFor("anthropic")).toBe("claude-haiku-4-5");
+  });
+});
+
+describe("isModelFor", () => {
+  it("accepts each provider's own models and rejects other providers'", () => {
+    expect(isModelFor("openai", "gpt-4o")).toBe(true);
+    expect(isModelFor("anthropic", "claude-opus-4-8")).toBe(true);
+    expect(isModelFor("openai", "claude-opus-4-8")).toBe(false);
+    expect(isModelFor("anthropic", "gpt-4o")).toBe(false);
+  });
+
+  // The pseudo-model is a real catalog entry under google, so validation has to
+  // let it through or the AI Overviews engine becomes unselectable.
+  it("accepts the Google AI Overviews pseudo-model", () => {
+    expect(isModelFor("google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe(true);
+  });
+
+  it("rejects an id that is in no catalog", () => {
+    expect(isModelFor("google", "banana")).toBe(false);
+  });
+});
+
+describe("resolveEngine", () => {
+  // The bug: the write paths applied provider and model independently, so a
+  // request naming only the provider kept the old model and persisted pairs
+  // like openai + claude-opus-4-8 that only failed later, at the provider.
+  it("falls back to the provider's default when no model is given", () => {
+    for (const model of [undefined, null, "", "   ", 42]) {
+      const r = resolveEngine("openai", model);
+      expect(r).toEqual({ ok: true, provider: "openai", model: "gpt-4o" });
+    }
+  });
+
+  it("refuses a model the provider doesn't offer", () => {
+    const r = resolveEngine("openai", "claude-opus-4-8");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.message).toContain("OpenAI (ChatGPT)");
+      expect(r.message).toContain("claude-opus-4-8");
+      // Names what IS available, so a caller doesn't have to guess.
+      expect(r.message).toContain("gpt-4o");
+    }
+  });
+
+  it("refuses an id that is in no catalog at all", () => {
+    // modelLabel echoes an unknown id verbatim, so storing this would show
+    // "banana" as the selected engine.
+    expect(resolveEngine("google", "banana").ok).toBe(false);
+  });
+
+  it("passes a valid pair through unchanged, trimming whitespace", () => {
+    expect(resolveEngine("anthropic", "  claude-haiku-4-5 ")).toEqual({
+      ok: true,
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  it("accepts every model in the catalog for its own provider", () => {
+    for (const info of PROVIDER_LIST) {
+      for (const m of info.models) {
+        expect(resolveEngine(info.id, m.id)).toEqual({
+          ok: true,
+          provider: info.id,
+          model: m.id,
+        });
+      }
+    }
   });
 });

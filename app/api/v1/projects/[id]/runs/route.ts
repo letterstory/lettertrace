@@ -79,21 +79,21 @@ export async function POST(
       { ...options, context: apiActor(auth, "v1") },
     );
     if (!outcome.ok) {
+      // not_found -> 404, a bad engine override -> 400, no key -> 402 (billing).
+      const status =
+        outcome.code === "not_found" ? 404 : outcome.code === "invalid_engine" ? 400 : 402;
       await logApiRequest(auth, request, "v1", {
         category: "run",
         action: "api.trigger_run",
         status: "failure",
-        statusCode: outcome.code === "not_found" ? 404 : 402,
+        statusCode: status,
         projectId: params.id,
         targetType: "project",
         targetId: params.id,
         summary: `Run not triggered via the API: ${outcome.message}`,
         metadata: { reason: outcome.code },
       });
-      return NextResponse.json(
-        { error: outcome.message },
-        { status: outcome.code === "not_found" ? 404 : 402 },
-      );
+      return NextResponse.json({ error: outcome.message }, { status });
     }
     await logApiRequest(auth, request, "v1", {
       category: "run",

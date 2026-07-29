@@ -100,6 +100,46 @@ export function defaultModelFor(provider: Provider): string {
   return PROVIDERS[provider].models[0].id;
 }
 
+/** Does this provider actually offer this model? */
+export function isModelFor(provider: Provider, modelId: string): boolean {
+  return PROVIDERS[provider].models.some((m) => m.id === modelId);
+}
+
+export type EngineResolution =
+  | { ok: true; provider: Provider; model: string }
+  | { ok: false; message: string };
+
+/**
+ * Resolve a requested answer engine into a (provider, model) pair that can
+ * actually be called, or say why it can't.
+ *
+ * The two halves have to travel together. The write paths used to apply them
+ * independently — a request naming only a provider updated the provider and
+ * left the previous model in place — which persisted pairs like
+ * `openai` + `claude-opus-4-8`. Nothing rejected that, so it saved cleanly and
+ * then failed at the provider on the next run, as an error about a model id the
+ * user never chose. A model absent from the request therefore resolves to the
+ * provider's default rather than to whatever was there before.
+ *
+ * The catalog is the authority: an unknown model id is refused rather than
+ * stored, since `modelLabel` falls back to echoing the raw id and the UI would
+ * happily display "banana" as the selected engine.
+ */
+export function resolveEngine(provider: Provider, model: unknown): EngineResolution {
+  const requested = typeof model === "string" ? model.trim() : "";
+  if (!requested) {
+    return { ok: true, provider, model: defaultModelFor(provider) };
+  }
+  if (!isModelFor(provider, requested)) {
+    const offered = PROVIDERS[provider].models.map((m) => m.id).join(", ");
+    return {
+      ok: false,
+      message: `${PROVIDERS[provider].label} doesn't offer "${requested}". Available: ${offered}.`,
+    };
+  }
+  return { ok: true, provider, model: requested };
+}
+
 const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
   anthropic: "ANALYSIS_ANTHROPIC_MODEL",
   openai: "ANALYSIS_OPENAI_MODEL",
