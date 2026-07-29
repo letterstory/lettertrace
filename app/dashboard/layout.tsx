@@ -4,10 +4,14 @@ import { DashboardNav } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
+import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
 import { createClient } from "@/lib/supabase/server";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
+import { getUnseenRun } from "@/lib/results-seen";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
+import { modelLabel } from "@/lib/models";
+import { timeAgo } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +46,11 @@ export default async function DashboardLayout({
     const limit = trialRunLimit();
     trial = { used, limit, exhausted: used >= limit };
   }
+
+  // A finished run the owner hasn't opened. Lives in the layout so it follows
+  // them across the dashboard rather than only appearing on the page they
+  // happened to be on when the run landed.
+  const unseenRun = project ? await getUnseenRun(supabase, project) : null;
 
   return (
     <div className="min-h-screen bg-paper md:flex">
@@ -91,6 +100,19 @@ export default async function DashboardLayout({
 
       <main className="flex-1 overflow-y-auto px-6 py-8 md:px-10 md:h-screen">
         <div className="mx-auto max-w-6xl">
+          {/* Above the trial banner: this one is timely and clears itself,
+              where the BYOK nudge is standing context. */}
+          {unseenRun && (
+            <RunReadyBanner
+              runId={unseenRun.id}
+              status={unseenRun.status === "failed" ? "failed" : "completed"}
+              answers={unseenRun.completed_count}
+              plannedAnswers={unseenRun.prompt_count}
+              modelName={modelLabel(unseenRun.provider, unseenRun.model)}
+              finishedAgo={timeAgo(unseenRun.finished_at ?? unseenRun.created_at)}
+              error={unseenRun.error}
+            />
+          )}
           {trial && (
             <TrialBanner used={trial.used} limit={trial.limit} exhausted={trial.exhausted} />
           )}
