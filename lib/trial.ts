@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Project, Provider } from "@/lib/types";
 import { getDecryptedKey, getConfiguredProviders } from "@/lib/data";
 import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
+import { article } from "@/lib/utils";
 
 // ------------------------------------------------------------------
 // Free-trial layer. When the operator configures a shared (trial) key, users
@@ -249,7 +250,7 @@ export function engineKeyMessage(key: ResolvedKey): string {
       have.length === 1 ? have[0] : `${have.slice(0, -1).join(", ")} or ${have[have.length - 1]}`;
     return `Your answer engine is set to ${engine}, but no ${providerLabel} key is saved. Add one in Settings, or switch your answer engine to ${alternatives} — you already have a key for that.`;
   }
-  return `Your answer engine is set to ${engine}. Add a ${providerLabel} key in Settings to run.`;
+  return `Your answer engine is set to ${engine}. Add ${article(providerLabel)} ${providerLabel} key in Settings to run.`;
 }
 
 /** Add consumed tokens to the caller's trial tally (atomic, self-scoped rpc).

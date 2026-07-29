@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveRedirectBase, safePath } from "@/lib/utils";
+import { article, resolveRedirectBase, safePath } from "@/lib/utils";
 
 describe("resolveRedirectBase", () => {
   const PROD = "https://lettertrace.com";
@@ -80,5 +80,20 @@ describe("safePath", () => {
     expect(safePath(null)).toBe("/dashboard");
     expect(safePath(undefined)).toBe("/dashboard");
     expect(safePath("", "/somewhere")).toBe("/somewhere");
+  });
+});
+
+describe("article", () => {
+  // Every provider label we ship, since these are what the copy interpolates.
+  it("matches the article to each provider label", () => {
+    expect(article("Anthropic (Claude)")).toBe("an");
+    expect(article("OpenAI (ChatGPT)")).toBe("an");
+    expect(article("Google (Gemini)")).toBe("a");
+    expect(article("Perplexity (Sonar)")).toBe("a");
+  });
+
+  it("ignores case and leading space", () => {
+    expect(article("  openai")).toBe("an");
+    expect(article("GOOGLE")).toBe("a");
   });
 });

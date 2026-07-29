@@ -13,7 +13,9 @@ import {
   Select,
   Spinner,
 } from "@/components/ui";
-import { Plus, Sparkles, Trash2, X, KeyRound } from "lucide-react";
+import { Plus, Sparkles, Trash2, X } from "lucide-react";
+import { NeedsKeyNotice } from "@/components/dashboard/needs-key-notice";
+import { article } from "@/lib/utils";
 
 interface Props {
   topics: Topic[];
@@ -98,21 +100,7 @@ export function TopicsClient({ topics, prompts, hasKey, providerLabel }: Props) 
 
       {/* No key notice */}
       {!hasKey && (
-        <Card className="border-terracotta/30 bg-terracotta/[0.05]">
-          <CardBody className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 text-terracotta-dark">
-                <KeyRound className="h-5 w-5" />
-              </span>
-              <p className="text-sm text-ink-soft">
-                Add a {providerLabel} key in Settings to auto-generate variations.
-              </p>
-            </div>
-            <Button href="/dashboard/settings" variant="secondary" size="sm">
-              Add key
-            </Button>
-          </CardBody>
-        </Card>
+        <NeedsKeyNotice providerLabel={providerLabel} action="auto-generate variations" />
       )}
 
       {/* Topics list */}
@@ -128,6 +116,7 @@ export function TopicsClient({ topics, prompts, hasKey, providerLabel }: Props) 
               topic={topic}
               prompts={prompts.filter((p) => p.topic_id === topic.id)}
               hasKey={hasKey}
+              providerLabel={providerLabel}
             />
           ))}
         </div>
@@ -140,10 +129,12 @@ function TopicCard({
   topic,
   prompts,
   hasKey,
+  providerLabel,
 }: {
   topic: Topic;
   prompts: Prompt[];
   hasKey: boolean;
+  providerLabel: string;
 }) {
   const router = useRouter();
 
@@ -261,14 +252,24 @@ function TopicCard({
                 <option value="8">8</option>
                 <option value="12">12</option>
               </Select>
-              <Button onClick={handleGenerate} disabled={!hasKey || generating}>
+              <Button
+                onClick={handleGenerate}
+                disabled={!hasKey || generating}
+                // A disabled button explains nothing on hover, and hovering it
+                // is exactly what someone does before giving up.
+                title={!hasKey ? `Add ${article(providerLabel)} ${providerLabel} key in Settings to enable` : undefined}
+              >
                 {generating ? <Spinner /> : <Sparkles className="h-4 w-4" />}
                 {generating ? "Generating…" : "Generate"}
               </Button>
             </div>
             {genError && <p className="text-sm text-terracotta-dark">{genError}</p>}
             {!hasKey && (
-              <p className="text-xs text-ink-faint">Add a provider key in Settings to enable.</p>
+              <NeedsKeyNotice
+                compact
+                providerLabel={providerLabel}
+                action="generate variations"
+              />
             )}
           </div>
 
