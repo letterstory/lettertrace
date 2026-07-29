@@ -14,7 +14,7 @@ export function RunNow({
 }: {
   canRun: boolean;
   /** Why we can or can't run, so the hint names the actual blocker. */
-  keySource: "own" | "trial" | "none" | "exhausted";
+  keySource: "own" | "trial" | "none" | "exhausted" | "mismatch";
   activePrompts: number;
   providerLabel: string;
 }) {
@@ -73,6 +73,17 @@ export function RunNow({
             Settings
           </Link>{" "}
           to run.
+        </p>
+      )}
+      {/* Has keys, just not for the engine they picked. Both fixes live on the
+          same page, so the link does double duty. */}
+      {keySource === "mismatch" && (
+        <p className="text-xs text-ink-faint">
+          No {providerLabel} key saved. Add one, or change your answer engine, in{" "}
+          <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
+            Settings
+          </Link>
+          .
         </p>
       )}
       {canRun && activePrompts === 0 && (

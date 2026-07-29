@@ -13,13 +13,13 @@ import {
   setPromptActive,
   triggerRunForProject,
 } from "@/lib/api-service";
-import { pickDefaultProvider, resolveKey, resolveRunKey } from "@/lib/trial";
+import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { executeRun } from "@/lib/engine";
 
 vi.mock("@/lib/trial", () => ({
   pickDefaultProvider: vi.fn(),
-  resolveKey: vi.fn(),
-  resolveRunKey: vi.fn(),
+  resolveRunKeyFor: vi.fn(),
+  engineKeyMessage: vi.fn(),
 }));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 
@@ -140,8 +140,10 @@ function makeMention(overrides: Partial<Mention>): Mention {
 
 beforeEach(() => {
   vi.mocked(pickDefaultProvider).mockReset().mockReturnValue("anthropic");
-  vi.mocked(resolveKey).mockReset();
-  vi.mocked(resolveRunKey).mockReset();
+  vi.mocked(resolveRunKeyFor).mockReset();
+  vi.mocked(engineKeyMessage)
+    .mockReset()
+    .mockImplementation((k) => `engine message for ${k.requested.provider}`);
   vi.mocked(executeRun).mockReset();
 });
 
@@ -281,14 +283,15 @@ describe("triggerRunForProject", () => {
     expect(executeRun).not.toHaveBeenCalled();
   });
 
-  it.each(["trial", "none", "exhausted"] as const)(
+  it.each(["trial", "none", "exhausted", "mismatch"] as const)(
     "refuses to run on key source %s (BYOK-only)",
     async (source) => {
       const db = fakeDb({ projects: () => ({ data: PROJECT }) });
-      vi.mocked(resolveRunKey).mockResolvedValue({
+      vi.mocked(resolveRunKeyFor).mockResolvedValue({
         source,
         provider: "anthropic",
         model: "claude-sonnet-4-6",
+        requested: { provider: "anthropic", model: "claude-sonnet-4-6" },
       });
       const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
       expect(outcome).toMatchObject({ ok: false, code: "no_key" });
@@ -298,11 +301,12 @@ describe("triggerRunForProject", () => {
 
   it("executes with the user's own key", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
-    vi.mocked(resolveRunKey).mockResolvedValue({
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "own",
       apiKey: "sk-ant-user-key",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      requested: { provider: "anthropic", model: "claude-sonnet-4-6" },
     });
     vi.mocked(executeRun).mockResolvedValue({
       runId: "run-9",
@@ -322,13 +326,14 @@ describe("triggerRunForProject", () => {
     );
   });
 
-  it("resolves a caller-sent provider/model with resolveKey, not the project default", async () => {
+  it("resolves a caller-sent provider/model instead of the project default", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
-    vi.mocked(resolveKey).mockResolvedValue({
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "own",
       apiKey: "sk-user-openai-key",
       provider: "openai",
       model: "gpt-4o-mini",
+      requested: { provider: "openai", model: "gpt-4o-mini" },
     });
     vi.mocked(executeRun).mockResolvedValue({
       runId: "run-10",
@@ -342,8 +347,7 @@ describe("triggerRunForProject", () => {
       model: "gpt-4o-mini",
     });
     expect(outcome).toMatchObject({ ok: true, result: { runId: "run-10" } });
-    expect(resolveRunKey).not.toHaveBeenCalled();
-    expect(resolveKey).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o-mini");
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o-mini");
     expect(executeRun).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -353,18 +357,61 @@ describe("triggerRunForProject", () => {
     );
   });
 
+  // An override naming only the provider must not carry the PROJECT's model
+  // across: "run this on openai" with the project set to claude-sonnet-4-6
+  // would otherwise ask OpenAI for a Claude model id.
+  it("drops the project model when the override changes provider", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
+      source: "own",
+      apiKey: "sk-user-openai-key",
+      provider: "openai",
+      model: "gpt-4o",
+      requested: { provider: "openai", model: "gpt-4o" },
+    });
+    vi.mocked(executeRun).mockResolvedValue({
+      runId: "run-11",
+      status: "completed",
+      totalResponses: 1,
+      tokensUsed: 10,
+    });
+
+    await triggerRunForProject(db as never, "user-1", "proj-1", { provider: "openai" });
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", undefined);
+  });
+
   it("names the requested provider when an override has no own key", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
-    vi.mocked(resolveKey).mockResolvedValue({
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "none",
       provider: "openai",
       model: "gpt-4o",
+      requested: { provider: "openai", model: "gpt-4o" },
     });
     const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
       provider: "openai",
     });
     expect(outcome).toMatchObject({ ok: false, code: "no_key" });
     expect((outcome as { message: string }).message).toContain("OpenAI");
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+
+  // The reported bug, at the API surface: a caller asking for GPT-4o with only
+  // an Anthropic key on file used to get a Claude run reported as a success.
+  it("refuses rather than silently running the engine it has a key for", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
+      source: "mismatch",
+      provider: "openai",
+      model: "gpt-4o",
+      requested: { provider: "openai", model: "gpt-4o" },
+      available: ["anthropic"],
+    });
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
+      provider: "openai",
+    });
+    expect(outcome).toMatchObject({ ok: false, code: "no_key" });
+    expect((outcome as { message: string }).message).toContain("engine message for openai");
     expect(executeRun).not.toHaveBeenCalled();
   });
 });

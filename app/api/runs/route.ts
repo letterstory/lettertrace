@@ -4,7 +4,7 @@ import { getProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveRunKey, consumeTrialRun, recordTrialUsage } from "@/lib/trial";
+import { resolveRunKey, consumeTrialRun, recordTrialUsage, engineKeyMessage } from "@/lib/trial";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -28,9 +28,14 @@ export async function POST() {
   const providerLabel = PROVIDERS[project.default_provider].label;
   const key = await resolveRunKey(supabase, user.id, project);
 
-  if (key.source === "none") {
+  // The selected engine has no key. Refusing beats running: the alternative is
+  // storing another assistant's answers under this project's trend line.
+  if (key.source === "none" || key.source === "mismatch") {
     return NextResponse.json(
-      { error: `Add a ${providerLabel} key in Settings first.` },
+      {
+        error: engineKeyMessage(key),
+        ...(key.source === "mismatch" ? { engineMismatch: true, available: key.available } : {}),
+      },
       { status: 400 },
     );
   }
@@ -77,7 +82,15 @@ export async function POST() {
       await recordTrialUsage(supabase, result.tokensUsed);
     }
 
-    return NextResponse.json({ ...result, keySource: key.source });
+    // Echo the engine that actually answered. The caller asked for
+    // key.requested; a trial forces the provider's cheap model, and the client
+    // shouldn't have to re-derive which of the two it got.
+    return NextResponse.json({
+      ...result,
+      keySource: key.source,
+      provider: key.provider,
+      model: key.model,
+    });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
   }

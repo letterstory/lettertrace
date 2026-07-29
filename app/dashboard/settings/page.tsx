@@ -69,7 +69,10 @@ export default async function SettingsPage() {
               </p>
             </div>
           </div>
-          <ProjectForm project={project} />
+          <ProjectForm
+            project={project}
+            configuredProviders={keys.map((k) => k.provider)}
+          />
         </CardBody>
       </Card>
 

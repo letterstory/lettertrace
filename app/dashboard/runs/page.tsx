@@ -1,7 +1,7 @@
 import { ArrowRight, PlayCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
-import { resolveKey } from "@/lib/trial";
+import { resolveRunKey, engineKeyMessage } from "@/lib/trial";
 import { PROVIDERS, modelLabel } from "@/lib/models";
 import { timeAgo } from "@/lib/utils";
 import type { Run, RunStatus } from "@/lib/types";
@@ -51,13 +51,10 @@ export default async function RunsPage() {
 
   // Ask the same resolver the run endpoint uses. Gating the button on a BYOK
   // key alone disabled it for trial users who had free runs left — the server
-  // would have accepted the request the UI refused to send.
-  const key = await resolveKey(
-    supabase,
-    user.id,
-    project.default_provider,
-    project.default_model,
-  );
+  // would have accepted the request the UI refused to send. It has to be the
+  // RUN resolver specifically: the lenient one accepts any provider's key, so
+  // the button read "ready" for an engine that has no key behind it.
+  const key = await resolveRunKey(supabase, user.id, project);
   const canRun = key.source === "own" || key.source === "trial";
 
   const { count: activePrompts } = await supabase
@@ -80,10 +77,14 @@ export default async function RunsPage() {
         // The model that will ACTUALLY run: a trial run is forced onto the
         // provider's cheap model, so naming the project default here told
         // users to expect Opus and then handed them Haiku.
-        description={`Each run asks your active prompts to ${modelLabel(
-          key.provider,
-          key.model,
-        )} and records where your brand shows up.`}
+        description={
+          canRun
+            ? `Each run asks your active prompts to ${modelLabel(
+                key.provider,
+                key.model,
+              )} and records where your brand shows up.`
+            : engineKeyMessage(key)
+        }
         action={
           <RunNow
             canRun={canRun}
