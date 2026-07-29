@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject, setActiveProject } from "@/lib/data";
-import { isProvider, defaultModelFor } from "@/lib/models";
+import { isProvider, resolveEngine } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
@@ -108,8 +108,21 @@ export async function POST(request: Request) {
         ...baseFields,
         updated_at: new Date().toISOString(),
       };
-      if (providerOverride) update.default_provider = providerOverride;
-      if (modelOverride) update.default_model = modelOverride;
+      // Provider and model move together. A request naming only the provider
+      // used to leave the previous model behind, persisting a pair like
+      // openai + claude-opus-4-8; a model on its own is validated against the
+      // provider it will actually be sent to.
+      if (providerOverride || modelOverride) {
+        const engine = resolveEngine(
+          providerOverride ?? existing.default_provider,
+          modelOverride,
+        );
+        if (!engine.ok) {
+          return NextResponse.json({ error: engine.message }, { status: 400 });
+        }
+        update.default_provider = engine.provider;
+        update.default_model = engine.model;
+      }
 
       const { data, error } = await supabase
         .from("projects")
@@ -134,14 +147,16 @@ export async function POST(request: Request) {
       return NextResponse.json(data);
     }
 
-    const insertProvider = providerOverride ?? pickDefaultProvider();
-    const insertModel = modelOverride ?? defaultModelFor(insertProvider);
+    const engine = resolveEngine(providerOverride ?? pickDefaultProvider(), modelOverride);
+    if (!engine.ok) {
+      return NextResponse.json({ error: engine.message }, { status: 400 });
+    }
     const { data, error } = await supabase
       .from("projects")
       .insert({
         ...baseFields,
-        default_provider: insertProvider,
-        default_model: insertModel,
+        default_provider: engine.provider,
+        default_model: engine.model,
         user_id: user.id,
       })
       .select("*")

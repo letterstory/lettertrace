@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { Button, Input, Textarea, Select, Label, Spinner } from "@/components/ui";
 import { PROVIDER_LIST, PROVIDERS } from "@/lib/models";
+import { article } from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
 
 const SCHEDULE_LABELS: Record<Schedule, string> = {
@@ -289,9 +290,20 @@ export default function ProjectForm({
           {saving ? "Saving..." : "Save changes"}
         </Button>
         {saved && !saving && (
+          // A bare "Saved" was the whole complaint: an engine with no key
+          // behind it saved as cheerfully as a working one, and the warning
+          // above sits pre-submit where it reads as advice rather than as the
+          // outcome. Qualify the confirmation with what is still missing.
           <span className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
             <Check className="h-4 w-4 text-teal-dark" />
-            Saved
+            {engineNeedsKey ? (
+              <span>
+                Saved, but runs need {article(PROVIDERS[selectedProvider].label)}{" "}
+                {PROVIDERS[selectedProvider].label} key
+              </span>
+            ) : (
+              "Saved"
+            )}
           </span>
         )}
       </div>

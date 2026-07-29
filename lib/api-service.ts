@@ -22,7 +22,7 @@ import {
 } from "@/lib/metrics";
 import { executeRun, type RunContext, type RunResult } from "@/lib/engine";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
-import { defaultModelFor, isProvider, PROVIDERS } from "@/lib/models";
+import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
 // Operations behind the programmatic surface, shared by the REST v1 routes and
 // the MCP tools so the two can't drift apart. Callers authenticate with a
@@ -131,10 +131,14 @@ export async function createProject(
     typeof input.default_provider === "string" && isProvider(input.default_provider)
       ? input.default_provider
       : pickDefaultProvider();
-  const model =
-    typeof input.default_model === "string" && input.default_model.trim().length > 0
-      ? input.default_model.trim()
-      : defaultModelFor(provider);
+  // The model has to belong to the provider it will be sent to. Accepting any
+  // string here stored pairs that only failed later, at the provider, as an
+  // error naming a model id the caller never chose.
+  const engine = resolveEngine(provider, input.default_model);
+  if (!engine.ok) {
+    return { ok: false, code: "invalid", message: engine.message };
+  }
+  const model = engine.model;
 
   // `user_id` comes from the authenticated key, never the body: the insert is
   // what ties the new project to the caller on the service-role client.
@@ -598,7 +602,10 @@ export async function getRunResponses(
 
 export type TriggerOutcome =
   | { ok: true; result: RunResult }
-  | { ok: false; code: "not_found" | "no_key"; message: string };
+  // `invalid_engine` is the caller's request being malformed (a model the
+  // provider doesn't offer), distinct from `no_key` which is about billing —
+  // routes map them to 400 and 402 respectively.
+  | { ok: false; code: "not_found" | "no_key" | "invalid_engine"; message: string };
 
 /**
  * Execute a monitoring run for one of the user's projects.
@@ -623,12 +630,20 @@ export async function triggerRunForProject(
   // only (the project row is untouched). Resolution is strict either way: an
   // API caller that asks for gpt-4o and gets Claude back has no way to notice,
   // and the run row would claim the engine it was actually given.
-  const key = await resolveRunKeyFor(
-    supabase,
-    userId,
+  //
+  // Validated against the catalog first, for the same reason the project write
+  // paths are: an override naming a model the provider doesn't offer would be
+  // recorded on the run and then rejected by the provider mid-run, after the
+  // run row already existed.
+  const override = resolveEngine(
     options?.provider ?? project.default_provider,
     options?.model ?? (options?.provider ? undefined : project.default_model),
   );
+  if (!override.ok) {
+    return { ok: false, code: "invalid_engine", message: override.message };
+  }
+
+  const key = await resolveRunKeyFor(supabase, userId, override.provider, override.model);
   if (key.source !== "own") {
     const providerLabel = PROVIDERS[key.requested.provider].label;
     return {
