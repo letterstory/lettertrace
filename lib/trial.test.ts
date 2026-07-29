@@ -13,6 +13,7 @@ import {
   resolveKey,
   resolveRunKeyFor,
   engineKeyMessage,
+  nextRunMessage,
   trialKeyFor,
   trialModelFor,
   trialEnabled,
@@ -247,5 +248,44 @@ describe("trial key resolution", () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
     process.env.TRIAL_GOOGLE_API_KEY = "AIzaTrialGoogle";
     expect(pickDefaultProvider()).toBe("anthropic");
+  });
+});
+
+describe("nextRunMessage", () => {
+  // The reported bug: "Each run asks your prompts to Claude Opus 4.8" sat above
+  // a list of completed runs labelled Claude Haiku 4.5. Both were true, nothing
+  // said why, so the copy read as simply wrong.
+  it("names both models when the trial substitutes a cheaper one", async () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    process.env.TRIAL_ANTHROPIC_MODEL = "claude-haiku-4-5";
+    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const message = nextRunMessage(k);
+    expect(message).toContain("Claude Haiku 4.5");
+    expect(message).toContain("Claude Opus 4.8");
+    expect(message).toContain("Anthropic (Claude)");
+  });
+
+  it("speaks about the next run, not about runs in general", async () => {
+    ownsKeysFor("anthropic");
+    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    expect(nextRunMessage(k)).toMatch(/^Your next run/);
+    expect(nextRunMessage(k)).not.toMatch(/Each run/);
+  });
+
+  it("stays a single clause on an own key, with no trial aside", async () => {
+    ownsKeysFor("anthropic");
+    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const message = nextRunMessage(k);
+    expect(message).toContain("Claude Opus 4.8");
+    expect(message).not.toContain("Free runs");
+  });
+
+  // No TRIAL_*_MODEL configured: the trial runs the model they picked, so
+  // there is no substitution to explain.
+  it("adds no aside when the trial runs the chosen model anyway", async () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    expect(k.source).toBe("trial");
+    expect(nextRunMessage(k)).not.toContain("Free runs");
   });
 });
