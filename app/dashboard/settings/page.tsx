@@ -7,6 +7,7 @@ import KeysManager from "./keys-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
 import type { ApiKeyPublic } from "@/lib/types";
+import { trialEnabled } from "@/lib/trial";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,7 @@ export default async function SettingsPage() {
           <ProjectForm
             project={project}
             configuredProviders={keys.map((k) => k.provider)}
+            onTrial={trialEnabled() && keys.length === 0}
           />
         </CardBody>
       </Card>

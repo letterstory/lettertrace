@@ -253,6 +253,31 @@ export function engineKeyMessage(key: ResolvedKey): string {
   return `Your answer engine is set to ${engine}. Add ${article(providerLabel)} ${providerLabel} key in Settings to run.`;
 }
 
+/**
+ * What the NEXT run will ask, for a key that can actually run.
+ *
+ * Phrased about the next run rather than about runs in general, which is the
+ * bug this replaces: "Each run asks your prompts to Claude Opus 4.8" sat
+ * directly above a list of completed runs that said Claude Haiku 4.5, so it
+ * read as a contradiction. Both were true — the heading described the next run
+ * on the user's own key, the rows recorded earlier runs on the trial's cheaper
+ * model — but nothing said so, leaving the user to work out the rule themselves.
+ *
+ * When the trial substitutes a model, name both: the one that will run and the
+ * one their own key would use. That difference is the whole explanation, and
+ * `requested` exists to carry it.
+ */
+export function nextRunMessage(key: ResolvedKey): string {
+  const willRun = modelLabel(key.provider, key.model);
+  const chosen = modelLabel(key.requested.provider, key.requested.model);
+  const providerLabel = PROVIDERS[key.requested.provider].label;
+
+  if (key.source === "trial" && key.model !== key.requested.model) {
+    return `Your next run asks your active prompts to ${willRun}. Free runs use a cheaper model on our keys — add your own ${providerLabel} key to run ${chosen}.`;
+  }
+  return `Your next run asks your active prompts to ${willRun} and records where your brand shows up.`;
+}
+
 /** Add consumed tokens to the caller's trial tally (atomic, self-scoped rpc).
  * Recording only; the free tier is gated on runs, not tokens. */
 export async function recordTrialUsage(

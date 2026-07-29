@@ -1,7 +1,7 @@
 import { ArrowRight, PlayCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
-import { resolveRunKey, engineKeyMessage } from "@/lib/trial";
+import { resolveRunKey, engineKeyMessage, nextRunMessage } from "@/lib/trial";
 import { PROVIDERS, modelLabel } from "@/lib/models";
 import { timeAgo } from "@/lib/utils";
 import type { Run, RunStatus } from "@/lib/types";
@@ -74,17 +74,10 @@ export default async function RunsPage() {
     <div className="space-y-8">
       <SectionHeading
         title="Runs"
-        // The model that will ACTUALLY run: a trial run is forced onto the
-        // provider's cheap model, so naming the project default here told
-        // users to expect Opus and then handed them Haiku.
-        description={
-          canRun
-            ? `Each run asks your active prompts to ${modelLabel(
-                key.provider,
-                key.model,
-              )} and records where your brand shows up.`
-            : engineKeyMessage(key)
-        }
+        // Describes the NEXT run, and says so. The old copy claimed what
+        // "each run" asks, sitting above a list of completed runs that named a
+        // different model — see nextRunMessage.
+        description={canRun ? nextRunMessage(key) : engineKeyMessage(key)}
         action={
           <RunNow
             canRun={canRun}

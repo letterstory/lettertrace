@@ -27,11 +27,16 @@ function splitEngine(value: string): { provider: string; model: string } {
 export default function ProjectForm({
   project,
   configuredProviders = [],
+  onTrial = false,
 }: {
   project: Project | null;
   /** Providers the user has a key for, so the picker can flag an engine that
    *  can't run before they discover it as a failed run. */
   configuredProviders?: Provider[];
+  /** Running on the operator's shared keys, which force a cheaper model. The
+   *  picker promises "the assistant we query", so on the trial that promise is
+   *  only true of the provider, not the model. */
+  onTrial?: boolean;
 }) {
   const router = useRouter();
 
@@ -213,11 +218,19 @@ export default function ProjectForm({
             for. We never answer with a different assistant than the one selected.
           </p>
         ) : (
-          <p className="mt-1.5 text-xs text-ink-faint">
-            Which assistant we query for this brand. You&apos;ll need a key for the
-            matching provider in the section above. Google AI Overviews and Gemini both
-            use your Google key.
-          </p>
+          <div className="mt-1.5 space-y-1">
+            <p className="text-xs text-ink-faint">
+              Which assistant we query for this brand. You&apos;ll need a key for the
+              matching provider in the section above. Google AI Overviews and Gemini both
+              use your Google key.
+            </p>
+            {onTrial && (
+              <p className="text-xs text-ink-faint">
+                While you&apos;re on free runs we use a faster, cheaper model from the
+                same provider. Your own key runs exactly what you pick here.
+              </p>
+            )}
+          </div>
         )}
       </div>
 
