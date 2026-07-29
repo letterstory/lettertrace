@@ -104,6 +104,21 @@ describe("getUnseenRun", () => {
     const { db } = fakeDb({ runs: run({ finished_at: null }) });
     expect(await getUnseenRun(db, project())).toBeNull();
   });
+
+  // Postgres renders timestamptz as "+00:00" and toISOString() produces "Z",
+  // so these two are the same instant written two ways. Compared as text the
+  // suffix decides it ('Z' > '+') and an already-seen run reads as unseen.
+  it("compares instants, not the string they were written as", async () => {
+    const { db } = fakeDb({ runs: run({ finished_at: "2026-07-20T10:05:00.000+00:00" }) });
+    const seen = project({ results_seen_at: "2026-07-20T10:05:00.000Z" });
+    expect(await getUnseenRun(db, seen)).toBeNull();
+  });
+
+  it("still flags a genuinely newer run across the two formats", async () => {
+    const { db } = fakeDb({ runs: run({ finished_at: "2026-07-20T10:06:00.000+00:00" }) });
+    const seen = project({ results_seen_at: "2026-07-20T10:05:00.000Z" });
+    expect(await getUnseenRun(db, seen)).toMatchObject({ id: "run-1" });
+  });
 });
 
 describe("markResultsSeen", () => {
@@ -151,6 +166,13 @@ describe("markResultsSeen", () => {
       ok: false,
       code: "not_found",
     });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("does not rewrite when the mark already covers that instant in another format", async () => {
+    const { db, updates } = fakeDb({ runs: { finished_at: "2026-07-20T10:05:00.000+00:00" } });
+    const already = project({ results_seen_at: "2026-07-20T10:05:00.000Z" });
+    expect(await markResultsSeen(db, already, "run-1")).toMatchObject({ changed: false });
     expect(updates).toHaveLength(0);
   });
 

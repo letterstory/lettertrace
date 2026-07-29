@@ -22,6 +22,20 @@ import type { Project, Run } from "@/lib/types";
 const FINISHED = ["completed", "failed"] as const;
 
 /**
+ * Is `a` strictly later than `b`? Compared as instants, not as strings.
+ *
+ * These timestamps arrive in two shapes — Postgres renders timestamptz as
+ * `…+00:00` while `toISOString()` produces `…Z` — and comparing those as text
+ * orders them by the suffix character once the digits match, not by time. It
+ * happens to come out right today only because every value we compare has been
+ * normalized by a read from Postgres first. That's an invisible dependency on
+ * where the string came from, so parse instead and let the format stop mattering.
+ */
+function isAfter(a: string, b: string): boolean {
+  return Date.parse(a) > Date.parse(b);
+}
+
+/**
  * The project's most recent finished run, if it finished after the owner last
  * looked at results. Null when there's nothing new — which is the common case,
  * so this is one indexed row read on the dashboard's critical path.
@@ -46,7 +60,7 @@ export async function getUnseenRun(
   // Never looked: the newest finished run is unseen. That's the right first
   // impression for an account that has runs but has never opened one.
   if (!project.results_seen_at) return run;
-  return run.finished_at > project.results_seen_at ? run : null;
+  return isAfter(run.finished_at, project.results_seen_at) ? run : null;
 }
 
 export type MarkSeenOutcome =
@@ -88,7 +102,7 @@ export async function markResultsSeen(
   }
 
   const current = project.results_seen_at;
-  if (current && current >= seenAt) {
+  if (current && !isAfter(seenAt, current)) {
     return { ok: true, changed: false, seenAt: current };
   }
 
