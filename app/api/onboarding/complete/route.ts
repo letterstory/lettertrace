@@ -11,6 +11,7 @@ import {
   engineKeyMessage,
 } from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
+import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
 import type { Project } from "@/lib/types";
 
@@ -100,6 +101,14 @@ export async function POST(request: Request) {
       })
     : [];
 
+  // Competitors are optional — a project with none is valid, it just can't
+  // report share of voice yet. The brand and its aliases are excluded however
+  // they arrived: a client can post this body without ever having asked for
+  // suggestions, so the model-side filtering isn't sufficient on its own.
+  const competitors = normalizeCompetitorList(body.competitors, {
+    exclude: [brand_name, ...brand_aliases],
+  });
+
   const incomplete = topics
     .map((t, i) => ({ i, t }))
     .filter(({ t }) => !t.name || t.prompts.length === 0);
@@ -157,12 +166,32 @@ export async function POST(request: Request) {
   await logDashboard(user, request, {
     category: "onboarding",
     action: "onboarding.completed",
-    summary: `Set up "${brand_name}" with ${topics.length} topic${topics.length === 1 ? "" : "s"}`,
+    summary: `Set up "${brand_name}" with ${topics.length} topic${topics.length === 1 ? "" : "s"} and ${competitors.length} competitor${competitors.length === 1 ? "" : "s"}`,
     projectId: project.id,
     targetType: "project",
     targetId: project.id,
-    metadata: { topics: topics.length, brand_name },
+    metadata: { topics: topics.length, competitors: competitors.length, brand_name },
   });
+
+  // Persist competitors before the first run: executeRun reads them to detect
+  // rival mentions, so seeding them after the run would leave that run's
+  // answers scored against the brand alone and no share of voice to show.
+  if (competitors.length > 0) {
+    const { error: compErr } = await supabase.from("competitors").insert(
+      competitors.map((c) => ({
+        project_id: project.id,
+        name: c.name,
+        aliases: c.aliases,
+        domain: c.domain,
+      })),
+    );
+    // Non-fatal: the project and its topics are already real, and the user can
+    // add competitors from the Competitors page. Losing them shouldn't cost
+    // them the whole onboarding they just completed.
+    if (compErr) {
+      console.error("[onboarding] competitor insert failed:", compErr.message);
+    }
+  }
 
   // Persist topics + their prompts.
   for (const topic of topics) {
