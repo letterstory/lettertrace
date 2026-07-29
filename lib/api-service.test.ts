@@ -92,6 +92,7 @@ const PROJECT: Project = {
   description: null,
   default_provider: "anthropic",
   default_model: "claude-sonnet-4-6",
+  results_seen_at: null,
   schedule: "off",
   use_web_search: true,
   replicates: 1,

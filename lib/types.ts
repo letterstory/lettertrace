@@ -64,6 +64,8 @@ export interface Project {
   /** Times each active prompt is asked per run (1–10). >1 buys confidence in a "no mention". */
   replicates: number;
   last_run_at: string | null;
+  /** When the owner last opened this project's results. Null = never. */
+  results_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }

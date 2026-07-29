@@ -203,6 +203,15 @@ alter table public.projects
   add column if not exists replicates integer not null default 1
   check (replicates between 1 and 10);
 
+-- When the owner last actually LOOKED at this project's results. A run
+-- finishing is silent otherwise: the scheduler and the API both finish runs
+-- while nobody is on the page, and even a manual run just appears in a list.
+-- Comparing a run's finished_at against this is what decides whether to nudge.
+-- Null means never looked, so the newest finished run is unseen — which is the
+-- right first impression for an account that has runs but has never opened one.
+alter table public.projects
+  add column if not exists results_seen_at timestamptz;
+
 -- ---------- competitors ----------------------------------------------
 create table if not exists public.competitors (
   id uuid primary key default gen_random_uuid(),

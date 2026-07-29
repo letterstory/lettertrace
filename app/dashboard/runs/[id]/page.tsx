@@ -14,6 +14,7 @@ import {
   StatCard,
   EmptyState,
 } from "@/components/ui";
+import { MarkResultsSeen } from "./mark-seen";
 
 export const dynamic = "force-dynamic";
 
@@ -111,6 +112,9 @@ export default async function RunDetailPage({ params }: { params: { id: string }
 
   return (
     <div className="space-y-8">
+      {/* Reaching this page is what "checked the results" means, so it clears
+          the dashboard nudge however the user arrived. */}
+      <MarkResultsSeen runId={run.id} />
       <div className="space-y-4">
         <a
           href="/dashboard/runs"
