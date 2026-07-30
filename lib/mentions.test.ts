@@ -46,3 +46,50 @@ describe("common-word domain labels never become terms", () => {
     expect(detectMention("You.com is a solid AI search pick.", terms).mentioned).toBe(true);
   });
 });
+
+describe("markdown link labels", () => {
+  const terms = brandTerms("Vercel", [], "vercel.com");
+
+  // The shape this exists for: a ranked list where every brand name is a link.
+  // To the reader the brand is named — the label IS the prose.
+  it("counts the brand when it is the visible label", () => {
+    expect(detectMention("Try [Vercel](https://vercel.com) for Next.js.", terms).mentioned).toBe(true);
+    expect(detectMention("1. **[Vercel](https://vercel.com)** — best for Next.js.", terms).mentioned).toBe(true);
+  });
+
+  // ...but a label that reads as an address is a citation, which is what keeps
+  // a link from minting a first-mention milestone.
+  it("still ignores a label that is itself an address", () => {
+    expect(detectMention("See [vercel.com](https://vercel.com).", terms).mentioned).toBe(false);
+    expect(detectMention("See [vercel.com/docs](https://vercel.com/docs).", terms).mentioned).toBe(false);
+    expect(detectMention("See [https://vercel.com](https://vercel.com).", terms).mentioned).toBe(false);
+    expect(detectMention("See [www.vercel.com](https://vercel.com).", terms).mentioned).toBe(false);
+  });
+
+  it("never counts the link target, only the label", () => {
+    // One mention: the label. The target names the brand twice more.
+    const hit = detectMention("[Vercel](https://vercel.com/vercel-docs) is good.", terms);
+    expect(hit.count).toBe(1);
+  });
+
+  it("treats a label with prose around it as prose", () => {
+    expect(
+      detectMention("[Vercel — the hosting platform](https://vercel.com) is good.", terms).mentioned,
+    ).toBe(true);
+  });
+
+  // firstPosition drives prominence, so every transform here has to leave the
+  // surviving characters exactly where they were.
+  it("preserves length and label offsets", () => {
+    const text = "Try [Vercel](https://vercel.com) today.";
+    const stripped = stripLinkSurfaces(text);
+    expect(stripped.length).toBe(text.length);
+    expect(stripped.indexOf("Vercel")).toBe(text.indexOf("Vercel"));
+  });
+
+  it("handles an empty label without shifting anything", () => {
+    const text = "See [](https://vercel.com) here.";
+    expect(stripLinkSurfaces(text).length).toBe(text.length);
+    expect(detectMention(text, terms).mentioned).toBe(false);
+  });
+});

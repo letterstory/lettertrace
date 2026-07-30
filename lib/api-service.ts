@@ -47,6 +47,35 @@ import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 // Lettertrace API key, so `supabase` is the service-role client: RLS is
 // bypassed and every query here scopes by userId explicitly.
 
+/**
+ * Run queries concurrently and get the results back BY NAME.
+ *
+ * `Promise.all` over a list of queries hands back a positional array, and a
+ * positional destructure of seven heterogeneous queries is a trap the type
+ * system cannot spring: every PostgREST response carries both `data` and
+ * `count`, so pulling `{ count }` out of a `select()` type-checks perfectly.
+ * That is how getRunReport once read its competitor head-count out of the
+ * prompts query and its prompt targets out of the competitors query — pages[]
+ * came back empty and every report read no-competitors, through a typed
+ * codebase, past review, all the way to staging.
+ *
+ * Keying the queries removes the failure mode rather than fixing one instance
+ * of it: inserting, removing or reordering a query here cannot misalign
+ * anything, because nothing is aligned by position. Concurrency is unchanged —
+ * the builders are lazy and all start together inside the Promise.all.
+ */
+async function allOf<T extends Record<string, PromiseLike<unknown>>>(
+  queries: T,
+): Promise<{ [K in keyof T]: Awaited<T[K]> }> {
+  const keys = Object.keys(queries) as (keyof T)[];
+  const settled = await Promise.all(keys.map((k) => queries[k]));
+  const out = {} as { [K in keyof T]: Awaited<T[K]> };
+  keys.forEach((key, i) => {
+    out[key] = settled[i] as Awaited<T[typeof key]>;
+  });
+  return out;
+}
+
 /** A project row trimmed to what the API exposes. */
 export function projectSummary(p: Project) {
   return {
@@ -854,29 +883,28 @@ export async function getRunReport(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [
-    { count },
-    { data: mentionRows },
-    { data: sourceRows },
-    { data: responseTopicRows },
-    { data: topicRows },
-    { data: promptTargetRows },
-    { count: competitorCount },
-  ] = await Promise.all([
-    supabase
+  const results = await allOf({
+    responseCount: supabase
       .from("responses")
       .select("id", { count: "exact", head: true })
       .eq("run_id", runId),
-    supabase.from("mentions").select("*").eq("run_id", runId),
-    supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
-    supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
-    supabase.from("topics").select("id, name").eq("project_id", run.project_id),
-    supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
-    supabase
+    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
+    sources: supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
+    responseTopics: supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
+    topics: supabase.from("topics").select("id, name").eq("project_id", run.project_id),
+    promptTargets: supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
+    competitors: supabase
       .from("competitors")
       .select("id", { count: "exact", head: true })
       .eq("project_id", run.project_id),
-  ]);
+  });
+  const { count } = results.responseCount;
+  const { data: mentionRows } = results.mentions;
+  const { data: sourceRows } = results.sources;
+  const { data: responseTopicRows } = results.responseTopics;
+  const { data: topicRows } = results.topics;
+  const { data: promptTargetRows } = results.promptTargets;
+  const { count: competitorCount } = results.competitors;
 
   const mentions = (mentionRows ?? []) as Mention[];
   const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
@@ -994,21 +1022,20 @@ export async function getRunResponses(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [
-    { data: responseRows },
-    { data: sourceRows },
-    { data: mentionRows },
-    { data: promptRows },
-  ] = await Promise.all([
-    supabase
+  const results = await allOf({
+    responses: supabase
       .from("responses")
       .select("*")
       .eq("run_id", runId)
       .order("created_at", { ascending: true }),
-    supabase.from("sources").select("*").eq("run_id", runId),
-    supabase.from("mentions").select("*").eq("run_id", runId),
-    supabase.from("prompts").select("id, text").eq("project_id", run.project_id),
-  ]);
+    sources: supabase.from("sources").select("*").eq("run_id", runId),
+    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
+    prompts: supabase.from("prompts").select("id, text").eq("project_id", run.project_id),
+  });
+  const { data: responseRows } = results.responses;
+  const { data: sourceRows } = results.sources;
+  const { data: mentionRows } = results.mentions;
+  const { data: promptRows } = results.prompts;
 
   const promptTextById = new Map(
     ((promptRows ?? []) as Pick<Prompt, "id" | "text">[]).map((p) => [p.id, p.text]),
