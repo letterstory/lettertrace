@@ -1120,7 +1120,7 @@ Return a JSON object of this shape:
   ]
 }
 Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company's own name in the questions.
-Provide up to 5 competitors. "aliases" are other names an AI answer might use for it (short name, product name, former name) — empty array if none. "domain" is its primary website domain, lowercase, no protocol or path — null if unsure. Return an empty array if you cannot name real competitors with confidence.`;
+Provide up to 5 competitors. "aliases" are other names an AI answer might use for it (short name, product name, former name). Empty array if none. "domain" is its primary website domain, lowercase, no protocol or path. Null if unsure. Return an empty array if you cannot name real competitors with confidence.`;
 
   const res =
     opts.provider === "anthropic"
@@ -1290,7 +1290,7 @@ export function humanError(err: unknown): string {
           : "";
       return (
         `Google rejected the request: this key's quota is used up.${wait} ` +
-        `Free-tier and trial keys allow only a few requests per minute — check the key's quota in Google AI Studio, or wait and run again.`
+        `Free-tier and trial keys allow only a few requests per minute. Check the key's quota in Google AI Studio, or wait and run again.`
       );
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
@@ -1314,7 +1314,7 @@ export function humanError(err: unknown): string {
           : "";
       return (
         `Perplexity rejected the request: this key is over its rate limit.${wait} ` +
-        `New keys start on a low usage tier — check your tier and credit balance in the Perplexity API settings, or wait and run again.`
+        `New keys start on a low usage tier. Check your tier and credit balance in the Perplexity API settings, or wait and run again.`
       );
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";

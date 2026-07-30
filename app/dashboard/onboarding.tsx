@@ -428,47 +428,61 @@ export function Onboarding() {
             </div>
             <p className="mt-1 text-sm text-ink-soft">
               {competitors.length > 0
-                ? "We spotted these. Edit or remove any before you start — we'll track how often each is named alongside you."
+                ? "We spotted these. Edit or remove any before you start. We'll track how often each is named alongside you."
                 : "Add the brands you want to benchmark against, and we'll track how often each is named alongside you."}
             </p>
 
             {competitors.length > 0 && (
-              <div className="mt-4 space-y-2">
-                {competitors.map((c, ci) => (
-                  <div key={ci} className="flex items-center gap-2">
-                    <Input
-                      value={c.name}
-                      onChange={(e) => setCompetitorField(ci, "name", e.target.value)}
-                      placeholder="Competitor name"
-                      className="font-medium sm:max-w-[15rem]"
-                      aria-label={`Competitor ${ci + 1} name`}
-                    />
-                    <Input
-                      value={c.aliases}
-                      onChange={(e) => setCompetitorField(ci, "aliases", e.target.value)}
-                      // Short enough not to truncate in this column; a single
-                      // name works too, so the comma rule needn't be spelled out.
-                      placeholder="Other names"
-                      className="hidden text-sm sm:block"
-                      aria-label={`Competitor ${ci + 1} aliases`}
-                    />
-                    <Input
-                      value={c.domain}
-                      onChange={(e) => setCompetitorField(ci, "domain", e.target.value)}
-                      placeholder="domain.com"
-                      className="hidden text-sm sm:block sm:max-w-[12rem]"
-                      aria-label={`Competitor ${ci + 1} domain`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeCompetitor(ci)}
-                      className="shrink-0 rounded p-2 text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
-                      aria-label={`Remove ${c.name.trim() || "competitor"}`}
+              // A grid, not a row of flex inputs, so the header labels line up
+              // with the columns they name. Aliases and domain are hidden on
+              // narrow screens and drop out of the grid flow with them.
+              <div className="mt-4">
+                <div className="hidden gap-2 pb-1.5 pl-3 sm:grid sm:grid-cols-[15rem_1fr_12rem_2.25rem]">
+                  <span className="text-xs font-medium text-ink-faint">Name</span>
+                  <span className="text-xs font-medium text-ink-faint">Other names</span>
+                  <span className="text-xs font-medium text-ink-faint">Domain</span>
+                  <span aria-hidden />
+                </div>
+                <div className="space-y-2">
+                  {competitors.map((c, ci) => (
+                    <div
+                      key={ci}
+                      className="grid grid-cols-[1fr_2.25rem] items-center gap-2 sm:grid-cols-[15rem_1fr_12rem_2.25rem]"
                     >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
+                      <Input
+                        value={c.name}
+                        onChange={(e) => setCompetitorField(ci, "name", e.target.value)}
+                        placeholder="Competitor name"
+                        className="font-medium"
+                        aria-label={`Competitor ${ci + 1} name`}
+                      />
+                      <Input
+                        value={c.aliases}
+                        onChange={(e) => setCompetitorField(ci, "aliases", e.target.value)}
+                        // Short enough not to truncate in this column; a single
+                        // name works too, so the comma rule needn't be spelled out.
+                        placeholder="Other names"
+                        className="hidden text-sm sm:block"
+                        aria-label={`Competitor ${ci + 1} aliases`}
+                      />
+                      <Input
+                        value={c.domain}
+                        onChange={(e) => setCompetitorField(ci, "domain", e.target.value)}
+                        placeholder="domain.com"
+                        className="hidden text-sm sm:block"
+                        aria-label={`Competitor ${ci + 1} domain`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeCompetitor(ci)}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-ink-faint transition hover:bg-ink/5 hover:text-terracotta-dark"
+                        aria-label={`Remove ${c.name.trim() || "competitor"}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

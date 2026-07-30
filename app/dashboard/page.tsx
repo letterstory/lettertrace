@@ -416,7 +416,7 @@ export default async function DashboardPage() {
                   No competitors tracked yet, so there is nothing to compare against.
                 </p>
                 <p className="mt-1 text-sm text-ink-faint">
-                  We only look for brands you list — companies named in an answer are
+                  We only look for brands you list. Companies named in an answer are
                   invisible until you add them.
                 </p>
                 <Link

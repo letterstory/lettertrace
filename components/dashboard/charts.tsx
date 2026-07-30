@@ -5,6 +5,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -144,19 +145,34 @@ export function ShareBars({
   if (!data || data.length === 0) {
     return <Placeholder label="No share of voice yet" height={180} />;
   }
+  // Competitor names are real company names ("AWS Elastic Beanstalk", "Google
+  // Cloud Run"), and a fixed 110px axis truncated them to initials. Size the
+  // label gutter to the longest name actually present, capped so one very long
+  // name can't squeeze the bars out of existence.
+  const longest = data.reduce((n, d) => Math.max(n, d.name.length), 0);
+  const axisWidth = Math.min(200, Math.max(96, longest * 7.2));
+  // Share of voice splits 100% across every tracked brand, so with a handful of
+  // competitors nobody is near 100 and a fixed 0-100 axis spent three quarters
+  // of the width on empty space — the bars ended up too short to compare, which
+  // is the one thing this chart is for. Scale to the data, rounded up to a
+  // quarter so the gridlines stay meaningful, and let the printed values keep a
+  // short axis from reading as "almost everything".
+  const maxValue = data.reduce((n, d) => Math.max(n, d.value || 0), 0);
+  const ceiling = Math.min(100, Math.max(25, Math.ceil(maxValue / 25) * 25));
   const height = Math.max(160, data.length * 44 + 24);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart
         data={data}
         layout="vertical"
-        margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
+        // Room on the right for the value label that used to require a hover.
+        margin={{ top: 4, right: 44, bottom: 4, left: 8 }}
         barCategoryGap={12}
       >
         <CartesianGrid stroke={t.grid} horizontal={false} />
         <XAxis
           type="number"
-          domain={[0, 100]}
+          domain={[0, ceiling]}
           tick={t.axisTick}
           tickLine={false}
           axisLine={{ stroke: t.grid }}
@@ -168,7 +184,7 @@ export function ShareBars({
           tick={t.axisTick}
           tickLine={false}
           axisLine={false}
-          width={110}
+          width={axisWidth}
         />
         <Tooltip
           cursor={{ fill: t.cursor }}
@@ -179,6 +195,15 @@ export function ShareBars({
           {data.map((entry, i) => (
             <Cell key={i} fill={entry.isBrand ? BRAND : TEAL} />
           ))}
+          {/* The number is the point of the chart; reading it shouldn't need a
+              mouse, and doesn't work at all on touch. */}
+          <LabelList
+            dataKey="value"
+            position="right"
+            formatter={(v: number) => `${Math.round(v)}%`}
+            fill={t.axisTick.fill}
+            fontSize={12}
+          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
