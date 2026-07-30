@@ -179,6 +179,20 @@ curl -X POST https://your-app.com/api/v1/projects/<project-id>/prompts \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"prompts": [{"text": "best crm for startups", "topic": "CRM"}]}'
 
+# A project's tracked competitors: list / bulk-add (already-tracked names are
+# skipped, not errors) / stop tracking one. Candidates your stored answers
+# named but nobody tracks come from /competitors/discovered — confirm the real
+# ones via the POST; an unmatched competitor list makes informativeRate lie.
+curl https://your-app.com/api/v1/projects/<project-id>/competitors \
+  -H "Authorization: Bearer lt_live_..."
+curl -X POST https://your-app.com/api/v1/projects/<project-id>/competitors \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"competitors": [{"name": "WEKA", "aliases": ["WekaIO"], "domain": "weka.io"}]}'
+curl https://your-app.com/api/v1/projects/<project-id>/competitors/discovered \
+  -H "Authorization: Bearer lt_live_..."
+curl -X DELETE https://your-app.com/api/v1/competitors/<competitor-id> \
+  -H "Authorization: Bearer lt_live_..."
+
 # BYOK provider keys: list (masked hints + the supported-provider catalog),
 # set/rotate, remove. Verified against the provider and encrypted before storage.
 # Read the key from a file rather than inlining it — a key typed into a shell

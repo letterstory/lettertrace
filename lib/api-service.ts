@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  Competitor,
   Mention,
   Project,
   Prompt,
@@ -14,13 +15,17 @@ import {
   computeMeasurementQuality,
   computeRunSummary,
   computeTopicStats,
+  measurementVerdict,
   type CitationStat,
   type EntityStat,
   type MeasurementQuality,
+  type MeasurementVerdict,
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
 import { waitUntil } from "@vercel/functions";
+import { normalizeCompetitorList } from "@/lib/competitors";
+import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
 import { executeRun, prepareRun, resumeRun, type RunContext, type RunResult } from "@/lib/engine";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
@@ -381,6 +386,203 @@ export async function setPromptActive(
   };
 }
 
+/** A competitor as the API returns it (no project_id echo — it's in the URL). */
+export interface CompetitorSummary {
+  id: string;
+  name: string;
+  aliases: string[];
+  domain: string | null;
+  created_at: string;
+}
+
+function competitorSummary(c: Competitor): CompetitorSummary {
+  return {
+    id: c.id,
+    name: c.name,
+    aliases: c.aliases,
+    domain: c.domain,
+    created_at: c.created_at,
+  };
+}
+
+/** A project's tracked competitors. Null when the project isn't the user's. */
+export async function listProjectCompetitors(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+): Promise<CompetitorSummary[] | null> {
+  const project = await getOwnedProject(supabase, userId, projectId);
+  if (!project) return null;
+  const { data } = await supabase
+    .from("competitors")
+    .select("*")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+  return ((data ?? []) as Competitor[]).map(competitorSummary);
+}
+
+export type CreateCompetitorsOutcome =
+  | { ok: true; created: CompetitorSummary[]; skipped: number }
+  | { ok: false; code: "not_found" | "invalid"; message: string };
+
+/**
+ * Add tracked competitors to a project. Entries are normalized the same way
+ * the onboarding wizard's are (lib/competitors): unnamed rows dropped, the
+ * brand itself excluded, repeats collapsed. Entries whose name the project
+ * already tracks are counted in `skipped` rather than erroring — the caller
+ * is usually syncing a list, not appending blindly.
+ */
+export async function createCompetitors(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  entries: unknown,
+): Promise<CreateCompetitorsOutcome> {
+  const project = await getOwnedProject(supabase, userId, projectId);
+  if (!project) {
+    return { ok: false, code: "not_found", message: "Project not found." };
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return {
+      ok: false,
+      code: "invalid",
+      message: "competitors must be a non-empty array of { name, aliases?, domain? }.",
+    };
+  }
+
+  const list = normalizeCompetitorList(entries, {
+    exclude: [project.brand_name, ...project.brand_aliases],
+  });
+  if (list.length === 0) {
+    return {
+      ok: false,
+      code: "invalid",
+      message: "No usable entries: every competitor needs a non-empty name that isn't the brand itself.",
+    };
+  }
+
+  const { data: existingRows } = await supabase
+    .from("competitors")
+    .select("name")
+    .eq("project_id", projectId);
+  const existing = new Set(
+    ((existingRows ?? []) as { name: string }[]).map((r) => r.name.trim().toLowerCase()),
+  );
+
+  const toInsert = list.filter((c) => !existing.has(c.name.toLowerCase()));
+  const skipped = list.length - toInsert.length;
+  if (toInsert.length === 0) return { ok: true, created: [], skipped };
+
+  const { data: created, error } = await supabase
+    .from("competitors")
+    .insert(
+      toInsert.map((c) => ({
+        project_id: projectId,
+        name: c.name,
+        aliases: c.aliases,
+        domain: c.domain,
+      })),
+    )
+    .select("*");
+  if (error) throw error;
+
+  return {
+    ok: true,
+    created: ((created ?? []) as Competitor[]).map(competitorSummary),
+    skipped,
+  };
+}
+
+/**
+ * Remove a tracked competitor. Ownership is checked competitor -> project ->
+ * user. Null when it doesn't exist or isn't the user's; mention history rows
+ * keep the entity name they recorded, so past reports stay intact.
+ */
+export async function deleteCompetitor(
+  supabase: SupabaseClient,
+  userId: string,
+  competitorId: string,
+): Promise<CompetitorSummary | null> {
+  const { data: row } = await supabase
+    .from("competitors")
+    .select("*")
+    .eq("id", competitorId)
+    .maybeSingle();
+  const competitor = row as Competitor | null;
+  if (!competitor) return null;
+
+  const project = await getOwnedProject(supabase, userId, competitor.project_id);
+  if (!project) return null;
+
+  const { error } = await supabase
+    .from("competitors")
+    .delete()
+    .eq("id", competitorId)
+    .eq("project_id", project.id);
+  if (error) throw error;
+
+  return competitorSummary(competitor);
+}
+
+/** Answers scanned for discovery. Bounded so a long history stays cheap. */
+const DISCOVER_ANSWER_LIMIT = 200;
+
+export interface DiscoveredCompetitors {
+  companies: DiscoveredCompany[];
+  answersScanned: number;
+  /** Answers naming the top candidate — many means the category has a default
+   *  pick the project isn't tracking; a spread of one-offs means no consensus. */
+  topCount: number;
+}
+
+/**
+ * Companies the stored answers named that the project doesn't track — the
+ * dashboard's discovery view, exposed programmatically. Reads text already in
+ * the database (no provider call, no key needed). Candidates only: the caller
+ * confirms which become tracked competitors via createCompetitors.
+ */
+export async function discoverProjectCompetitors(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+): Promise<DiscoveredCompetitors | null> {
+  const project = await getOwnedProject(supabase, userId, projectId);
+  if (!project) return null;
+
+  const [{ data: responseRows }, { data: competitorRows }] = await Promise.all([
+    supabase
+      .from("responses")
+      .select("response_text")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(DISCOVER_ANSWER_LIMIT),
+    supabase.from("competitors").select("name, aliases").eq("project_id", projectId),
+  ]);
+
+  const answers = ((responseRows ?? []) as { response_text: string | null }[])
+    .map((r) => r.response_text ?? "")
+    .filter(Boolean);
+
+  // Everything already accounted for: the brand, its aliases, and every
+  // tracked competitor with theirs — offering any of these back would be
+  // suggesting something the project already tracks.
+  const tracked = [
+    project.brand_name,
+    ...project.brand_aliases,
+    ...((competitorRows ?? []) as Pick<Competitor, "name" | "aliases">[]).flatMap((c) => [
+      c.name,
+      ...c.aliases,
+    ]),
+  ];
+
+  const companies = discoverCompanies(answers, tracked, { limit: 24 });
+  return {
+    companies,
+    answersScanned: answers.length,
+    topCount: companies[0]?.answers ?? 0,
+  };
+}
+
 /** Recent runs for a project. Null when the project isn't the user's. */
 export async function listRuns(
   supabase: SupabaseClient,
@@ -410,6 +612,10 @@ export interface RunReport {
   /** How many answers named any tracked company. A run that named nobody
    *  measured nothing — read this before believing a zero mention rate. */
   quality: MeasurementQuality;
+  /** How to read this run's rates — the dashboard's chip, exposed so API
+   *  consumers don't re-derive it: a 0% that's "real-gap" and a 0% that's
+   *  "no-competitors" or "thin-sample" are entirely different findings. */
+  verdict: MeasurementVerdict;
   /** Per-topic brand visibility. Letterstory plans by topic, so this is the
    *  join between "we published about X" and "are we surfacing for X". */
   topics: (TopicStat & { topic: string | null })[];
@@ -452,6 +658,7 @@ export async function getRunReport(
     { data: sourceRows },
     { data: responseTopicRows },
     { data: topicRows },
+    { count: competitorCount },
   ] = await Promise.all([
     supabase
       .from("responses")
@@ -461,6 +668,10 @@ export async function getRunReport(
     supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
     supabase.from("responses").select("topic_id").eq("run_id", runId),
     supabase.from("topics").select("id, name").eq("project_id", run.project_id),
+    supabase
+      .from("competitors")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", run.project_id),
   ]);
 
   const mentions = (mentionRows ?? []) as Mention[];
@@ -479,16 +690,25 @@ export async function getRunReport(
     topic: t.topicId ? topicNames.get(t.topicId) ?? null : null,
   }));
 
+  const summary = computeRunSummary(mentions, totalResponses, project.brand_name);
+  const quality = computeMeasurementQuality(mentions, totalResponses);
+
   return {
     run,
     totalResponses,
     // Pass the brand name so a run with no brand mentions still reports a brand
     // row (rate 0 with an interval) rather than omitting it — an API consumer
     // tracking "have we been mentioned yet" needs the zero, not a missing key.
-    summary: computeRunSummary(mentions, totalResponses, project.brand_name),
+    summary,
     entities: computeEntityStats(mentions, totalResponses, project.brand_name),
     citations: computeCitationStats(sources, totalResponses),
-    quality: computeMeasurementQuality(mentions, totalResponses),
+    quality,
+    verdict: measurementVerdict({
+      totalResponses,
+      informativeRate: quality.informativeRate,
+      brandMentioned: summary.brandResponsesMentioned > 0,
+      competitorsTracked: competitorCount ?? 0,
+    }),
     topics: topicStats,
   };
 }
