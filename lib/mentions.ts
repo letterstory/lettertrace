@@ -27,11 +27,29 @@ function buildRegex(terms: string[]): RegExp | null {
   return new RegExp(pattern, "gi");
 }
 
+/**
+ * Link surfaces aren't prose naming. A brand string inside a URL, a markdown
+ * link (text OR target — link text is usually the URL itself), or a
+ * scheme-less www host means the answer LINKED a page — that's a citation,
+ * tracked through sources — not that it NAMED the brand. Counting it as a
+ * mention once minted a first-mention milestone off "[brand.com](https://…)".
+ * Matched spans are blanked with spaces so positions in the original text
+ * stay valid.
+ */
+export function stripLinkSurfaces(text: string): string {
+  const blank = (m: string) => " ".repeat(m.length);
+  return text
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, blank) // whole markdown links
+    .replace(/\bhttps?:\/\/[^\s<>"')\]]+/gi, blank) // bare URLs
+    .replace(/\bwww\.[^\s<>"')\]]+/gi, blank); // scheme-less www hosts
+}
+
 export function detectMention(text: string, terms: string[]): MentionHit {
   const absent: MentionHit = { mentioned: false, count: 0, firstPosition: -1 };
   if (!text) return absent;
   const re = buildRegex(terms);
   if (!re) return absent;
+  text = stripLinkSurfaces(text);
 
   let count = 0;
   let firstIndex = -1;

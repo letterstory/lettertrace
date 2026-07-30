@@ -35,3 +35,15 @@ describe("isOwnedDomain", () => {
     expect(isOwnedDomain("", "notion.so")).toBe(false);
   });
 });
+
+describe("extractInlineLinks", () => {
+  it("extracts markdown targets and bare URLs, dedupes by page, trims punctuation", async () => {
+    const { extractInlineLinks } = await import("@/lib/engine");
+    const links = extractInlineLinks(
+      "See [the guide](https://blog.example.com/posts/guide?utm_source=openai) and https://blog.example.com/posts/guide. Also https://other.io/x.",
+    );
+    expect(links).toHaveLength(2);
+    expect(links[0].domain).toBe("blog.example.com");
+    expect(links[1].url).toBe("https://other.io/x");
+  });
+});

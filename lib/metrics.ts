@@ -276,10 +276,21 @@ export function measurementVerdict(input: {
   informativeRate: number;
   brandMentioned: boolean;
   competitorsTracked: number;
+  /** The naming-quality sample behind informativeRate. When provided, the
+   *  thin-sample gate becomes interval-aware: a run reads thin-sample only
+   *  when the sample is CONFIDENTLY uninformative (Wilson upper bound below
+   *  the floor), so a 0.47 on 30 answers doesn't flap a verdict that a 0.50
+   *  would have passed. */
+  informativeBasis?: number;
 }): MeasurementVerdict {
   if (input.totalResponses === 0) return "no-data";
   if (input.competitorsTracked === 0) return "no-competitors";
-  if (input.informativeRate < LOW_INFORMATIVE_RATE) return "thin-sample";
+  const thin =
+    input.informativeBasis && input.informativeBasis > 0
+      ? wilsonInterval(Math.round(input.informativeRate * input.informativeBasis), input.informativeBasis).high <
+        LOW_INFORMATIVE_RATE
+      : input.informativeRate < LOW_INFORMATIVE_RATE;
+  if (thin) return "thin-sample";
   if (!input.brandMentioned) return "real-gap";
   return "healthy";
 }
