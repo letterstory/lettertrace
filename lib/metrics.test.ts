@@ -5,6 +5,8 @@ import {
   computeRunSummary,
   computeCitationStats,
   computeMeasurementQuality,
+  measurementVerdict,
+  LOW_INFORMATIVE_RATE,
 } from "@/lib/metrics";
 import type { Mention } from "@/lib/types";
 
@@ -213,5 +215,59 @@ describe("computeMeasurementQuality", () => {
 
   it("handles an empty run", () => {
     expect(computeMeasurementQuality([], 0).informativeRate).toBe(0);
+  });
+});
+
+describe("measurementVerdict", () => {
+  const base = {
+    totalResponses: 20,
+    informativeRate: 0.8,
+    brandMentioned: true,
+    competitorsTracked: 5,
+  };
+
+  it("says nothing when there are no answers", () => {
+    expect(measurementVerdict({ ...base, totalResponses: 0 })).toBe("no-data");
+  });
+
+  // With nothing to compare against, informativeRate can only count the brand,
+  // so a low value says nothing about the prompts and mustn't blame them.
+  it("blames the missing competitors, not the prompts, when none are tracked", () => {
+    expect(
+      measurementVerdict({ ...base, competitorsTracked: 0, informativeRate: 0, brandMentioned: false }),
+    ).toBe("no-competitors");
+  });
+
+  // The Runlayer case: 3 of 19 answers named anyone, so 0% measured almost
+  // nothing and must not be read as losing.
+  it("calls a run with few informative answers a thin sample", () => {
+    expect(
+      measurementVerdict({ ...base, informativeRate: 3 / 19, brandMentioned: false }),
+    ).toBe("thin-sample");
+  });
+
+  // The Archil case: 14 of 20 answers named a competitor and none named the
+  // brand. That is a finding, not a measurement problem.
+  it("calls a well-measured absence a real gap", () => {
+    expect(
+      measurementVerdict({ ...base, informativeRate: 14 / 20, brandMentioned: false }),
+    ).toBe("real-gap");
+  });
+
+  it("treats a thin sample as thin even when the brand did appear", () => {
+    expect(measurementVerdict({ ...base, informativeRate: 0.1 })).toBe("thin-sample");
+  });
+
+  it("is healthy when the sample is informative and the brand appears", () => {
+    expect(measurementVerdict(base)).toBe("healthy");
+  });
+
+  it("puts the threshold boundary on the informative side", () => {
+    expect(
+      measurementVerdict({ ...base, informativeRate: LOW_INFORMATIVE_RATE, brandMentioned: false }),
+    ).toBe("real-gap");
+    expect(
+      measurementVerdict({ ...base, informativeRate: LOW_INFORMATIVE_RATE - 0.01, brandMentioned: false }),
+    ).toBe("thin-sample");
   });
 });
