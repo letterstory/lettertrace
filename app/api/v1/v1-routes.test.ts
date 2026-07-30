@@ -15,7 +15,7 @@ import {
   listProjectCompetitors,
   listProjectPrompts,
   listRuns,
-  setPromptActive,
+  updatePrompt,
   triggerRunForProject,
 } from "@/lib/api-service";
 import {
@@ -63,7 +63,7 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   getRunResponses: vi.fn(),
   getRunStatus: vi.fn(),
   listProjectCompetitors: vi.fn(),
-  setPromptActive: vi.fn(),
+  updatePrompt: vi.fn(),
   triggerRunForProject: vi.fn(),
 }));
 
@@ -110,7 +110,7 @@ beforeEach(() => {
   vi.mocked(getRunReport).mockReset();
   vi.mocked(getRunResponses).mockReset();
   vi.mocked(getRunStatus).mockReset();
-  vi.mocked(setPromptActive).mockReset();
+  vi.mocked(updatePrompt).mockReset();
   vi.mocked(triggerRunForProject).mockReset();
 });
 
@@ -193,6 +193,7 @@ describe("GET /api/v1/projects/:id/prompts", () => {
         topic: "CRM",
         source: "manual",
         is_active: true,
+        target_url: null,
         created_at: "2026-07-02T00:00:00Z",
       },
     ]);
@@ -245,6 +246,7 @@ describe("POST /api/v1/projects/:id/prompts", () => {
           topic: "CRM",
           source: "manual",
           is_active: true,
+          target_url: null,
           created_at: "2026-07-02T00:00:00Z",
         },
       ],
@@ -277,11 +279,27 @@ describe("PATCH /api/v1/prompts/:id", () => {
       { params: { id: "prompt-1" } },
     );
     expect(res.status).toBe(400);
-    expect(setPromptActive).not.toHaveBeenCalled();
+    expect(updatePrompt).not.toHaveBeenCalled();
+  });
+
+  it("400s when target_url isn't a string or null", async () => {
+    const res = await patchPromptRoute(
+      req("/api/v1/prompts/prompt-1", {
+        method: "PATCH",
+        body: JSON.stringify({ target_url: 42 }),
+      }),
+      { params: { id: "prompt-1" } },
+    );
+    expect(res.status).toBe(400);
+    expect(updatePrompt).not.toHaveBeenCalled();
   });
 
   it("404s for a prompt that isn't the caller's", async () => {
-    vi.mocked(setPromptActive).mockResolvedValue(null);
+    vi.mocked(updatePrompt).mockResolvedValue({
+      ok: false,
+      code: "not_found",
+      message: "Prompt not found.",
+    });
     const res = await patchPromptRoute(
       req("/api/v1/prompts/prompt-1", {
         method: "PATCH",
@@ -293,13 +311,17 @@ describe("PATCH /api/v1/prompts/:id", () => {
   });
 
   it("returns the updated prompt", async () => {
-    vi.mocked(setPromptActive).mockResolvedValue({
-      id: "prompt-1",
-      text: "best crm",
-      topic: "CRM",
-      source: "manual",
-      is_active: false,
-      created_at: "2026-07-02T00:00:00Z",
+    vi.mocked(updatePrompt).mockResolvedValue({
+      ok: true,
+      prompt: {
+        id: "prompt-1",
+        text: "best crm",
+        topic: "CRM",
+        source: "manual",
+        is_active: false,
+        target_url: null,
+        created_at: "2026-07-02T00:00:00Z",
+      },
     });
     const res = await patchPromptRoute(
       req("/api/v1/prompts/prompt-1", {
@@ -310,12 +332,36 @@ describe("PATCH /api/v1/prompts/:id", () => {
     );
     expect(res.status).toBe(200);
     expect((await res.json()).prompt.is_active).toBe(false);
-    expect(setPromptActive).toHaveBeenCalledWith(
-      AUTH_CTX.supabase,
-      "user-1",
-      "prompt-1",
-      false,
+    expect(updatePrompt).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "prompt-1", {
+      is_active: false,
+    });
+  });
+
+  it("maps a prompt to its target page (and clears with null)", async () => {
+    vi.mocked(updatePrompt).mockResolvedValue({
+      ok: true,
+      prompt: {
+        id: "prompt-1",
+        text: "best crm",
+        topic: "CRM",
+        source: "manual",
+        is_active: true,
+        target_url: "https://acme.io/blog/best-crm",
+        created_at: "2026-07-02T00:00:00Z",
+      },
+    });
+    const res = await patchPromptRoute(
+      req("/api/v1/prompts/prompt-1", {
+        method: "PATCH",
+        body: JSON.stringify({ target_url: "https://acme.io/blog/best-crm" }),
+      }),
+      { params: { id: "prompt-1" } },
     );
+    expect(res.status).toBe(200);
+    expect((await res.json()).prompt.target_url).toBe("https://acme.io/blog/best-crm");
+    expect(updatePrompt).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "prompt-1", {
+      target_url: "https://acme.io/blog/best-crm",
+    });
   });
 });
 
@@ -503,6 +549,7 @@ describe("GET /api/v1/runs/:id", () => {
         informativeRate: 1,
       },
       verdict: "healthy",
+      pages: [],
       topics: [],
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });

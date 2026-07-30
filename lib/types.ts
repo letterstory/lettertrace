@@ -94,6 +94,8 @@ export interface Prompt {
   text: string;
   source: PromptSource;
   is_active: boolean;
+  /** The page this prompt was written to surface, when the caller mapped one. */
+  target_url: string | null;
   created_at: string;
 }
 

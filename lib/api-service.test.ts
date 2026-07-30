@@ -10,7 +10,7 @@ import {
   listProjectPrompts,
   listRuns,
   projectSummary,
-  setPromptActive,
+  updatePrompt,
   triggerRunForProject,
 } from "@/lib/api-service";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
@@ -553,6 +553,7 @@ describe("listProjectPrompts", () => {
             text: "best crm for startups",
             source: "manual",
             is_active: true,
+            target_url: null,
             created_at: "2026-07-02T00:00:00Z",
             topics: { name: "CRM" },
           },
@@ -567,6 +568,7 @@ describe("listProjectPrompts", () => {
         topic: "CRM",
         source: "manual",
         is_active: true,
+        target_url: null,
         created_at: "2026-07-02T00:00:00Z",
       },
     ]);
@@ -651,28 +653,42 @@ describe("createPrompts", () => {
   });
 });
 
-describe("setPromptActive", () => {
+describe("updatePrompt", () => {
   const PROMPT_ROW = {
     id: "prompt-1",
     project_id: "proj-1",
     text: "best crm for startups",
     source: "manual",
     is_active: true,
+    target_url: null,
     created_at: "2026-07-02T00:00:00Z",
     topics: { name: "CRM" },
   };
 
-  it("returns null for an unknown prompt", async () => {
+  it("not_found for an unknown prompt", async () => {
     const db = fakeDb({ prompts: () => ({ data: null }) });
-    expect(await setPromptActive(db as never, "user-1", "prompt-1", false)).toBeNull();
+    const outcome = await updatePrompt(db as never, "user-1", "prompt-1", { is_active: false });
+    expect(outcome).toMatchObject({ ok: false, code: "not_found" });
   });
 
-  it("returns null when the prompt's project isn't the user's", async () => {
+  it("not_found when the prompt's project isn't the user's", async () => {
     const db = fakeDb({
       prompts: () => ({ data: PROMPT_ROW }),
       projects: () => ({ data: null }),
     });
-    expect(await setPromptActive(db as never, "user-2", "prompt-1", false)).toBeNull();
+    const outcome = await updatePrompt(db as never, "user-2", "prompt-1", { is_active: false });
+    expect(outcome).toMatchObject({ ok: false, code: "not_found" });
+  });
+
+  it("rejects an empty patch and an unparseable target_url", async () => {
+    const db = fakeDb({});
+    expect(await updatePrompt(db as never, "user-1", "prompt-1", {})).toMatchObject({
+      ok: false,
+      code: "invalid",
+    });
+    expect(
+      await updatePrompt(db as never, "user-1", "prompt-1", { target_url: "not a url" }),
+    ).toMatchObject({ ok: false, code: "invalid" });
   });
 
   it("updates scoped by prompt AND project id", async () => {
@@ -680,8 +696,11 @@ describe("setPromptActive", () => {
       prompts: () => ({ data: PROMPT_ROW }),
       projects: () => ({ data: PROJECT }),
     });
-    const prompt = await setPromptActive(db as never, "user-1", "prompt-1", false);
-    expect(prompt).toMatchObject({ id: "prompt-1", topic: "CRM", is_active: false });
+    const outcome = await updatePrompt(db as never, "user-1", "prompt-1", { is_active: false });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.prompt).toMatchObject({ id: "prompt-1", topic: "CRM", is_active: false });
+    }
 
     const updateQuery = db.queries.find((q) =>
       q.modifiers.some((m) => m[0] === "update"),
@@ -691,6 +710,22 @@ describe("setPromptActive", () => {
       ["eq", "id", "prompt-1"],
       ["eq", "project_id", "proj-1"],
     ]);
+  });
+
+  it("sets and clears the target page mapping", async () => {
+    const db = fakeDb({
+      prompts: () => ({ data: PROMPT_ROW }),
+      projects: () => ({ data: PROJECT }),
+    });
+    const set = await updatePrompt(db as never, "user-1", "prompt-1", {
+      target_url: "https://acme.io/blog/best-crm?utm=x",
+    });
+    expect(set.ok).toBe(true);
+    if (set.ok) expect(set.prompt.target_url).toBe("https://acme.io/blog/best-crm?utm=x");
+
+    const cleared = await updatePrompt(db as never, "user-1", "prompt-1", { target_url: null });
+    expect(cleared.ok).toBe(true);
+    if (cleared.ok) expect(cleared.prompt.target_url).toBeNull();
   });
 });
 

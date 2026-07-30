@@ -284,6 +284,94 @@ export function measurementVerdict(input: {
   return "healthy";
 }
 
+// ------------------------------------------------------------------
+// Per-URL cited-hit rates, for prompts mapped to a target page.
+//
+// Content teams map questions to pages. A prompt carrying a target_url asks
+// exactly one measurable thing: when this question gets asked, is MY page the
+// one the answer cites? Brand-level citation stats can't answer that — a run
+// can cite the site plenty while the page built for the question never
+// surfaces.
+// ------------------------------------------------------------------
+
+/** A URL reduced to what identifies the PAGE: host + path, no scheme/www,
+ *  no query/fragment (search results carry tracking params like
+ *  ?utm_source=openai), no trailing slash, case-insensitive. */
+export function pageKey(url: string): string | null {
+  try {
+    const u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    const path = u.pathname.replace(/\/+$/, "").toLowerCase();
+    return `${host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+export interface PageStat {
+  /** The target_url as the caller entered it (first spelling wins). */
+  url: string;
+  /** Prompts aimed at this page. */
+  prompts: number;
+  /** Answers those prompts produced this run. */
+  totalResponses: number;
+  /** Answers that cited THIS page (host+path match, params ignored). */
+  responsesCiting: number;
+  citedRate: number;
+  /** Page-level samples are tiny — the interval is the honest number. */
+  citedRateInterval: Interval;
+}
+
+export function computePageStats(
+  prompts: { id: string; target_url: string | null }[],
+  responses: { id: string; prompt_id: string | null }[],
+  sources: { response_id: string; url: string }[],
+): PageStat[] {
+  // target page key -> { url as entered, prompt ids }
+  const targets = new Map<string, { url: string; promptIds: Set<string> }>();
+  for (const p of prompts) {
+    if (!p.target_url) continue;
+    const key = pageKey(p.target_url);
+    if (!key) continue;
+    const t = targets.get(key) ?? { url: p.target_url, promptIds: new Set<string>() };
+    t.promptIds.add(p.id);
+    targets.set(key, t);
+  }
+  if (targets.size === 0) return [];
+
+  const citedByResponse = new Map<string, Set<string>>();
+  for (const s of sources) {
+    const key = pageKey(s.url);
+    if (!key) continue;
+    const set = citedByResponse.get(s.response_id) ?? new Set<string>();
+    set.add(key);
+    citedByResponse.set(s.response_id, set);
+  }
+
+  const stats: PageStat[] = [];
+  for (const [key, target] of targets) {
+    let total = 0;
+    let citing = 0;
+    for (const r of responses) {
+      if (!r.prompt_id || !target.promptIds.has(r.prompt_id)) continue;
+      total++;
+      if (citedByResponse.get(r.id)?.has(key)) citing++;
+    }
+    stats.push({
+      url: target.url,
+      prompts: target.promptIds.size,
+      totalResponses: total,
+      responsesCiting: citing,
+      citedRate: total > 0 ? citing / total : 0,
+      citedRateInterval: wilsonInterval(citing, total),
+    });
+  }
+  // Most-asked first, then most-cited — the pages being pressed hardest on top.
+  return stats.sort(
+    (a, b) => b.totalResponses - a.totalResponses || b.responsesCiting - a.responsesCiting,
+  );
+}
+
 // Per-topic breakdown for the brand (uses topic_id stored on mention rows).
 export interface TopicStat {
   topicId: string | null;

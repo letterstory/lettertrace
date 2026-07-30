@@ -16,10 +16,13 @@ import {
   computeRunSummary,
   computeTopicStats,
   measurementVerdict,
+  computePageStats,
+  pageKey,
   type CitationStat,
   type EntityStat,
   type MeasurementQuality,
   type MeasurementVerdict,
+  type PageStat,
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
@@ -95,6 +98,12 @@ function toDomains(value: unknown): string[] {
     seen.add(key);
     return true;
   });
+}
+
+/** A target URL is usable only if it reduces to a page key the source
+ *  matcher can compare against (lib/metrics pageKey). */
+function normalizeTargetUrl(value: string): string | null {
+  return pageKey(value);
 }
 
 export type CreateProjectOutcome =
@@ -290,6 +299,8 @@ export interface PromptSummary {
   topic: string | null;
   source: Prompt["source"];
   is_active: boolean;
+  /** The page this prompt was written to surface (per-URL cited-hit rates). */
+  target_url: string | null;
   created_at: string;
 }
 
@@ -310,7 +321,7 @@ export async function listProjectPrompts(
   if (!project) return null;
   const { data } = await supabase
     .from("prompts")
-    .select("id, text, source, is_active, created_at, topics(name)")
+    .select("id, text, source, is_active, target_url, created_at, topics(name)")
     .eq("project_id", projectId)
     .order("created_at", { ascending: true });
   return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
@@ -319,6 +330,7 @@ export async function listProjectPrompts(
     topic: embeddedTopicName(row.topics),
     source: row.source as Prompt["source"],
     is_active: row.is_active as boolean,
+    target_url: (row.target_url as string | null) ?? null,
     created_at: row.created_at as string,
   }));
 }
@@ -352,20 +364,43 @@ export async function createPrompts(
       message: "prompts must be a non-empty array of { text, topic }.",
     };
   }
-  const parsed: { text: string; topic: string }[] = [];
+  const parsed: { text: string; topic: string; target_url: string | null }[] = [];
   const bad: number[] = [];
+  const badUrls: number[] = [];
   entries.forEach((entry, i) => {
     const e = (entry ?? {}) as Record<string, unknown>;
     const text = typeof e.text === "string" ? e.text.trim() : "";
     const topic = typeof e.topic === "string" ? e.topic.trim() : "";
-    if (!text || !topic) bad.push(i);
-    else parsed.push({ text, topic });
+    if (!text || !topic) {
+      bad.push(i);
+      return;
+    }
+    // Optional: the page this prompt is written to surface. Validated here so
+    // a typo'd URL fails the request instead of silently never matching a
+    // cited source.
+    let target_url: string | null = null;
+    if (e.target_url !== undefined && e.target_url !== null) {
+      const candidate = typeof e.target_url === "string" ? e.target_url.trim() : "";
+      if (!candidate || normalizeTargetUrl(candidate) === null) {
+        badUrls.push(i);
+        return;
+      }
+      target_url = candidate;
+    }
+    parsed.push({ text, topic, target_url });
   });
   if (bad.length > 0) {
     return {
       ok: false,
       code: "invalid",
       message: `Every prompt needs a non-empty text and topic (bad ${bad.length === 1 ? "entry at index" : "entries at indexes"} ${bad.join(", ")}).`,
+    };
+  }
+  if (badUrls.length > 0) {
+    return {
+      ok: false,
+      code: "invalid",
+      message: `target_url must be a valid URL when present (bad ${badUrls.length === 1 ? "entry at index" : "entries at indexes"} ${badUrls.join(", ")}).`,
     };
   }
 
@@ -385,7 +420,7 @@ export async function createPrompts(
   const seenTexts = new Set(
     ((promptRows ?? []) as { text: string }[]).map((r) => r.text.trim().toLowerCase()),
   );
-  const toInsert: { text: string; topic: string }[] = [];
+  const toInsert: { text: string; topic: string; target_url: string | null }[] = [];
   let skipped = 0;
   for (const e of parsed) {
     const key = e.text.toLowerCase();
@@ -429,9 +464,10 @@ export async function createPrompts(
         text: e.text,
         source: "manual",
         is_active: true,
+        target_url: e.target_url,
       })),
     )
-    .select("id, topic_id, text, source, is_active, created_at");
+    .select("id, topic_id, text, source, is_active, target_url, created_at");
   if (insertError || !createdRows) {
     throw insertError ?? new Error("Failed to create prompts.");
   }
@@ -444,6 +480,7 @@ export async function createPrompts(
       topic: topicNameById.get(r.topic_id) ?? null,
       source: r.source,
       is_active: r.is_active,
+      target_url: r.target_url ?? null,
       created_at: r.created_at,
     })),
     skipped,
@@ -456,42 +493,86 @@ export async function createPrompts(
  * explicit userId chain is the security boundary. Null when the prompt
  * doesn't exist or isn't the user's.
  */
-export async function setPromptActive(
+export type UpdatePromptOutcome =
+  | { ok: true; prompt: PromptSummary }
+  | { ok: false; code: "not_found" | "invalid"; message: string };
+
+/**
+ * Update a prompt — is_active (deactivate rather than delete: history hangs
+ * off prompts) and/or target_url (set, or null to clear the page mapping).
+ * Ownership walks prompt -> project -> user, and the update itself re-scopes
+ * by project id: on the service-role client the explicit userId chain is the
+ * security boundary.
+ */
+export async function updatePrompt(
   supabase: SupabaseClient,
   userId: string,
   promptId: string,
-  isActive: boolean,
-): Promise<PromptSummary | null> {
+  patch: { is_active?: boolean; target_url?: string | null },
+): Promise<UpdatePromptOutcome> {
+  const update: Record<string, unknown> = {};
+  if (patch.is_active !== undefined) update.is_active = patch.is_active;
+  if (patch.target_url !== undefined) {
+    if (patch.target_url === null) {
+      update.target_url = null;
+    } else {
+      const candidate = patch.target_url.trim();
+      if (!candidate || normalizeTargetUrl(candidate) === null) {
+        return {
+          ok: false,
+          code: "invalid",
+          message: "target_url must be a valid URL, or null to clear it.",
+        };
+      }
+      update.target_url = candidate;
+    }
+  }
+  if (Object.keys(update).length === 0) {
+    return {
+      ok: false,
+      code: "invalid",
+      message: "Nothing to update. Send is_active (boolean) and/or target_url (string or null).",
+    };
+  }
+
   const { data: promptRow } = await supabase
     .from("prompts")
-    .select("id, project_id, text, source, is_active, created_at, topics(name)")
+    .select("id, project_id, text, source, is_active, target_url, created_at, topics(name)")
     .eq("id", promptId)
     .maybeSingle();
   const prompt = promptRow as
     | (Pick<
         Prompt,
-        "id" | "project_id" | "text" | "source" | "is_active" | "created_at"
+        "id" | "project_id" | "text" | "source" | "is_active" | "target_url" | "created_at"
       > & { topics: unknown })
     | null;
-  if (!prompt) return null;
+  if (!prompt) {
+    return { ok: false, code: "not_found", message: "Prompt not found." };
+  }
 
   const project = await getOwnedProject(supabase, userId, prompt.project_id);
-  if (!project) return null;
+  if (!project) {
+    return { ok: false, code: "not_found", message: "Prompt not found." };
+  }
 
   const { error } = await supabase
     .from("prompts")
-    .update({ is_active: isActive })
+    .update(update)
     .eq("id", promptId)
     .eq("project_id", project.id);
   if (error) throw error;
 
   return {
-    id: prompt.id,
-    text: prompt.text,
-    topic: embeddedTopicName(prompt.topics),
-    source: prompt.source,
-    is_active: isActive,
-    created_at: prompt.created_at,
+    ok: true,
+    prompt: {
+      id: prompt.id,
+      text: prompt.text,
+      topic: embeddedTopicName(prompt.topics),
+      source: prompt.source,
+      is_active: patch.is_active ?? prompt.is_active,
+      target_url: patch.target_url !== undefined ? patch.target_url : (prompt.target_url ?? null),
+      created_at: prompt.created_at,
+    },
   };
 }
 
@@ -725,6 +806,9 @@ export interface RunReport {
    *  consumers don't re-derive it: a 0% that's "real-gap" and a 0% that's
    *  "no-competitors" or "thin-sample" are entirely different findings. */
   verdict: MeasurementVerdict;
+  /** Per-URL cited-hit rates for prompts mapped to a target page: when the
+   *  question a page was built for gets asked, is THAT page the one cited? */
+  pages: PageStat[];
   /** Per-topic brand visibility. Letterstory plans by topic, so this is the
    *  join between "we published about X" and "are we surfacing for X". */
   topics: (TopicStat & { topic: string | null })[];
@@ -768,6 +852,7 @@ export async function getRunReport(
     { data: responseTopicRows },
     { data: topicRows },
     { count: competitorCount },
+    { data: promptTargetRows },
   ] = await Promise.all([
     supabase
       .from("responses")
@@ -775,8 +860,9 @@ export async function getRunReport(
       .eq("run_id", runId),
     supabase.from("mentions").select("*").eq("run_id", runId),
     supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
-    supabase.from("responses").select("topic_id").eq("run_id", runId),
+    supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
     supabase.from("topics").select("id, name").eq("project_id", run.project_id),
+    supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
     supabase
       .from("competitors")
       .select("id", { count: "exact", head: true })
@@ -787,8 +873,13 @@ export async function getRunReport(
   const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
   const totalResponses = count ?? 0;
 
+  const responseRows = (responseTopicRows ?? []) as {
+    id: string;
+    topic_id: string | null;
+    prompt_id: string | null;
+  }[];
   const responsesByTopic = new Map<string | null, number>();
-  for (const r of (responseTopicRows ?? []) as { topic_id: string | null }[]) {
+  for (const r of responseRows) {
     responsesByTopic.set(r.topic_id, (responsesByTopic.get(r.topic_id) ?? 0) + 1);
   }
   const topicNames = new Map(
@@ -818,6 +909,11 @@ export async function getRunReport(
       brandMentioned: summary.brandResponsesMentioned > 0,
       competitorsTracked: competitorCount ?? 0,
     }),
+    pages: computePageStats(
+      (promptTargetRows ?? []) as { id: string; target_url: string | null }[],
+      responseRows,
+      sources,
+    ),
     topics: topicStats,
   };
 }
