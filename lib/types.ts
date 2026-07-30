@@ -3,6 +3,11 @@
 
 export type Provider = "anthropic" | "openai" | "google" | "perplexity";
 
+// LLM routers are credentials, not providers, so they get their own union and
+// stay out of `Provider` — which is what keeps `runs.provider` meaning "whose
+// answer was this" rather than "who billed us". See lib/routers.ts.
+export type RouterId = "concentrate" | "openrouter";
+
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 
 export type EntityType = "brand" | "competitor";
@@ -27,6 +32,43 @@ export interface ProviderKey {
   encrypted_key: string; // never sent to the client
   key_hint: string; // e.g. "sk-…4a9c"
   created_at: string;
+}
+
+// An LLM router (gateway) credential: one key that reaches many providers. It
+// lives in its own table rather than as another `provider_keys` row because a
+// router is not a provider — see the header of lib/routers.ts. `search_verified`
+// records which providers' native web search this key was actually seen to pass
+// through, which is what decides whether it may serve a monitored run.
+export interface RouterKey {
+  id: string;
+  user_id: string;
+  router: RouterId;
+  label: string | null;
+  /** Only set for a router the user self-hosts; otherwise the registry's. */
+  base_url: string | null;
+  encrypted_key: string; // never sent to the client
+  key_hint: string;
+  search_verified: Provider[];
+  created_at: string;
+}
+
+// Safe shape returned to the browser (no ciphertext).
+export interface RouterKeyPublic {
+  id: string;
+  router: RouterId;
+  label: string | null;
+  base_url: string | null;
+  key_hint: string;
+  search_verified: Provider[];
+  created_at: string;
+}
+
+/** Which router served a call, recorded on runs so a step change in a trend
+ *  line can be attributed to a credential switch rather than to visibility. */
+export interface RouteInfo {
+  router: RouterId;
+  /** Override for a self-hosted deployment of the router. */
+  baseUrl?: string | null;
 }
 
 // Lettertrace API key for programmatic access (REST v1 + MCP). Only the hash
@@ -105,6 +147,9 @@ export interface Run {
   status: RunStatus;
   provider: Provider;
   model: string;
+  /** The LLM router that carried this run, or null for a direct provider key.
+   *  `provider` above is still the engine that answered — see lib/routers.ts. */
+  route: RouterId | null;
   /** Planned answers for this run: active prompts x replicates. */
   prompt_count: number;
   completed_count: number;
@@ -179,6 +224,10 @@ export type LogCategory =
   | "topic"
   | "competitor"
   | "provider_key"
+  // An LLM router credential. Its own bucket rather than provider_key: the two
+  // are different objects with different failure modes, and a feed that merged
+  // them would make "which credential did I change" unanswerable.
+  | "router_key"
   | "api_key"
   | "oauth"
   | "onboarding"

@@ -104,6 +104,37 @@ alter table public.provider_keys drop constraint if exists provider_keys_provide
 alter table public.provider_keys
   add constraint provider_keys_provider_check check (provider in ('anthropic', 'openai', 'google', 'perplexity'));
 
+-- ---------- router_keys (LLM gateway credential, encrypted) ----------
+-- One key that reaches many providers (OpenRouter, Concentrate). Deliberately a
+-- separate table rather than more provider_keys rows: a router is a credential,
+-- not an answer engine, so it must not widen the provider allow-list above and
+-- must never be storable as a project's default_provider. See lib/routers.ts.
+--
+-- search_verified holds the providers whose NATIVE web search this key was
+-- actually observed to pass through (checked when the key is saved). Monitored
+-- runs with web search on are gated on it, because a gateway that accepts the
+-- search params and drops them returns an ungrounded answer that still looks
+-- like a measurement. Empty is the safe default: nothing verified yet.
+create table if not exists public.router_keys (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  router text not null check (router in ('concentrate', 'openrouter')),
+  label text,
+  -- Only for a self-hosted deployment of a router; null uses the registry's URL.
+  base_url text,
+  encrypted_key text not null,
+  key_hint text not null,
+  search_verified text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  unique (user_id, router)
+);
+
+-- Widen the router allow-list on existing deployments (the create above is a
+-- no-op once the table exists). Safe to re-run.
+alter table public.router_keys drop constraint if exists router_keys_router_check;
+alter table public.router_keys
+  add constraint router_keys_router_check check (router in ('concentrate', 'openrouter'));
+
 -- ---------- projects -------------------------------------------------
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
@@ -278,6 +309,19 @@ alter table public.runs drop constraint if exists runs_provider_check;
 alter table public.runs
   add constraint runs_provider_check check (provider in ('anthropic', 'openai', 'google', 'perplexity'));
 
+-- Which credential carried this run: null for a direct provider key (every
+-- historical row), else the router that served it. `provider` above stays the
+-- engine that answered, so a client who switches from a direct key to a router
+-- keeps one continuous series — and when the series does step, this column is
+-- what says a credential change is the reason to suspect.
+-- Split into add-column + named constraint so both halves stay re-runnable: an
+-- inline check on `add column if not exists` is skipped once the column exists,
+-- which would leave the allow-list unapplied on the deployments that need it.
+alter table public.runs add column if not exists route text;
+alter table public.runs drop constraint if exists runs_route_check;
+alter table public.runs
+  add constraint runs_route_check check (route is null or route in ('concentrate', 'openrouter'));
+
 -- ---------- responses ------------------------------------------------
 create table if not exists public.responses (
   id uuid primary key default gen_random_uuid(),
@@ -408,6 +452,7 @@ create index if not exists idx_sources_project on public.sources (project_id);
 -- ==================================================================
 alter table public.profiles       enable row level security;
 alter table public.provider_keys  enable row level security;
+alter table public.router_keys    enable row level security;
 alter table public.projects       enable row level security;
 alter table public.competitors    enable row level security;
 alter table public.topics         enable row level security;
@@ -473,6 +518,11 @@ create trigger guard_profiles_write
 -- provider_keys: owned by user.
 drop policy if exists "keys_owner" on public.provider_keys;
 create policy "keys_owner" on public.provider_keys
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- router_keys: owned by user, same shape as provider_keys.
+drop policy if exists "router_keys_owner" on public.router_keys;
+create policy "router_keys_owner" on public.router_keys
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- projects: owned by user.

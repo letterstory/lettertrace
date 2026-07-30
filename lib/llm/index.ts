@@ -1,7 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import type { Provider, Sentiment } from "@/lib/types";
-import { GOOGLE_AI_OVERVIEWS_MODEL, analysisModelFor } from "@/lib/models";
+import type { Provider, RouteInfo, RouterId, Sentiment } from "@/lib/types";
+import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS, analysisModelFor } from "@/lib/models";
+import {
+  ROUTERS,
+  routerSlug,
+  routerSupport,
+  type RouteShape,
+  type SearchSupport,
+} from "@/lib/routers";
 import { normalizeCompetitorList } from "@/lib/competitors";
 
 // ------------------------------------------------------------------
@@ -26,6 +33,12 @@ interface BaseCall {
   provider: Provider;
   model: string;
   apiKey: string;
+  /**
+   * Set when the key is an LLM router credential rather than a direct provider
+   * key. `provider`/`model` still say which engine is being measured — the route
+   * only changes who we hand the request to on the way there.
+   */
+  route?: RouteInfo | null;
 }
 
 // Every low-level call reports its total token usage so the trial layer can
@@ -81,7 +94,102 @@ export function dedupeSources(raw: CitedSource[]): CitedSource[] {
   return Array.from(seen.values());
 }
 
+// --- Routing through an LLM gateway ---------------------------------------
+
+/**
+ * A router call, fully resolved: which wire format, which base URL, which model
+ * slug, and what extra body the router needs. Computed once per call so the
+ * adapters below stay unaware of routers beyond "talk to this URL instead".
+ */
+interface RoutePlan {
+  router: RouterId;
+  shape: RouteShape;
+  slug: string;
+  baseUrl: string;
+  extraBody: Record<string, unknown>;
+  search: SearchSupport;
+  /** Which header carries the key on the Anthropic surface — see the registry. */
+  anthropicAuth: "x-api-key" | "bearer";
+}
+
+/**
+ * Raised when a route is asked for something the router cannot serve.
+ *
+ * Reaching this is a bug in the gating above (lib/trial resolves the credential
+ * and refuses the combination before a run starts), so it is deliberately loud
+ * rather than a silent fallback to a direct call — falling back would spend the
+ * user's key on a request they didn't authorize, and falling back to a *different
+ * engine* is the exact class of bug resolveRunKeyFor exists to prevent.
+ */
+export class RouteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteError";
+  }
+}
+
+function planRoute(
+  route: RouteInfo,
+  provider: Provider,
+  model: string,
+  opts: { webSearch: boolean },
+): RoutePlan {
+  const info = ROUTERS[route.router];
+  const support = routerSupport(route.router, provider);
+  const slug = routerSlug(route.router, provider, model);
+  if (!support || !slug) {
+    throw new RouteError(
+      `${info.label} can't serve ${PROVIDERS[provider].label} (${model}).`,
+    );
+  }
+
+  // A self-hosted base URL replaces the registry's for either shape: the user
+  // deployed one gateway, and it answers on the paths its upstream defines.
+  const base = route.baseUrl?.trim() || null;
+  let baseUrl: string;
+  if (support.shape === "anthropic") {
+    const anthropicBase = base ?? info.anthropicBaseUrl;
+    if (!anthropicBase) {
+      throw new RouteError(`${info.label} has no Anthropic-compatible endpoint.`);
+    }
+    baseUrl = anthropicBase;
+  } else {
+    baseUrl = base ?? info.openaiBaseUrl;
+  }
+
+  return {
+    router: route.router,
+    shape: support.shape,
+    slug,
+    baseUrl,
+    search: support.search,
+    anthropicAuth: info.anthropicAuth,
+    extraBody: info.extraBody?.(provider, { webSearch: opts.webSearch }) ?? {},
+  };
+}
+
+/**
+ * Anthropic client options for a call, direct or routed.
+ *
+ * The SDK sends exactly one auth header — `x-api-key` when apiKey is set,
+ * `Authorization: Bearer` when only authToken is — so a router that wants the
+ * bearer form has to be given the key as authToken with apiKey explicitly null.
+ * Passing both would silently send only the first.
+ */
+function anthropicOpts(apiKey: string, plan?: RoutePlan) {
+  if (!plan) return { apiKey, ...CLIENT_OPTS };
+  return plan.anthropicAuth === "bearer"
+    ? { apiKey: null, authToken: apiKey, baseURL: plan.baseUrl, ...CLIENT_OPTS }
+    : { apiKey, baseURL: plan.baseUrl, ...CLIENT_OPTS };
+}
+
 // --- Low-level chat helpers -----------------------------------------------
+//
+// Each takes an optional `plan`. With one, the call goes to the router's base
+// URL with the router's model slug and extra body; without one it is the direct
+// provider call it has always been. Keeping this a parameter rather than a
+// separate gateway module is what guarantees a routed call and a direct call
+// can't drift apart in the parts that decide what gets measured.
 
 async function anthropicChat(
   apiKey: string,
@@ -89,14 +197,22 @@ async function anthropicChat(
   system: string | undefined,
   user: string,
   maxTokens: number,
+  plan?: RoutePlan,
 ): Promise<ChatResult> {
-  const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
-  const msg = await client.messages.create({
-    model,
+  const client = new Anthropic(anthropicOpts(apiKey, plan));
+  // Router-specific body fields (e.g. OpenRouter's upstream pinning) aren't in
+  // the Anthropic param types, so build the body and cast once — the same way
+  // anthropicWebSearch casts for the server-side web_search tool.
+  const params = {
+    model: plan ? plan.slug : model,
     max_tokens: maxTokens,
     ...(system ? { system } : {}),
     messages: [{ role: "user", content: user }],
-  });
+    ...(plan?.extraBody ?? {}),
+  };
+  const msg = await client.messages.create(
+    params as unknown as Anthropic.MessageCreateParamsNonStreaming,
+  );
   const text = msg.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -113,17 +229,26 @@ async function openaiChat(
   user: string,
   maxTokens: number,
   json = false,
+  plan?: RoutePlan,
 ): Promise<ChatResult> {
-  const client = new OpenAI({ apiKey, ...CLIENT_OPTS });
+  const client = new OpenAI({
+    apiKey,
+    ...CLIENT_OPTS,
+    ...(plan ? { baseURL: plan.baseUrl } : {}),
+  });
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: user });
-  const res = await client.chat.completions.create({
-    model,
+  const params = {
+    model: plan ? plan.slug : model,
     max_tokens: maxTokens,
     messages,
     ...(json ? { response_format: { type: "json_object" } } : {}),
-  });
+    ...(plan?.extraBody ?? {}),
+  };
+  const res = await client.chat.completions.create(
+    params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+  );
   return {
     text: (res.choices[0]?.message?.content ?? "").trim(),
     tokens: res.usage?.total_tokens ?? 0,
@@ -140,6 +265,67 @@ function extractJson<T>(raw: string): T {
   const lastBrace = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
   if (lastBrace >= 0) text = text.slice(0, lastBrace + 1);
   return JSON.parse(text) as T;
+}
+
+// --- Utility-call dispatch ------------------------------------------------
+
+/**
+ * Which wire format a utility call will actually take.
+ *
+ * Utility work (prompt suggestion, competitor judging, sentiment) branches on
+ * the *shape* rather than the provider, because a routed Claude call and a direct
+ * Claude call want the same system prompt while a routed call through an
+ * OpenAI-compatible endpoint wants OpenAI's JSON-object phrasing. Deriving the
+ * shape once keeps those two decisions — how to ask, and where to send it — from
+ * being made on different criteria.
+ */
+type CallShape = "anthropic" | "openai-chat" | "google" | "perplexity";
+
+const DIRECT_SHAPE: Record<Provider, CallShape> = {
+  anthropic: "anthropic",
+  openai: "openai-chat",
+  google: "google",
+  perplexity: "perplexity",
+};
+
+function callShape(opts: BaseCall, model: string): CallShape {
+  if (!opts.route) return DIRECT_SHAPE[opts.provider];
+  return planRoute(opts.route, opts.provider, model, { webSearch: false }).shape;
+}
+
+/**
+ * One structured-JSON utility call, direct or routed.
+ *
+ * This replaces the four copies of the same provider ternary ladder that used to
+ * sit in generateVariations / analyzeResponse / suggestFromSite /
+ * suggestCompetitors. They had already drifted once — a provider added to the
+ * catalog has to be remembered in each — and adding a router branch to all four
+ * would have doubled that surface.
+ */
+async function utilityChat(
+  opts: BaseCall,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  if (opts.route) {
+    const plan = planRoute(opts.route, opts.provider, model, { webSearch: false });
+    return plan.shape === "anthropic"
+      ? anthropicChat(opts.apiKey, model, system, user, maxTokens, plan)
+      : openaiChat(opts.apiKey, model, system, user, maxTokens, json, plan);
+  }
+  switch (opts.provider) {
+    case "anthropic":
+      return anthropicChat(opts.apiKey, model, system, user, maxTokens);
+    case "google":
+      return googleChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "perplexity":
+      return perplexityChat(opts.apiKey, model, system, user, maxTokens);
+    default:
+      return openaiChat(opts.apiKey, model, system, user, maxTokens, json);
+  }
 }
 
 // --- Public API -----------------------------------------------------------
@@ -165,6 +351,125 @@ export async function verifyKey(
   }
 }
 
+/** One provider's result from checking a router credential. */
+export interface RouterProviderCheck {
+  provider: Provider;
+  /** Did a minimal call through the router actually reach this engine? */
+  reachable: boolean;
+  /** How search is expressed for this pair — see lib/routers. */
+  search: SearchSupport;
+  /**
+   * Did a forced native search come back with real sources? Null when the
+   * question doesn't apply: 'none' (nothing to ask for) or 'plugin' (the
+   * router's own flag, verified by the router, not compellable by us).
+   */
+  searchWorks: boolean | null;
+  error?: string;
+}
+
+export interface RouterVerification {
+  /** True when the key reached at least one engine. */
+  ok: boolean;
+  error?: string;
+  reachable: Provider[];
+  /** Providers cleared to serve monitored web-search runs on this key. */
+  searchVerified: Provider[];
+  checks: RouterProviderCheck[];
+}
+
+/**
+ * A router credential's real capabilities, measured rather than assumed.
+ *
+ * Two questions per provider, and the second is the one that matters. Reaching
+ * a model through a gateway is easy and proves little; what Lettertrace depends
+ * on is that the provider's own web search survives the trip, because every
+ * monitored answer is supposed to be grounded in the live web. A gateway that
+ * normalizes requests can accept `web_search` and return a fluent, sourceless
+ * answer, and that answer would be stored and charted exactly like a grounded
+ * one. So for every pair where we send the provider's own search params, we send
+ * them for real and require sources to come back.
+ *
+ * Costs the user a couple of small calls plus one real web search per
+ * passthrough provider, on their own key, at save time — cheap next to
+ * discovering weeks later that a trend line was measuring recall.
+ */
+export async function verifyRouterKey(
+  router: RouterId,
+  apiKey: string,
+  baseUrl?: string | null,
+): Promise<RouterVerification> {
+  const route: RouteInfo = { router, baseUrl: baseUrl ?? null };
+  const providers = Object.keys(ROUTERS[router].providers) as Provider[];
+
+  const checks = await Promise.all(
+    providers.map(async (provider): Promise<RouterProviderCheck> => {
+      const support = routerSupport(router, provider);
+      const search = support?.search ?? "none";
+      // The cheap model, as elsewhere: this is a reachability check, not a
+      // capability demo, and the user is paying for it.
+      const model = analysisModelFor(provider);
+      const base: RouterProviderCheck = {
+        provider,
+        reachable: false,
+        search,
+        searchWorks: search === "passthrough" ? false : null,
+      };
+
+      try {
+        await utilityChat({ provider, model, apiKey, route }, model, undefined, "ping", 8);
+      } catch (err) {
+        return { ...base, error: humanError(err) };
+      }
+
+      if (search !== "passthrough") return { ...base, reachable: true };
+
+      try {
+        const probe = await probeRouterSearch(route, provider, model, apiKey);
+        return { ...base, reachable: true, searchWorks: probe.sources > 0 };
+      } catch (err) {
+        // Reached the model but the search request failed — the credential is
+        // usable, the grounding isn't. Recorded as such rather than failing the
+        // whole save, so a user can still route ungrounded projects through it.
+        return { ...base, reachable: true, searchWorks: false, error: humanError(err) };
+      }
+    }),
+  );
+
+  const reachable = checks.filter((c) => c.reachable).map((c) => c.provider);
+  const searchVerified = checks.filter((c) => c.searchWorks === true).map((c) => c.provider);
+  const firstError = checks.find((c) => !c.reachable && c.error)?.error;
+
+  return {
+    ok: reachable.length > 0,
+    ...(reachable.length === 0
+      ? { error: firstError || `${ROUTERS[router].label} didn't accept this key.` }
+      : {}),
+    reachable,
+    searchVerified,
+    checks,
+  };
+}
+
+/**
+ * Send a router the provider's own forced-search request and count the sources
+ * that come back. Exported for the probe script (scripts/probe-router.ts), which
+ * is how a new router's support entry gets filled in.
+ */
+export async function probeRouterSearch(
+  route: RouteInfo,
+  provider: Provider,
+  model: string,
+  apiKey: string,
+): Promise<{ sources: number; text: string }> {
+  // A question that cannot be answered from training data, so a sourceless reply
+  // is unambiguous evidence the browse didn't happen rather than evidence that
+  // the model already knew.
+  const prompt =
+    "Search the web and tell me one news headline published in the last 48 hours. Cite the source URL.";
+  const res = await runQuery({ provider, model, apiKey, route, prompt, webSearch: true });
+  return { sources: res.sources.length, text: res.text };
+}
+
 /**
  * Ask the model a monitored question and return its natural answer, token
  * usage, and (when `webSearch` is on) the web sources it cited. Web search uses
@@ -174,16 +479,34 @@ export async function verifyKey(
 export async function runQuery(
   opts: BaseCall & { prompt: string; webSearch?: boolean },
 ): Promise<QueryResult> {
+  const webSearch = opts.webSearch ?? false;
+
+  // A routed answer. Only anthropic/openai get here — the router registry serves
+  // no others, and lib/trial refuses the combination before a run starts — so
+  // this sits above the Google/Perplexity branches rather than inside them.
+  if (opts.route) {
+    const plan = planRoute(opts.route, opts.provider, opts.model, { webSearch });
+    if (plan.shape === "anthropic") {
+      return webSearch
+        ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt, plan)
+        : anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS, plan)
+            .then((res) => ({ ...res, sources: [] }));
+    }
+    // OpenAI-shaped: the router's own web flag replaces the Responses API's
+    // forced tool, so the browse can't be compelled — see PLUGIN_SEARCH_CAVEAT.
+    return gatewayQuery(opts.apiKey, opts.prompt, plan, webSearch);
+  }
+
   // Google's answer path handles its own grounding (and forces it for the AI
   // Overviews engine), so route it before the shared web-search branch.
   if (opts.provider === "google") {
-    return googleRunQuery(opts.apiKey, opts.model, opts.prompt, opts.webSearch ?? false);
+    return googleRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
   }
   // Perplexity always searches, so it ignores the project toggle entirely.
   if (opts.provider === "perplexity") {
     return perplexityRunQuery(opts.apiKey, opts.model, opts.prompt);
   }
-  if (!opts.webSearch) {
+  if (!webSearch) {
     const res =
       opts.provider === "anthropic"
         ? await anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS)
@@ -195,14 +518,88 @@ export async function runQuery(
     : openaiWebSearch(opts.apiKey, opts.model, opts.prompt);
 }
 
+/**
+ * An answer through a router's OpenAI-compatible endpoint.
+ *
+ * The router standardizes cited sources into `message.annotations` as
+ * `url_citation` entries, so unlike the direct OpenAI path (which reads the
+ * Responses API's own annotation shape) there is one shape to parse regardless
+ * of which upstream answered. Sources still come from the provider's native
+ * browsing — the router's `engine: "native"` pin, set in the registry, is what
+ * keeps a third-party search service out of the measurement.
+ */
+async function gatewayQuery(
+  apiKey: string,
+  prompt: string,
+  plan: RoutePlan,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  if (webSearch && plan.search === "none") {
+    // Defensive: the gating in lib/trial should have refused this. Answering
+    // anyway would store a memory answer as a search-grounded measurement.
+    throw new RouteError(
+      `${ROUTERS[plan.router].label} can't request native web search for this engine.`,
+    );
+  }
+  const client = new OpenAI({ apiKey, baseURL: plan.baseUrl, ...CLIENT_OPTS });
+  const params = {
+    model: plan.slug,
+    max_tokens: ANSWER_MAX_TOKENS,
+    messages: [{ role: "user", content: prompt }],
+    ...plan.extraBody,
+  };
+  const res = (await client.chat.completions.create(
+    params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+  )) as unknown as {
+    choices?: {
+      message?: {
+        content?: string | null;
+        annotations?: {
+          type?: string;
+          url_citation?: { url?: string; title?: string; content?: string };
+        }[];
+      };
+    }[];
+    usage?: { total_tokens?: number };
+  };
+
+  const message = res.choices?.[0]?.message;
+  return {
+    text: (message?.content ?? "").trim(),
+    tokens: res.usage?.total_tokens ?? 0,
+    sources: gatewaySources(message?.annotations),
+  };
+}
+
+/** A gateway's `url_citation` annotations, as cited sources. Exported for tests. */
+export function gatewaySources(
+  annotations:
+    | { type?: string; url_citation?: { url?: string; title?: string; content?: string } }[]
+    | undefined,
+): CitedSource[] {
+  const raw: CitedSource[] = [];
+  for (const a of annotations ?? []) {
+    // Routers may add annotation kinds (file citations, moderation notes). Only
+    // url_citation is a web source; anything else is not a search result and
+    // must not be counted as one. An annotation with no type is accepted, since
+    // url_citation is the only kind that carries a url_citation payload.
+    if (a.type && a.type !== "url_citation") continue;
+    const cite = a.url_citation;
+    const s = cite?.url ? safeSource(cite.url, cite.title ?? null, cite.content ?? null) : null;
+    if (s) raw.push(s);
+  }
+  return dedupeSources(raw);
+}
+
 // --- Native web-search query paths ---------------------------------------
 
 async function anthropicWebSearch(
   apiKey: string,
   model: string,
   prompt: string,
+  plan?: RoutePlan,
 ): Promise<QueryResult> {
-  const client = new Anthropic({ apiKey, ...CLIENT_OPTS });
+  const client = new Anthropic(anthropicOpts(apiKey, plan));
   // web_search is a server-side tool not in older SDK typings; cast the params.
   //
   // Keep the 20250305 tool version. The newer web_search_20260209 runs dynamic
@@ -210,8 +607,13 @@ async function anthropicWebSearch(
   // doesn't read: measured against the same prompt it produced 0 inline
   // citations (vs 11) for 2.6x the tokens, falling back to the "retrieved but
   // not cited" path below. Upgrading needs the citation parsing reworked first.
+  //
+  // Through a router this body is unchanged, which is the point: the gateway's
+  // Anthropic skin gets exactly the request Anthropic itself gets, so the forced
+  // browse and the inline citations either arrive intact or the probe catches
+  // that they didn't. Nothing here is rewritten into a normalized shape.
   const params = {
-    model,
+    model: plan ? plan.slug : model,
     max_tokens: ANSWER_MAX_TOKENS,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }],
     // Force the browse, matching the OpenAI path. Left to choose, the model
@@ -918,34 +1320,18 @@ export async function generateVariations(
 
 Generate ${opts.count} distinct questions a person might ask an AI assistant related to this topic. Return a JSON array of ${opts.count} strings.`;
 
-  const res =
-    opts.provider === "anthropic"
-      ? await anthropicChat(opts.apiKey, opts.model, VARIATION_SYSTEM, user, UTILITY_MAX_TOKENS)
-      : opts.provider === "google"
-        ? await googleChat(
-            opts.apiKey,
-            opts.model,
-            VARIATION_SYSTEM + "\nReturn a JSON array of strings.",
-            user,
-            UTILITY_MAX_TOKENS,
-            true,
-          )
-        : opts.provider === "perplexity"
-        ? await perplexityChat(
-            opts.apiKey,
-            opts.model,
-            VARIATION_SYSTEM + "\nReturn a JSON array of strings.",
-            user,
-            UTILITY_MAX_TOKENS,
-          )
-        : await openaiChat(
-            opts.apiKey,
-            opts.model,
-            VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }.",
-            user,
-            UTILITY_MAX_TOKENS,
-            true,
-          );
+  // The output-format hint follows the wire format, not the provider: an
+  // OpenAI-compatible endpoint is asked for a JSON object because that is what
+  // response_format can constrain, whether the model behind it is GPT or Claude.
+  const shape = callShape(opts, opts.model);
+  const system =
+    shape === "anthropic"
+      ? VARIATION_SYSTEM
+      : shape === "openai-chat"
+        ? VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }."
+        : VARIATION_SYSTEM + "\nReturn a JSON array of strings.";
+
+  const res = await utilityChat(opts, opts.model, system, user, UTILITY_MAX_TOKENS, true);
 
   let parsed: unknown = extractJson(res.text);
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -1066,15 +1452,7 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
   const analysisModel = analysisModelFor(opts.provider);
 
   try {
-    const res =
-      opts.provider === "anthropic"
-        ? await anthropicChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
-        : opts.provider === "google"
-          ? await googleChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true)
-          : opts.provider === "perplexity"
-          ? await perplexityChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700)
-          : await openaiChat(opts.apiKey, analysisModel, ANALYZE_SYSTEM, user, 700, true);
-
+    const res = await utilityChat(opts, analysisModel, ANALYZE_SYSTEM, user, 700, true);
     return { results: parseAnalysis(opts.entities, extractJson(res.text)), tokens: res.tokens };
   } catch {
     // Sentiment is best-effort enrichment; never fail a run over it.
@@ -1122,14 +1500,7 @@ Return a JSON object of this shape:
 Provide 3 or 4 topics, each with 4 to 6 natural questions. Never put the company's own name in the questions.
 Provide up to 5 competitors. "aliases" are other names an AI answer might use for it (short name, product name, former name). Empty array if none. "domain" is its primary website domain, lowercase, no protocol or path. Null if unsure. Return an empty array if you cannot name real competitors with confidence.`;
 
-  const res =
-    opts.provider === "anthropic"
-      ? await anthropicChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000)
-      : opts.provider === "google"
-        ? await googleChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true)
-        : opts.provider === "perplexity"
-        ? await perplexityChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000)
-        : await openaiChat(opts.apiKey, opts.model, SUGGEST_SYSTEM, user, 2000, true);
+  const res = await utilityChat(opts, opts.model, SUGGEST_SYSTEM, user, 2000, true);
 
   try {
     const parsed = extractJson<Record<string, unknown>>(res.text);
@@ -1216,14 +1587,7 @@ export async function suggestCompetitors(
   );
   const user = lines.join("\n\n");
 
-  const res =
-    opts.provider === "anthropic"
-      ? await anthropicChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
-      : opts.provider === "google"
-        ? await googleChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true)
-        : opts.provider === "perplexity"
-        ? await perplexityChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS)
-        : await openaiChat(opts.apiKey, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
+  const res = await utilityChat(opts, opts.model, COMPETITOR_SYSTEM, user, UTILITY_MAX_TOKENS, true);
 
   try {
     let parsed: unknown = extractJson(res.text);
@@ -1265,6 +1629,10 @@ export async function suggestCompetitors(
 }
 
 export function humanError(err: unknown): string {
+  // A route we should never have attempted. Already written for the user (it
+  // names the router, the engine and the fix), so pass it through rather than
+  // letting the generic Error branch below reword it.
+  if (err instanceof RouteError) return err.message;
   // Transient connection drops (surface as APIConnectionError with no status)
   // are worth a distinct, retry-friendly message rather than a raw SDK string.
   if (err instanceof Anthropic.APIConnectionError || err instanceof OpenAI.APIConnectionError) {

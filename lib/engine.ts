@@ -1,5 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ActorType, Competitor, LogChannel, Project, Prompt, Provider } from "@/lib/types";
+import type {
+  ActorType,
+  Competitor,
+  LogChannel,
+  Project,
+  Prompt,
+  Provider,
+  RouteInfo,
+} from "@/lib/types";
 import { runQuery, analyzeResponse, humanError, type AnalyzeEntity } from "@/lib/llm";
 import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
@@ -82,6 +90,10 @@ export interface ExecuteRunParams {
   provider: Provider;
   model: string;
   apiKey: string;
+  /** Set when `apiKey` is an LLM router credential. `provider` still names the
+   *  engine that answers; this only says which gateway carried the call, and is
+   *  recorded on the run so a credential switch is visible in the data. */
+  route?: RouteInfo | null;
   /** Attribution for the activity log. Defaults to the internal system. */
   context?: RunContext;
 }
@@ -113,7 +125,7 @@ export interface PreparedRun {
  * else calls executeRun, which is exactly prepareRun + resumeRun.
  */
 export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun> {
-  const { supabase, project, provider, model } = params;
+  const { supabase, project, provider, model, route } = params;
   const startedMs = Date.now();
 
   // Attribution shared by every run event below. project.user_id is always the
@@ -158,6 +170,9 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
       status: "running",
       provider,
       model,
+      // Null for a direct provider key. Never a substitute for `provider`: the
+      // engine that answered is what the run measured.
+      route: route?.router ?? null,
       // Planned ANSWERS, not prompts — this is what the UI counts against.
       prompt_count: jobs.length,
       completed_count: 0,
@@ -178,7 +193,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
     status: "info",
     targetId: runId,
     summary: `Run started on ${modelLabel(provider, model)} (${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} planned)`,
-    metadata: { provider, model, prompt_count: jobs.length, replicates },
+    metadata: { provider, model, route: route?.router ?? null, prompt_count: jobs.length, replicates },
   });
 
   return { runId, jobs, competitors, attribution, startedMs };
@@ -186,7 +201,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
 
 /** Execute a prepared run's jobs and settle the run row. */
 export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams): Promise<RunResult> {
-  const { supabase, project, provider, model, apiKey } = params;
+  const { supabase, project, provider, model, apiKey, route } = params;
   const { runId, jobs, competitors, attribution, startedMs } = prepared;
 
   if (jobs.length === 0) {
@@ -222,6 +237,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
         provider,
         model,
         apiKey,
+        route,
         prompt: prompt.text,
         webSearch: project.use_web_search,
       });
@@ -322,6 +338,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
           provider,
           model,
           apiKey,
+          route,
           question: prompt.text,
           responseText: answer,
           entities,

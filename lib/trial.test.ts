@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 vi.mock("@/lib/data", () => ({
   getDecryptedKey: vi.fn(),
   getConfiguredProviders: vi.fn(),
+  getDecryptedRouterKeys: vi.fn(),
 }));
 
-import { getDecryptedKey, getConfiguredProviders } from "@/lib/data";
+import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
+import type { Provider, RouterId } from "@/lib/types";
 import {
   resolveKey,
   resolveRunKeyFor,
@@ -19,6 +21,28 @@ import {
   trialEnabled,
   pickDefaultProvider,
 } from "@/lib/trial";
+
+// Grounding is a required argument on the real resolver (a router that can't
+// carry native search must not serve a project that asks for it). Every case
+// below that predates routers is about direct keys, where the flag changes
+// nothing, so default it off here and pass it explicitly in the router cases.
+function runKeyFor(
+  db: never,
+  userId: string,
+  provider: Provider,
+  model?: string,
+  opts: { webSearch: boolean } = { webSearch: false },
+) {
+  return resolveRunKeyFor(db, userId, provider, model, opts);
+}
+
+/** Stand in a saved router credential, with the engines it has been shown to
+ *  carry native web search for. */
+function hasRouter(router: RouterId, searchVerified: Provider[] = []) {
+  vi.mocked(getDecryptedRouterKeys).mockResolvedValue([
+    { router, baseUrl: null, searchVerified, apiKey: `key-for-${router}` },
+  ]);
+}
 
 // getTrialRunsUsed reads profiles.trial_runs_used; everything else in resolveKey
 // is env + the mocked key lookup.
@@ -58,6 +82,7 @@ beforeEach(() => {
   process.env.TRIAL_RUN_LIMIT = "5";
   vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
   vi.mocked(getConfiguredProviders).mockReset().mockResolvedValue([]);
+  vi.mocked(getDecryptedRouterKeys).mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -137,7 +162,7 @@ describe("resolveRunKeyFor", () => {
   // assistant other than the one selected — the trend line is the product.
   it("refuses to substitute another provider's key for the chosen engine", async () => {
     ownsKeysFor("anthropic");
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai", "gpt-4o");
+    const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o");
     expect(k.source).toBe("mismatch");
     expect(k.apiKey).toBeUndefined();
     expect(k.provider).toBe("openai");
@@ -146,7 +171,7 @@ describe("resolveRunKeyFor", () => {
 
   it("names the engine and the switch in the mismatch message", async () => {
     ownsKeysFor("anthropic");
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai", "gpt-4o");
+    const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o");
     const message = engineKeyMessage(k);
     expect(message).toContain("GPT-4o");
     expect(message).toContain("OpenAI (ChatGPT)");
@@ -155,14 +180,14 @@ describe("resolveRunKeyFor", () => {
 
   it("lists every switchable engine when several keys are held", async () => {
     ownsKeysFor("anthropic", "google");
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai");
+    const k = await runKeyFor(db(0), "user-1", "openai");
     expect(k.available).toEqual(["anthropic", "google"]);
     expect(engineKeyMessage(k)).toContain("Anthropic (Claude) or Google (Gemini)");
   });
 
   it("uses the chosen engine's own key, with the requested model", async () => {
     ownsKeysFor("openai", "anthropic");
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai", "gpt-4o");
+    const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o");
     expect(k.source).toBe("own");
     expect(k.apiKey).toBe("key-for-openai");
     expect(k.model).toBe("gpt-4o");
@@ -174,7 +199,7 @@ describe("resolveRunKeyFor", () => {
   it("takes a trial key only for the chosen provider, and records the swap", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
     process.env.TRIAL_ANTHROPIC_MODEL = "claude-haiku-4-5";
-    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
     expect(k.source).toBe("trial");
     expect(k.model).toBe("claude-haiku-4-5");
     expect(k.requested).toEqual({ provider: "anthropic", model: "claude-opus-4-8" });
@@ -182,14 +207,14 @@ describe("resolveRunKeyFor", () => {
 
   it("ignores a trial key belonging to a different provider", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai", "gpt-4o");
+    const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o");
     expect(k.source).toBe("none");
     expect(k.apiKey).toBeUndefined();
   });
 
   it("reports exhausted when the chosen engine's trial is spent and no key is held", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
-    const k = await resolveRunKeyFor(db(5), "user-1", "anthropic");
+    const k = await runKeyFor(db(5), "user-1", "anthropic");
     expect(k.source).toBe("exhausted");
   });
 
@@ -199,15 +224,133 @@ describe("resolveRunKeyFor", () => {
   it("prefers mismatch over exhausted when another key is available", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
     ownsKeysFor("openai");
-    const k = await resolveRunKeyFor(db(5), "user-1", "anthropic");
+    const k = await runKeyFor(db(5), "user-1", "anthropic");
     expect(k.source).toBe("mismatch");
   });
 
   it("defaults the model when none is given", async () => {
     ownsKeysFor("openai");
-    const k = await resolveRunKeyFor(db(0), "user-1", "openai");
+    const k = await runKeyFor(db(0), "user-1", "openai");
     expect(k.model).toBe("gpt-4o");
     expect(k.requested.model).toBe("gpt-4o");
+  });
+});
+
+// A router is a credential, not an engine. These cases pin the two properties
+// that follow from that and are expensive to get wrong: the run is still
+// attributed to the engine that answered, and a router only serves a monitored
+// run when it measures the same way a direct key would.
+describe("resolveRunKeyFor with a router credential", () => {
+  it("serves the run through a router that carries the engine's web search", async () => {
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8", {
+      webSearch: true,
+    });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-openrouter");
+    expect(k.route).toEqual({ router: "openrouter", baseUrl: null });
+    // The engine is unchanged: this is what keeps one continuous trend line
+    // across a switch from a direct key to a gateway.
+    expect(k.provider).toBe("anthropic");
+    expect(k.model).toBe("claude-opus-4-8");
+  });
+
+  it("refuses a grounded run when the router's search passthrough is unconfirmed", async () => {
+    hasRouter("openrouter", []);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(k.source).toBe("unroutable");
+    expect(k.apiKey).toBeUndefined();
+    expect(engineKeyMessage(k)).toContain("hasn't been confirmed");
+  });
+
+  // Same credential, same engine, ungrounded project: nothing is being claimed
+  // about the live web, so there is nothing to verify.
+  it("allows an ungrounded run on the same unconfirmed router", async () => {
+    hasRouter("openrouter", []);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: false });
+    expect(k.source).toBe("own");
+    expect(k.route?.router).toBe("openrouter");
+  });
+
+  it("refuses a grounded run when the router can't request native search at all", async () => {
+    // Concentrate has no documented way to ask for OpenAI's web search, so the
+    // alternative to refusing is recording a memory answer as a measurement.
+    hasRouter("concentrate", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o", { webSearch: true });
+    expect(k.source).toBe("unroutable");
+    expect(engineKeyMessage(k)).toContain("web search");
+    expect(engineKeyMessage(k)).toContain("Turn off web search");
+  });
+
+  it("prefers the user's own direct key over a router that could serve it", async () => {
+    ownsKeysFor("anthropic");
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(k.apiKey).toBe("key-for-anthropic");
+    expect(k.route).toBeUndefined();
+  });
+
+  // A router counts as holding a key for every engine it covers. Telling a
+  // router user "you have no keys" and offering no switch was the failure this
+  // guards: the engines their gateway does cover are exactly the useful advice.
+  it("offers the router's own engines as the switch for an engine it can't serve", async () => {
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "google", undefined, { webSearch: true });
+    expect(k.source).toBe("mismatch");
+    expect(k.available).toEqual(["anthropic", "openai"]);
+    expect(engineKeyMessage(k)).toContain("Anthropic (Claude) or OpenAI (ChatGPT)");
+  });
+
+  it("takes a router key before falling back to the operator's trial", async () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-openrouter");
+  });
+
+  // The router is not the measurement, but it is worth surfacing: a run that
+  // changed credential is the first thing to suspect when a series steps.
+  it("names the router in the next-run description", async () => {
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8", {
+      webSearch: true,
+    });
+    expect(nextRunMessage(k)).toContain("via OpenRouter");
+    expect(nextRunMessage(k)).toContain("Claude Opus 4.8");
+  });
+});
+
+describe("resolveKey with a router credential", () => {
+  it("uses a router for utility work when no direct key exists", async () => {
+    hasRouter("concentrate");
+    const k = await resolveKey(db(0), "user-1", "anthropic");
+    expect(k.source).toBe("own");
+    expect(k.route?.router).toBe("concentrate");
+    expect(k.provider).toBe("anthropic");
+  });
+
+  // Suggestion and classification calls never search, so an unverified router
+  // is fine here — but the preferred engine still wins over credential type.
+  it("keeps the preferred engine when its own key exists", async () => {
+    vi.mocked(getDecryptedKey).mockImplementation(async (_db, _user, p) =>
+      p === "anthropic" ? "sk-ant-own" : null,
+    );
+    hasRouter("openrouter");
+    const k = await resolveKey(db(0), "user-1", "anthropic");
+    expect(k.apiKey).toBe("sk-ant-own");
+    expect(k.route).toBeUndefined();
+  });
+
+  // The router covers anthropic/openai but not the requested perplexity, so the
+  // fallback lands on an engine it can actually reach rather than refusing.
+  it("falls back to an engine the router covers", async () => {
+    hasRouter("openrouter");
+    const k = await resolveKey(db(0), "user-1", "perplexity");
+    expect(k.source).toBe("own");
+    expect(k.provider).toBe("anthropic");
+    expect(k.route?.router).toBe("openrouter");
+    expect(k.requested.provider).toBe("perplexity");
   });
 });
 
@@ -258,7 +401,7 @@ describe("nextRunMessage", () => {
   it("names both models when the trial substitutes a cheaper one", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
     process.env.TRIAL_ANTHROPIC_MODEL = "claude-haiku-4-5";
-    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
     const message = nextRunMessage(k);
     expect(message).toContain("Claude Haiku 4.5");
     expect(message).toContain("Claude Opus 4.8");
@@ -267,14 +410,14 @@ describe("nextRunMessage", () => {
 
   it("speaks about the next run, not about runs in general", async () => {
     ownsKeysFor("anthropic");
-    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
     expect(nextRunMessage(k)).toMatch(/^Your next run/);
     expect(nextRunMessage(k)).not.toMatch(/Each run/);
   });
 
   it("stays a single clause on an own key, with no trial aside", async () => {
     ownsKeysFor("anthropic");
-    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
     const message = nextRunMessage(k);
     expect(message).toContain("Claude Opus 4.8");
     expect(message).not.toContain("Free runs");
@@ -284,7 +427,7 @@ describe("nextRunMessage", () => {
   // there is no substitution to explain.
   it("adds no aside when the trial runs the chosen model anyway", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
-    const k = await resolveRunKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8");
     expect(k.source).toBe("trial");
     expect(nextRunMessage(k)).not.toContain("Free runs");
   });

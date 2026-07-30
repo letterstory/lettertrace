@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Button } from "@/components/ui";
+import type { KeySource } from "@/lib/trial";
 
 export function RunNow({
   canRun,
@@ -13,8 +14,10 @@ export function RunNow({
   providerLabel,
 }: {
   canRun: boolean;
-  /** Why we can or can't run, so the hint names the actual blocker. */
-  keySource: "own" | "trial" | "none" | "exhausted" | "mismatch";
+  /** Why we can or can't run, so the hint names the actual blocker. Typed off
+   *  KeySource rather than restated, so a new blocker can't reach this component
+   *  as a silently unhandled state. */
+  keySource: KeySource;
   activePrompts: number;
   providerLabel: string;
 }) {
@@ -75,6 +78,19 @@ export function RunNow({
       {keySource === "mismatch" && (
         <p className="text-xs text-ink-faint">
           No {providerLabel} key saved. Add one, or change your answer engine, in{" "}
+          <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
+            Settings
+          </Link>
+          .
+        </p>
+      )}
+      {/* A router credential that reaches the engine but can't measure it. The
+          full explanation (which router, which of the three fixes) is already in
+          the heading via engineKeyMessage, so this stays a pointer. */}
+      {keySource === "unroutable" && (
+        <p className="text-xs text-ink-faint">
+          Your router can&apos;t measure {providerLabel}. Change your answer engine, or add a{" "}
+          {providerLabel} key, in{" "}
           <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
             Settings
           </Link>

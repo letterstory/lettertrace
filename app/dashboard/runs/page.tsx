@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { resolveRunKey, engineKeyMessage, nextRunMessage } from "@/lib/trial";
 import { PROVIDERS, modelLabel } from "@/lib/models";
+import { ROUTERS } from "@/lib/routers";
 import { timeAgo } from "@/lib/utils";
 import type { Run, RunStatus } from "@/lib/types";
 import {
@@ -105,6 +106,12 @@ export default async function RunsPage() {
                     <span className="text-sm font-medium text-ink">
                       {modelLabel(run.provider, run.model)}
                     </span>
+                    {/* The engine is what was measured; the router is only who
+                        carried it. Shown because a series that steps at the run
+                        where the credential changed is otherwise unexplained. */}
+                    {run.route && ROUTERS[run.route] && (
+                      <Badge tone="neutral">via {ROUTERS[run.route].label}</Badge>
+                    )}
                     <span className="text-ink-faint">·</span>
                     <span className="text-sm text-ink-soft">
                       {run.completed_count} / {run.prompt_count} answers

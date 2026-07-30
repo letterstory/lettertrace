@@ -31,6 +31,7 @@ const RUN: Run = {
   status: "completed",
   provider: "anthropic",
   model: "claude-sonnet-4-6",
+  route: null,
   prompt_count: 10,
   completed_count: 10,
   replicates: 1,
