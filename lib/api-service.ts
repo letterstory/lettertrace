@@ -174,6 +174,115 @@ export async function createProject(
   return { ok: true, project: data as Project };
 }
 
+export type UpdateProjectOutcome =
+  | { ok: true; project: Project }
+  | { ok: false; code: "not_found" | "invalid"; message: string };
+
+/**
+ * Update a project's settings — true PATCH semantics: only the fields the
+ * caller sends change, everything else keeps its value (the dashboard's
+ * full-form save lives elsewhere). This is how a project created before its
+ * configuration was fully known gets fixed without the dashboard: aliases the
+ * brand also answers to, replicates once a rate needs tighter intervals,
+ * domains as owned sites launch.
+ *
+ * `schedule` is deliberately not accepted, same stance as createProject: API
+ * callers orchestrate their own cadence and trigger runs explicitly.
+ */
+export async function updateProject(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<UpdateProjectOutcome> {
+  const project = await getOwnedProject(supabase, userId, projectId);
+  if (!project) {
+    return { ok: false, code: "not_found", message: "Project not found." };
+  }
+
+  const update: Record<string, unknown> = {};
+
+  if ("name" in input) {
+    const name = typeof input.name === "string" ? input.name.trim() : "";
+    if (!name) {
+      return { ok: false, code: "invalid", message: "name cannot be empty." };
+    }
+    update.name = name;
+  }
+  if ("brand_name" in input) {
+    const brandName = typeof input.brand_name === "string" ? input.brand_name.trim() : "";
+    if (!brandName) {
+      return { ok: false, code: "invalid", message: "brand_name cannot be empty." };
+    }
+    update.brand_name = brandName;
+  }
+  if ("brand_aliases" in input) update.brand_aliases = toAliases(input.brand_aliases);
+  if ("brand_domains" in input) update.brand_domains = toDomains(input.brand_domains);
+  if ("description" in input) update.description = toNullableString(input.description);
+  if ("use_web_search" in input) {
+    if (typeof input.use_web_search !== "boolean") {
+      return { ok: false, code: "invalid", message: "use_web_search must be a boolean." };
+    }
+    update.use_web_search = input.use_web_search;
+  }
+  if ("replicates" in input) {
+    if (typeof input.replicates !== "number" || !Number.isFinite(input.replicates)) {
+      return { ok: false, code: "invalid", message: "replicates must be a number (1–10)." };
+    }
+    // Applies from the NEXT run; past runs keep the replicates they recorded.
+    update.replicates = Math.min(Math.max(Math.trunc(input.replicates), 1), 10);
+  }
+  // Provider and model move together (the dashboard learned this the hard
+  // way): a provider alone re-resolves its default model; a model alone is
+  // validated against the provider it will actually be sent to.
+  if ("default_provider" in input || "default_model" in input) {
+    if (
+      "default_provider" in input &&
+      (typeof input.default_provider !== "string" || !isProvider(input.default_provider))
+    ) {
+      return {
+        ok: false,
+        code: "invalid",
+        message: `Unknown provider "${String(input.default_provider)}". Use one of: ${Object.keys(PROVIDERS).join(", ")}.`,
+      };
+    }
+    const provider =
+      typeof input.default_provider === "string" && isProvider(input.default_provider)
+        ? input.default_provider
+        : project.default_provider;
+    const model =
+      typeof input.default_model === "string" && input.default_model.trim().length > 0
+        ? input.default_model.trim()
+        : undefined;
+    const engine = resolveEngine(provider, model);
+    if (!engine.ok) {
+      return { ok: false, code: "invalid", message: engine.message };
+    }
+    update.default_provider = engine.provider;
+    update.default_model = engine.model;
+  }
+
+  if (Object.keys(update).length === 0) {
+    return {
+      ok: false,
+      code: "invalid",
+      message:
+        "No recognized fields. Updatable: name, brand_name, brand_aliases, brand_domains, description, use_web_search, replicates, default_provider, default_model.",
+    };
+  }
+  update.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("projects")
+    .update(update)
+    .eq("id", projectId)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+  if (error || !data) throw error ?? new Error("Failed to update project.");
+  return { ok: true, project: data as Project };
+}
+
 /** A prompt row trimmed to what the API exposes, with its topic's name. */
 export interface PromptSummary {
   id: string;

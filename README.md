@@ -172,6 +172,14 @@ curl -X POST https://your-app.com/api/v1/projects \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"name": "Acme", "brand_name": "Acme", "brand_domains": ["acme.io"]}'
 
+# Read one organization / update settings (only sent fields change — fix
+# aliases, replicates, or domains on a project after creation)
+curl https://your-app.com/api/v1/projects/<project-id> \
+  -H "Authorization: Bearer lt_live_..."
+curl -X PATCH https://your-app.com/api/v1/projects/<project-id> \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"brand_aliases": ["Acme Cloud"], "replicates": 3}'
+
 # A project's prompts / bulk-add prompts (topics are get-or-created by name)
 curl https://your-app.com/api/v1/projects/<project-id>/prompts \
   -H "Authorization: Bearer lt_live_..."

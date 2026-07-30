@@ -7,6 +7,7 @@ import {
   createPrompts,
   deleteCompetitor,
   discoverProjectCompetitors,
+  updateProject,
   getProjectHistory,
   getRunReport,
   getRunResponses,
@@ -40,6 +41,7 @@ import {
 } from "@/app/api/v1/projects/[id]/competitors/route";
 import { GET as getDiscoveredRoute } from "@/app/api/v1/projects/[id]/competitors/discovered/route";
 import { DELETE as deleteCompetitorRoute } from "@/app/api/v1/competitors/[id]/route";
+import { PATCH as patchProjectRoute } from "@/app/api/v1/projects/[id]/route";
 
 vi.mock("@/lib/api-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-auth")>()),
@@ -53,6 +55,7 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   createPrompts: vi.fn(),
   deleteCompetitor: vi.fn(),
   discoverProjectCompetitors: vi.fn(),
+  updateProject: vi.fn(),
   listProjectPrompts: vi.fn(),
   listRuns: vi.fn(),
   getProjectHistory: vi.fn(),
@@ -100,6 +103,7 @@ beforeEach(() => {
   vi.mocked(deleteCompetitor).mockReset();
   vi.mocked(discoverProjectCompetitors).mockReset();
   vi.mocked(listProjectCompetitors).mockReset();
+  vi.mocked(updateProject).mockReset();
   vi.mocked(listProjectPrompts).mockReset();
   vi.mocked(listRuns).mockReset();
   vi.mocked(getProjectHistory).mockReset();
@@ -808,5 +812,66 @@ describe("DELETE /api/v1/competitors/:id", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).removed.name).toBe("WEKA");
     expect(deleteCompetitor).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "c1");
+  });
+});
+
+describe("PATCH /api/v1/projects/:id", () => {
+  it("maps not_found/invalid to 404/400", async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      ok: false,
+      code: "not_found",
+      message: "Project not found.",
+    });
+    let res = await patchProjectRoute(
+      req("/api/v1/projects/p1", {
+        method: "PATCH",
+        body: JSON.stringify({ replicates: 3 }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(404);
+
+    vi.mocked(updateProject).mockResolvedValue({
+      ok: false,
+      code: "invalid",
+      message: "replicates must be a number (1\u201310).",
+    });
+    res = await patchProjectRoute(
+      req("/api/v1/projects/p1", {
+        method: "PATCH",
+        body: JSON.stringify({ replicates: "three" }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns the trimmed updated project", async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      ok: true,
+      project: {
+        id: "p1",
+        user_id: "user-1",
+        name: "Acme",
+        brand_name: "Acme",
+        brand_aliases: ["Acme Cloud"],
+        replicates: 3,
+      } as never,
+    });
+    const res = await patchProjectRoute(
+      req("/api/v1/projects/p1", {
+        method: "PATCH",
+        body: JSON.stringify({ brand_aliases: ["Acme Cloud"], replicates: 3 }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.project.replicates).toBe(3);
+    expect(body.project).not.toHaveProperty("user_id");
+    expect(updateProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
+      brand_aliases: ["Acme Cloud"],
+      replicates: 3,
+    });
   });
 });
