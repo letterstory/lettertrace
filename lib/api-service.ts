@@ -847,7 +847,7 @@ export interface RunReport {
   /** Per-URL cited-hit rates for prompts mapped to a target page: when the
    *  question a page was built for gets asked, is THAT page the one cited? */
   pages: PageStat[];
-  /** Per-topic brand visibility. Letterstory plans by topic, so this is the
+  /** Per-topic brand visibility. Content is usually planned by topic, so this is the
    *  join between "we published about X" and "are we surfacing for X". */
   topics: (TopicStat & { topic: string | null })[];
 }
@@ -1252,7 +1252,7 @@ export interface ProjectHistory {
   brandName: string;
   points: HistoryPoint[];
   /** When the brand was first mentioned in any run, or null if never. This is
-   *  the event Letterstory is waiting on: publish, re-run, watch for it to flip. */
+   *  the event a content team is waiting on: publish, re-run, watch it flip. */
   firstMentionAt: string | null;
   /** True once any run has recorded a brand mention. */
   everMentioned: boolean;
