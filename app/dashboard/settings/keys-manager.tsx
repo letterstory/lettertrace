@@ -206,9 +206,14 @@ function ProviderCard({
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="submit" size="sm" disabled={verifying || !apiKey.trim()}>
-                {verifying && <Spinner />}
-                {verifying ? "Verifying..." : "Save key"}
+              <Button
+                type="submit"
+                size="sm"
+                loading={verifying}
+                loadingText="Verifying…"
+                disabled={!apiKey.trim()}
+              >
+                Save key
               </Button>
               {editing && (
                 <Button

@@ -88,9 +88,13 @@ export function TopicsClient({ topics, prompts, hasKey, providerLabel }: Props) 
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <Button type="submit" disabled={creating || !name.trim()}>
-                {creating ? <Spinner /> : <Plus className="h-4 w-4" />}
-                {creating ? "Adding…" : "Add topic"}
+              <Button
+                type="submit"
+                loading={creating}
+                loadingText="Adding…"
+                disabled={!name.trim()}
+              >
+                <Plus className="h-4 w-4" /> Add topic
               </Button>
               {createError && <p className="text-sm text-terracotta-dark">{createError}</p>}
             </div>

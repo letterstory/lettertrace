@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
-import { Button, Input, Textarea, Select, Label, Spinner } from "@/components/ui";
+import { Button, Input, Textarea, Select, Label } from "@/components/ui";
 import { PROVIDER_LIST, PROVIDERS } from "@/lib/models";
 import { article } from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
@@ -285,9 +285,8 @@ export default function ProjectForm({
       {error && <p className="text-sm text-terracotta">{error}</p>}
 
       <div className="flex items-center gap-3">
-        <Button type="submit" disabled={saving}>
-          {saving && <Spinner />}
-          {saving ? "Saving..." : "Save changes"}
+        <Button type="submit" loading={saving} loadingText="Saving…">
+          Save changes
         </Button>
         {saved && !saving && (
           // A bare "Saved" was the whole complaint: an engine with no key

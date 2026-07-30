@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Play } from "lucide-react";
-import { Button, Spinner } from "@/components/ui";
+import { Button } from "@/components/ui";
 
 export function RunNow({
   canRun,
@@ -45,16 +45,11 @@ export function RunNow({
 
   return (
     <div className="flex flex-col items-start gap-1.5 sm:items-end">
-      <Button onClick={run} disabled={disabled}>
-        {loading ? (
-          <>
-            <Spinner /> Running… this can take a minute
-          </>
-        ) : (
-          <>
-            <Play className="h-4 w-4" /> Run monitor now
-          </>
-        )}
+      {/* Just "Running…". The label used to read "Running… this can take a
+          minute", which roughly doubled the button's width the moment it was
+          clicked — the spinner already says a wait is underway. */}
+      <Button onClick={run} loading={loading} loadingText="Running…" disabled={disabled}>
+        <Play className="h-4 w-4" /> Run monitor now
       </Button>
 
       {keySource === "exhausted" && (
