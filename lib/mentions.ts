@@ -39,9 +39,53 @@ function buildRegex(terms: string[]): RegExp | null {
 export function stripLinkSurfaces(text: string): string {
   const blank = (m: string) => " ".repeat(m.length);
   return text
-    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, blank) // whole markdown links
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, markdownLink)
     .replace(/\bhttps?:\/\/[^\s<>"')\]]+/gi, blank) // bare URLs
     .replace(/\bwww\.[^\s<>"')\]]+/gi, blank); // scheme-less www hosts
+}
+
+/**
+ * A markdown link keeps its LABEL and loses its target — unless the label is
+ * itself an address.
+ *
+ * Blanking the whole link was too broad. "[Vercel](https://vercel.com)" is the
+ * single most common way an assistant names a brand in a ranked list, and to
+ * the person reading the answer the brand is named: the label is the prose.
+ * Dropping it means a brand that assistants always link reads as never
+ * mentioned, which is the same class of error as counting a URL, pointing the
+ * other way — and the silent direction, because nobody notices a zero that
+ * looks plausible.
+ *
+ * "[vercel.com](https://vercel.com)" is different: what the reader sees is an
+ * address, so the answer cited a page rather than naming a company. Those are
+ * still blanked, which is what keeps a link from minting a first-mention.
+ *
+ * Length-preserving, and the label keeps its exact original offsets — the label
+ * starts one character into the match either way — so `firstPosition` and the
+ * prominence built on it stay valid.
+ */
+function markdownLink(match: string, label: string): string {
+  const keep = isAddress(label) ? "" : label;
+  return " " + keep + " ".repeat(match.length - keep.length - 1);
+}
+
+/**
+ * Does this link label read as an address rather than as words?
+ *
+ * A scheme or www prefix, or a bare dotted token with an optional path and
+ * nothing else around it. "Vercel" keeps its dots-free spelling and stays;
+ * "vercel.com" and "vercel.com/docs" go. A label with any surrounding prose
+ * ("Vercel — the hosting platform") is words, whatever else it contains.
+ *
+ * A brand whose NAME is a domain (You.com) is the residual cost: its label is
+ * indistinguishable from a citation of the same domain, so it is treated as
+ * one. That was the behaviour for every label before this change; it now
+ * applies only to the labels that genuinely look like addresses.
+ */
+function isAddress(label: string): boolean {
+  const trimmed = label.trim();
+  if (/^(?:https?:\/\/|www\.)/i.test(trimmed)) return true;
+  return /^[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/.test(trimmed);
 }
 
 export function detectMention(text: string, terms: string[]): MentionHit {
