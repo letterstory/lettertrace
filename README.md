@@ -12,7 +12,7 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys — or a single **LLM router** key (OpenRouter, Concentrate) instead. Either way they're encrypted at rest and never leave your infrastructure.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
 - 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), and Perplexity Sonar. Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
@@ -131,29 +131,28 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ## LLM routers (one key, several assistants)
 
-Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. Supported today:
+Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. One router ships today — the bar for adding another is a live probe, not a docs page, for the reason spelled out below:
 
 | Router | Engines it serves | Notes |
 |---|---|---|
-| **[OpenRouter](https://openrouter.ai/)** | Claude, ChatGPT | 400+ models behind one key. Requests pin the upstream provider (`allow_fallbacks: false`) so routing changes can't move your trend line. |
 | **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT | No markup on tokens, which matters when the key is yours. Mirrors both providers' native APIs, so a routed answer is the same request a direct key sends — forced browse included. |
 
 Settings → **Or use one router key**, or from the terminal:
 
 ```bash
 lettertrace routers                       # what's stored, and what each key can measure
-lettertrace routers set openrouter        # key read from a hidden prompt / stdin / --key-file
-lettertrace routers remove openrouter
+lettertrace routers set concentrate       # key read from a hidden prompt / stdin / --key-file
+lettertrace routers remove concentrate
 ```
 
 Three things are worth understanding before you rely on one.
 
-**A router is a credential, not an answer engine.** A run served by OpenRouter against Claude still measured Claude, so it is recorded as `provider = anthropic` with `route = openrouter` alongside it. Switching from a direct key to a router (or back) keeps one continuous trend line instead of splitting your history and share of voice across two entries that are the same answer surface.
+**A router is a credential, not an answer engine.** A run served by Concentrate against Claude still measured Claude, so it is recorded as `provider = anthropic` with `route = concentrate` alongside it. Switching from a direct key to a router (or back) keeps one continuous trend line instead of splitting your history and share of voice across two entries that are the same answer surface.
 
 **Grounding is verified, not assumed.** Every monitored answer is supposed to come from the provider's *native* web search, forced. A gateway that normalizes requests can accept those parameters and quietly drop them, and an ungrounded answer is not a cheaper version of a grounded one — it is a different measurement that still looks like data. So saving a router key runs a real forced search per engine and stores which ones actually returned sources (`router_keys.search_verified`). An engine that didn't is allowed to serve projects with web search **off**, and refused for projects with it on, with a message naming the fix. Operators can run the same check without an account:
 
 ```bash
-ROUTER_API_KEY=sk-or-v1-... npx tsx scripts/probe-router.ts openrouter
+ROUTER_API_KEY=... npx tsx scripts/probe-router.ts concentrate
 ```
 
 The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.
@@ -263,8 +262,8 @@ curl -X DELETE https://your-app.com/api/v1/keys/openai \
 # observed to carry the provider's native web search.
 curl https://your-app.com/api/v1/router-keys \
   -H "Authorization: Bearer lt_live_..."
-jq -n --arg k "$(cat ./openrouter.key)" '{api_key: $k}' | \
-  curl -X PUT https://your-app.com/api/v1/router-keys/openrouter \
+jq -n --arg k "$(cat ./concentrate.key)" '{api_key: $k}' | \
+  curl -X PUT https://your-app.com/api/v1/router-keys/concentrate \
     -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
     --data-binary @-
 
@@ -388,7 +387,7 @@ runs a real forced web search per engine and reports what came back:
 
 ```bash
 npm run cli -- routers                     # stored keys + what each can measure
-npm run cli -- routers set openrouter      # prompts, input hidden and not echoed
+npm run cli -- routers set concentrate     # prompts, input hidden and not echoed
 npm run cli -- routers remove concentrate
 ```
 The key is read from the first of these that's available:

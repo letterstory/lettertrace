@@ -15,13 +15,7 @@ import {
 import { Badge, Button, Input, Spinner } from "@/components/ui";
 import { cn, formatDate } from "@/lib/utils";
 import { PROVIDERS } from "@/lib/models";
-import {
-  PLUGIN_SEARCH_CAVEAT,
-  ROUTER_LIST,
-  routerProviders,
-  routerSupport,
-  type RouterInfo,
-} from "@/lib/routers";
+import { ROUTER_LIST, routerProviders, type RouterInfo } from "@/lib/routers";
 import type { Provider, RouterId, RouterKeyPublic } from "@/lib/types";
 
 // One card per router, mirroring the provider-key cards. The difference is what
@@ -31,14 +25,13 @@ import type { Provider, RouterId, RouterKeyPublic } from "@/lib/types";
 
 const ROUTER_MARK: Record<RouterId, { mark: string; markClass: string }> = {
   concentrate: { mark: "◎", markClass: "bg-teal/15 text-teal-dark" },
-  openrouter: { mark: "⇄", markClass: "bg-butter-tint text-butter-ink" },
 };
 
 /** One engine's verdict on a saved credential, as returned by the save call. */
 interface Check {
   provider: Provider;
   reachable: boolean;
-  search: "passthrough" | "plugin" | "none";
+  search: "passthrough" | "none";
   searchWorks: boolean | null;
   error?: string;
 }
@@ -301,16 +294,12 @@ function EngineStatus({
   searchVerified: Provider[];
   checks: Check[] | null;
 }) {
-  const hasPlugin = served.some((p) => routerSupport(routerId, p)?.search === "plugin");
-
   return (
     <div className="space-y-2">
       <ul className="space-y-1.5">
         {served.map((provider) => {
-          const support = routerSupport(routerId, provider);
           const check = checks?.find((c) => c.provider === provider);
-          const grounded =
-            support?.search === "plugin" || searchVerified.includes(provider);
+          const grounded = searchVerified.includes(provider);
           const unreachable = check ? !check.reachable : false;
 
           return (
@@ -341,7 +330,6 @@ function EngineStatus({
         Gemini, Google AI Overviews and Perplexity need their own keys — their answers
         aren&apos;t comparable when routed through a gateway.
       </p>
-      {hasPlugin && <p className="text-xs text-ink-faint">{PLUGIN_SEARCH_CAVEAT}</p>}
     </div>
   );
 }

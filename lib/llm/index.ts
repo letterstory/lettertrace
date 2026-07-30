@@ -106,7 +106,6 @@ interface RoutePlan {
   shape: RouteShape;
   slug: string;
   baseUrl: string;
-  extraBody: Record<string, unknown>;
   search: SearchSupport;
   /** Which header carries the key on the Anthropic surface — see the registry. */
   anthropicAuth: "x-api-key" | "bearer";
@@ -164,7 +163,6 @@ function planRoute(
     baseUrl,
     search: support.search,
     anthropicAuth: info.anthropicAuth,
-    extraBody: info.extraBody?.(provider, { webSearch: opts.webSearch }) ?? {},
   };
 }
 
@@ -200,15 +198,14 @@ async function anthropicChat(
   plan?: RoutePlan,
 ): Promise<ChatResult> {
   const client = new Anthropic(anthropicOpts(apiKey, plan));
-  // Router-specific body fields (e.g. OpenRouter's upstream pinning) aren't in
-  // the Anthropic param types, so build the body and cast once — the same way
-  // anthropicWebSearch casts for the server-side web_search tool.
+  // Built as a plain object and cast once, the same way anthropicWebSearch casts
+  // for the server-side web_search tool, so a routed call can carry fields the
+  // SDK's param types don't know about.
   const params = {
     model: plan ? plan.slug : model,
     max_tokens: maxTokens,
     ...(system ? { system } : {}),
     messages: [{ role: "user", content: user }],
-    ...(plan?.extraBody ?? {}),
   };
   const msg = await client.messages.create(
     params as unknown as Anthropic.MessageCreateParamsNonStreaming,
@@ -244,7 +241,6 @@ async function openaiChat(
     max_tokens: maxTokens,
     messages,
     ...(json ? { response_format: { type: "json_object" } } : {}),
-    ...(plan?.extraBody ?? {}),
   };
   const res = await client.chat.completions.create(
     params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
@@ -279,7 +275,10 @@ function extractJson<T>(raw: string): T {
  * shape once keeps those two decisions — how to ask, and where to send it — from
  * being made on different criteria.
  */
-type CallShape = RouteShape | "google" | "perplexity";
+// Wider than RouteShape: a DIRECT OpenAI utility call is chat-completions
+// shaped, which no route uses now that the only shipped router mirrors the
+// Responses API. Both still want OpenAI's JSON-object phrasing.
+type CallShape = RouteShape | "openai-chat" | "google" | "perplexity";
 
 const DIRECT_SHAPE: Record<Provider, CallShape> = {
   anthropic: "anthropic",
@@ -511,9 +510,8 @@ export async function runQuery(
     if (plan.shape === "openai-responses" && webSearch) {
       return openaiWebSearch(opts.apiKey, opts.model, opts.prompt, plan);
     }
-    // Otherwise chat-completions: either no browsing was asked for, or this
-    // router expresses search through its own gateway flag, which can enable a
-    // browse but not compel one — see PLUGIN_SEARCH_CAVEAT.
+    // Otherwise chat-completions: nothing was asked to be grounded, so there is
+    // no forcing to preserve and the simpler endpoint is the right one.
     return gatewayQuery(opts.apiKey, opts.prompt, plan, webSearch);
   }
 
@@ -566,7 +564,6 @@ async function gatewayQuery(
     model: plan.slug,
     max_tokens: ANSWER_MAX_TOKENS,
     messages: [{ role: "user", content: prompt }],
-    ...plan.extraBody,
   };
   const res = (await client.chat.completions.create(
     params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
@@ -715,7 +712,6 @@ async function openaiWebSearch(
           tool_choice: { type: "web_search_preview" },
           input: prompt,
           max_output_tokens: ANSWER_MAX_TOKENS,
-          ...plan?.extraBody,
         }),
       });
       if (!res.ok) {

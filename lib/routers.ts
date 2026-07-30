@@ -9,7 +9,7 @@ import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS } from "./models";
 // a call — it is never a `Provider` of its own.
 //
 // That distinction is load-bearing for the product, not just for tidiness. A run
-// served by OpenRouter against Claude still measured *Claude*: it asked Claude's
+// served by Concentrate against Claude still measured *Claude*: it asked Claude's
 // weights and got Claude's answer. If the router were its own provider, a client
 // moving from a direct Anthropic key to a router would break their trend line at
 // the switch and split their share of voice across two entries that are the same
@@ -33,9 +33,9 @@ export type { RouterId };
 /**
  * Which wire format we speak to a router for a given provider.
  *
- * Both routers offer an Anthropic-Messages-compatible endpoint (a "skin") in
- * addition to the OpenAI-compatible one, and Concentrate also mirrors OpenAI's
- * Responses API. Preferring the native shape wherever it exists is the whole
+ * Concentrate mirrors both providers' own APIs — an Anthropic-Messages "skin"
+ * and OpenAI's Responses API. Preferring the native shape wherever it exists is
+ * the whole
  * reason a routed measurement survives intact: the request is byte-for-byte the
  * one we send the provider directly — Anthropic's server-side
  * `web_search_20250305` tool with its forcing `tool_choice`, OpenAI's
@@ -47,11 +47,12 @@ export type { RouterId };
  * endpoint with a forced `tool_choice` still returned two cited sources, while
  * the same request with the tool merely offered returned none, and so did
  * chat-completions with `web_search_options`. Forcing is honoured; the
- * alternatives only permit. That difference is the whole reason this enum
- * distinguishes 'openai-responses' from 'openai-chat' rather than treating any
- * OpenAI-compatible endpoint as interchangeable.
+ * alternatives only permit. That difference is why the OpenAI path names the
+ * Responses API specifically rather than treating any OpenAI-compatible
+ * endpoint as interchangeable: chat-completions is still used for routed calls
+ * that aren't grounded, where there is nothing to force.
  */
-export type RouteShape = "anthropic" | "openai-chat" | "openai-responses";
+export type RouteShape = "anthropic" | "openai-responses";
 
 /**
  * How native web search is expressed through a router for one provider.
@@ -60,14 +61,18 @@ export type RouteShape = "anthropic" | "openai-chat" | "openai-responses";
  *   expected to forward them untouched. Expressible, but only trustworthy once
  *   probed, so a credential must confirm it before this provider can serve
  *   monitored web-search runs.
- * - 'plugin' — the router replaces the provider's params with its own gateway
- *   flag. Still native browsing at the provider, but we cannot force the browse
- *   the way `tool_choice` does; see PLUGIN_SEARCH_CAVEAT.
  * - 'none' — no way to ask for native search in this router's documented
  *   surface. Utility calls are fine; monitored web-search runs are refused
  *   rather than silently run ungrounded.
+ *
+ * There was a third, 'plugin', for a router that substitutes its own gateway
+ * flag for the provider's search params. It is real native browsing but cannot
+ * be compelled the way `tool_choice` can, which makes it a weaker measurement
+ * than a direct key — and it existed only for OpenRouter, which this build
+ * doesn't ship. It was removed rather than left unreachable; bringing that
+ * router back means bringing the tier and its warning copy back with it.
  */
-export type SearchSupport = "passthrough" | "plugin" | "none";
+export type SearchSupport = "passthrough" | "none";
 
 export interface RouterProviderSupport {
   shape: RouteShape;
@@ -109,27 +114,10 @@ export interface RouterInfo {
    * verification uses this same path.
    */
   anthropicAuth: "x-api-key" | "bearer";
-  /** Extra top-level body fields for a call through this router. */
-  extraBody?: (provider: Provider, opts: { webSearch: boolean }) => Record<string, unknown>;
   providers: Partial<Record<Provider, RouterProviderSupport>>;
 }
 
-/**
- * Why a plugin-shaped search is weaker than a passthrough one.
- *
- * The direct paths force the browse — `tool_choice` on Anthropic, on OpenAI's
- * Responses API — because left to choose, a model answers a well-known question
- * from memory and cites nothing. Measured in a live pilot, Claude searched on 4
- * of 10 prompts where OpenAI searched on 10, which made the two providers'
- * mention rates measure different things. A gateway plugin flag has no equivalent
- * of "you must search", so a plugin-served engine can drift the same way. It is
- * still worth offering — it is real native browsing — but it is not equivalent,
- * and the UI says so rather than presenting the two as interchangeable.
- */
-export const PLUGIN_SEARCH_CAVEAT =
-  "Search runs through the router's web plugin, which can't force a browse the way a direct key can. Some answers may come from the model's memory instead of the live web.";
-
-// Google and Perplexity are deliberately absent from both routers below.
+// Google and Perplexity are deliberately absent from the router below.
 //
 // Not because the models are unreachable — they are — but because their
 // measurement paths don't survive normalization. Gemini's answers are grounded
@@ -174,68 +162,12 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       },
     },
   },
-  openrouter: {
-    id: "openrouter",
-    label: "OpenRouter",
-    blurb: "400+ models behind one key. Widest coverage.",
-    keyUrl: "https://openrouter.ai/keys",
-    docsUrl: "https://openrouter.ai/docs",
-    keyPrefix: "sk-or-v1-",
-    openaiBaseUrl: "https://openrouter.ai/api/v1",
-    anthropicBaseUrl: "https://openrouter.ai/api",
-    // OpenRouter's Anthropic-compatible endpoint takes the same `x-api-key` the
-    // Anthropic SDK sends by default — it is what makes ANTHROPIC_BASE_URL work
-    // with an OpenRouter key.
-    anthropicAuth: "x-api-key",
-    extraBody: (provider, { webSearch }) => ({
-      // Pin the upstream and refuse fallbacks. OpenRouter price-load-balances a
-      // model across several upstream hosts that can serve different
-      // quantizations and different context handling, and it will silently move
-      // between them. For a product whose output is a trend line, that is a
-      // measurement change disguised as a visibility change: the brand's
-      // mention rate shifts because routing shifted. Pinning trades some
-      // availability for a comparable series, which is the right trade here.
-      provider: { order: [OPENROUTER_UPSTREAM[provider]], allow_fallbacks: false },
-      // Force the provider's own search rather than OpenRouter's Exa fallback.
-      // Unspecified, the plugin uses native search "if available" and otherwise
-      // silently substitutes Exa — a third-party search service, which would
-      // both change what is being measured and break the README's claim that
-      // Lettertrace uses no search service beyond the provider's own.
-      ...(webSearch
-        ? { plugins: [{ id: "web", engine: "native", max_results: WEB_PLUGIN_MAX_RESULTS }] }
-        : {}),
-    }),
-    providers: {
-      anthropic: {
-        shape: "anthropic",
-        search: "passthrough",
-        slugPrefix: "anthropic",
-      },
-      openai: {
-        shape: "openai-chat",
-        search: "plugin",
-        slugPrefix: "openai",
-      },
-    },
-  },
-};
-
-/** Matches WEB_SEARCH_MAX_USES on the direct paths, so a routed answer draws on
- *  a comparable number of sources rather than a wider or narrower read. */
-const WEB_PLUGIN_MAX_RESULTS = 5;
-
-/** OpenRouter's upstream-provider names, for the pinning above. */
-const OPENROUTER_UPSTREAM: Record<Provider, string> = {
-  anthropic: "anthropic",
-  openai: "openai",
-  google: "google-vertex",
-  perplexity: "perplexity",
 };
 
 export const ROUTER_LIST: RouterInfo[] = Object.values(ROUTERS);
 
 export function isRouterId(value: string): value is RouterId {
-  return value === "concentrate" || value === "openrouter";
+  return value === "concentrate";
 }
 
 /** Narrow an untrusted router value, or null. */
@@ -296,7 +228,6 @@ export function routerCanMeasure(
   if (!support) return false;
   if (!opts.webSearch) return true;
   if (support.search === "none") return false;
-  if (support.search === "plugin") return true;
   return opts.verified.includes(provider);
 }
 

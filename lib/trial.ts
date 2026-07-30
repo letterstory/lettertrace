@@ -393,7 +393,7 @@ export function nextRunMessage(key: ResolvedKey): string {
   // Name the router when one is carrying the run. It is the same engine either
   // way — which is why runs.provider doesn't change — but a user who set up a
   // gateway should be able to see that it is the thing being billed, and a run
-  // recorded "via OpenRouter" is what later explains a step in the trend line.
+  // recorded "via Concentrate" is what later explains a step in the trend line.
   if (key.route) {
     const routerLabel = ROUTERS[key.route.router].label;
     return `Your next run asks your active prompts to ${willRun} via ${routerLabel} and records where your brand shows up.`;

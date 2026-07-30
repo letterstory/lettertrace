@@ -242,13 +242,13 @@ describe("resolveRunKeyFor", () => {
 // run when it measures the same way a direct key would.
 describe("resolveRunKeyFor with a router credential", () => {
   it("serves the run through a router that carries the engine's web search", async () => {
-    hasRouter("openrouter", ["anthropic"]);
+    hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8", {
       webSearch: true,
     });
     expect(k.source).toBe("own");
-    expect(k.apiKey).toBe("key-for-openrouter");
-    expect(k.route).toEqual({ router: "openrouter", baseUrl: null });
+    expect(k.apiKey).toBe("key-for-concentrate");
+    expect(k.route).toEqual({ router: "concentrate", baseUrl: null });
     // The engine is unchanged: this is what keeps one continuous trend line
     // across a switch from a direct key to a gateway.
     expect(k.provider).toBe("anthropic");
@@ -256,7 +256,7 @@ describe("resolveRunKeyFor with a router credential", () => {
   });
 
   it("refuses a grounded run when the router's search passthrough is unconfirmed", async () => {
-    hasRouter("openrouter", []);
+    hasRouter("concentrate", []);
     const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
     expect(k.source).toBe("unroutable");
     expect(k.apiKey).toBeUndefined();
@@ -266,10 +266,10 @@ describe("resolveRunKeyFor with a router credential", () => {
   // Same credential, same engine, ungrounded project: nothing is being claimed
   // about the live web, so there is nothing to verify.
   it("allows an ungrounded run on the same unconfirmed router", async () => {
-    hasRouter("openrouter", []);
+    hasRouter("concentrate", []);
     const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: false });
     expect(k.source).toBe("own");
-    expect(k.route?.router).toBe("openrouter");
+    expect(k.route?.router).toBe("concentrate");
   });
 
   // Grounding is confirmed per ENGINE, not per credential. A key that carries
@@ -290,7 +290,7 @@ describe("resolveRunKeyFor with a router credential", () => {
 
   it("prefers the user's own direct key over a router that could serve it", async () => {
     ownsKeysFor("anthropic");
-    hasRouter("openrouter", ["anthropic"]);
+    hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
     expect(k.apiKey).toBe("key-for-anthropic");
     expect(k.route).toBeUndefined();
@@ -300,7 +300,7 @@ describe("resolveRunKeyFor with a router credential", () => {
   // router user "you have no keys" and offering no switch was the failure this
   // guards: the engines their gateway does cover are exactly the useful advice.
   it("offers the router's own engines as the switch for an engine it can't serve", async () => {
-    hasRouter("openrouter", ["anthropic"]);
+    hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "google", undefined, { webSearch: true });
     expect(k.source).toBe("mismatch");
     expect(k.available).toEqual(["anthropic", "openai"]);
@@ -309,20 +309,20 @@ describe("resolveRunKeyFor with a router credential", () => {
 
   it("takes a router key before falling back to the operator's trial", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
-    hasRouter("openrouter", ["anthropic"]);
+    hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
     expect(k.source).toBe("own");
-    expect(k.apiKey).toBe("key-for-openrouter");
+    expect(k.apiKey).toBe("key-for-concentrate");
   });
 
   // The router is not the measurement, but it is worth surfacing: a run that
   // changed credential is the first thing to suspect when a series steps.
   it("names the router in the next-run description", async () => {
-    hasRouter("openrouter", ["anthropic"]);
+    hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8", {
       webSearch: true,
     });
-    expect(nextRunMessage(k)).toContain("via OpenRouter");
+    expect(nextRunMessage(k)).toContain("via Concentrate");
     expect(nextRunMessage(k)).toContain("Claude Opus 4.8");
   });
 });
@@ -342,7 +342,7 @@ describe("resolveKey with a router credential", () => {
     vi.mocked(getDecryptedKey).mockImplementation(async (_db, _user, p) =>
       p === "anthropic" ? "sk-ant-own" : null,
     );
-    hasRouter("openrouter");
+    hasRouter("concentrate");
     const k = await resolveKey(db(0), "user-1", "anthropic");
     expect(k.apiKey).toBe("sk-ant-own");
     expect(k.route).toBeUndefined();
@@ -351,11 +351,11 @@ describe("resolveKey with a router credential", () => {
   // The router covers anthropic/openai but not the requested perplexity, so the
   // fallback lands on an engine it can actually reach rather than refusing.
   it("falls back to an engine the router covers", async () => {
-    hasRouter("openrouter");
+    hasRouter("concentrate");
     const k = await resolveKey(db(0), "user-1", "perplexity");
     expect(k.source).toBe("own");
     expect(k.provider).toBe("anthropic");
-    expect(k.route?.router).toBe("openrouter");
+    expect(k.route?.router).toBe("concentrate");
     expect(k.requested.provider).toBe("perplexity");
   });
 });

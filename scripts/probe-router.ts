@@ -8,8 +8,8 @@
  * like a grounded one. Reading a router's docs tells you what it claims;
  * this sends the real request and counts the sources that come back.
  *
- *   npx tsx scripts/probe-router.ts openrouter
- *   npx tsx scripts/probe-router.ts concentrate --provider anthropic
+ *   npx tsx scripts/probe-router.ts concentrate
+ *   npx tsx scripts/probe-router.ts concentrate --provider openai --model gpt-4o
  *
  * The key comes from $ROUTER_API_KEY (or --key-file <path>), never an argument.
  * Costs a few tokens plus one real web search per engine probed, on that key.
