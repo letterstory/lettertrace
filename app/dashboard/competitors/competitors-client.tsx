@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Building2, Plus, Sparkles, Trash2, Users, X } from "lucide-react";
+import { Building2, Plus, Search, Sparkles, Trash2, Users, X } from "lucide-react";
 import {
   Badge,
   Button,
@@ -55,6 +55,61 @@ export function CompetitorsClient({
   const [suggesting, setSuggesting] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [addingSuggestion, setAddingSuggestion] = useState<string | null>(null);
+
+  // Companies the stored answers already named. Distinct from the AI
+  // suggestions above: these are grounded in what the models actually said
+  // about this brand's prompts, not in the model's general knowledge, and they
+  // cost no provider call. `null` = not asked yet.
+  const [found, setFound] = useState<
+    { companies: { name: string; answers: number }[]; answersScanned: number } | null
+  >(null);
+  const [finding, setFinding] = useState(false);
+  const [findError, setFindError] = useState<string | null>(null);
+
+  async function handleFind() {
+    if (finding) return;
+    setFinding(true);
+    setFindError(null);
+    try {
+      const res = await fetch("/api/competitors/discovered");
+      const json = await res.json();
+      if (!res.ok) {
+        setFindError(json.error ?? "Could not scan your answers.");
+        return;
+      }
+      setFound({ companies: json.companies ?? [], answersScanned: json.answersScanned ?? 0 });
+    } catch {
+      setFindError("Network error. Please try again.");
+    } finally {
+      setFinding(false);
+    }
+  }
+
+  async function handleTrackFound(name: string) {
+    if (addingSuggestion) return;
+    setAddingSuggestion(name);
+    setFindError(null);
+    try {
+      const res = await fetch("/api/competitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, aliases: [], domain: null }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        setFindError(json.error ?? "Could not add competitor.");
+        return;
+      }
+      setFound((prev) =>
+        prev ? { ...prev, companies: prev.companies.filter((c) => c.name !== name) } : prev,
+      );
+      router.refresh();
+    } catch {
+      setFindError("Network error. Please try again.");
+    } finally {
+      setAddingSuggestion(null);
+    }
+  }
 
   async function handleSuggest() {
     if (suggesting) return;
@@ -199,6 +254,81 @@ export function CompetitorsClient({
               {error && <p className="text-sm text-terracotta-dark">{error}</p>}
             </div>
           </form>
+        </CardBody>
+      </Card>
+
+      {/* Grounded in what the answers said, so it comes before the AI guesses. */}
+      <Card>
+        <CardBody>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 rounded bg-teal/15 p-2 text-teal-dark">
+                <Search className="h-5 w-5" />
+              </span>
+              <div>
+                <h3 className="text-lg font-semibold text-ink">
+                  Named in your answers
+                </h3>
+                <p className="mt-1 text-sm text-ink-soft">
+                  Companies the models already recommended for your prompts, that you
+                  aren&apos;t tracking. Mention detection only looks for brands on your
+                  list, so these are invisible until you add them. No API key needed.
+                </p>
+              </div>
+            </div>
+            <Button variant="secondary" onClick={handleFind} disabled={finding}>
+              {finding ? <Spinner /> : <Search className="h-4 w-4" />}
+              {found === null ? "Scan my answers" : "Scan again"}
+            </Button>
+          </div>
+
+          {findError && <p className="mt-4 text-sm text-terracotta-dark">{findError}</p>}
+
+          {found !== null && !finding && found.companies.length === 0 && !findError && (
+            <p className="mt-4 text-sm text-ink-soft">
+              {found.answersScanned === 0
+                ? "No answers stored yet. Run your monitor first, then scan."
+                : `Scanned ${found.answersScanned} answers and found no untracked companies. Your list looks complete.`}
+            </p>
+          )}
+
+          {found !== null && found.companies.length > 0 && (
+            <>
+              <p className="mt-4 text-sm text-ink-soft">
+                From {found.answersScanned} stored answer
+                {found.answersScanned === 1 ? "" : "s"}.
+                {found.companies[0].answers === 1 &&
+                  " Every name appeared just once, so the models have no settled pick for this category yet."}
+              </p>
+              <ul className="mt-4 flex flex-wrap gap-2">
+                {found.companies.map((c) => (
+                  <li
+                    key={c.name}
+                    className="flex items-center gap-2 rounded border border-ink/10 bg-paper py-1.5 pl-3 pr-1.5"
+                  >
+                    <span className="text-sm font-medium text-ink">{c.name}</span>
+                    <span className="text-xs text-ink-faint">
+                      {c.answers} answer{c.answers === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleTrackFound(c.name)}
+                      disabled={addingSuggestion !== null}
+                      className="rounded p-1 text-terracotta-dark transition hover:bg-terracotta/10 disabled:opacity-50"
+                      aria-label={`Track ${c.name}`}
+                      title={`Track ${c.name}`}
+                    >
+                      {addingSuggestion === c.name ? (
+                        <Spinner />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </CardBody>
       </Card>
 
