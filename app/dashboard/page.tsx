@@ -164,7 +164,7 @@ export default async function DashboardPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-ink">Get started</h3>
-                <p className="mt-1 text-sm text-ink-faint">
+                <p className="mt-1 text-sm text-ink-soft">
                   Four quick steps to your first visibility report.
                 </p>
               </div>
@@ -197,7 +197,7 @@ export default async function DashboardPage() {
                           <Icon className="h-3.5 w-3.5 text-ink-faint" />
                         </div>
                         <p className="mt-0.5 font-medium text-ink">{step.title}</p>
-                        <p className="mt-0.5 text-sm text-ink-faint">
+                        <p className="mt-0.5 text-sm text-ink-soft">
                           {step.description}
                         </p>
                       </div>
@@ -375,7 +375,7 @@ export default async function DashboardPage() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-ink">Visibility over time</h3>
-                <p className="mt-0.5 text-sm text-ink-faint">
+                <p className="mt-0.5 text-sm text-ink-soft">
                   Brand visibility and share of voice across recent runs.
                 </p>
               </div>
@@ -387,7 +387,7 @@ export default async function DashboardPage() {
         <Card>
           <CardBody>
             <h3 className="text-lg font-semibold text-ink">Brand sentiment</h3>
-            <p className="mt-0.5 text-sm text-ink-faint">
+            <p className="mt-0.5 text-sm text-ink-soft">
               Tone of answers that mention {project.brand_name}.
             </p>
             <div className="mt-4">
@@ -402,7 +402,7 @@ export default async function DashboardPage() {
         <Card>
           <CardBody>
             <h3 className="text-lg font-semibold text-ink">Share of voice</h3>
-            <p className="mt-0.5 text-sm text-ink-faint">
+            <p className="mt-0.5 text-sm text-ink-soft">
               You vs. tracked competitors in the latest run.
             </p>
             {/* Mention detection only looks for the brand and the competitors
@@ -458,7 +458,7 @@ export default async function DashboardPage() {
         <Card>
           <CardBody>
             <h3 className="text-lg font-semibold text-ink">By topic</h3>
-            <p className="mt-0.5 text-sm text-ink-faint">
+            <p className="mt-0.5 text-sm text-ink-soft">
               Where you show up most across monitored topics.
             </p>
             {topicStats.length === 0 ? (

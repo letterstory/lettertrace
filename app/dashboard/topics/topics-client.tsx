@@ -217,7 +217,7 @@ function TopicCard({
           <div className="min-w-0">
             <h3 className="text-lg font-semibold text-ink">{topic.name}</h3>
             {topic.description && (
-              <p className="mt-1 text-sm text-ink-faint">{topic.description}</p>
+              <p className="mt-1 text-sm text-ink-soft">{topic.description}</p>
             )}
             <p className="mt-2 text-xs text-ink-faint">
               {prompts.length} {prompts.length === 1 ? "prompt" : "prompts"}

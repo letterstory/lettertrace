@@ -44,7 +44,7 @@ export default async function SettingsPage() {
             </span>
             <div>
               <h3 className="text-lg font-semibold text-ink">Your model keys</h3>
-              <p className="mt-1 text-sm text-ink-faint">
+              <p className="mt-1 text-sm text-ink-soft">
                 Claude, ChatGPT, and Gemini are the assistants Lettertrace queries.
                 Your Google key also powers Google AI Overviews. Bring a key for each
                 one you want to monitor with. They&apos;re encrypted at rest.
@@ -63,7 +63,7 @@ export default async function SettingsPage() {
             </span>
             <div>
               <h3 className="text-lg font-semibold text-ink">Organization</h3>
-              <p className="mt-1 text-sm text-ink-faint">
+              <p className="mt-1 text-sm text-ink-soft">
                 {project
                   ? `Settings for ${project.brand_name}, the organization selected in the sidebar. Tune how we recognize this brand across AI answers.`
                   : "Fill this in to get started, it powers prompt generation and mention detection."}
@@ -86,7 +86,7 @@ export default async function SettingsPage() {
             </span>
             <div>
               <h3 className="text-lg font-semibold text-ink">API &amp; MCP access</h3>
-              <p className="mt-1 text-sm text-ink-faint">
+              <p className="mt-1 text-sm text-ink-soft">
                 Create a key to read your share-of-voice data from scripts
                 (REST, <code className="font-mono text-xs">/api/v1</code>) or
                 connect Lettertrace to Claude and other MCP clients at{" "}
@@ -107,7 +107,7 @@ export default async function SettingsPage() {
             </span>
             <div>
               <h3 className="text-lg font-semibold text-ink">Appearance</h3>
-              <p className="mt-1 text-sm text-ink-faint">
+              <p className="mt-1 text-sm text-ink-soft">
                 Lettertrace defaults to dark. Switch to light if you prefer, your
                 choice is remembered on this device.
               </p>

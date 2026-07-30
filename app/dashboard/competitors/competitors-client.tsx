@@ -159,7 +159,7 @@ export function CompetitorsClient({
       <Card>
         <CardBody>
           <h3 className="text-lg font-semibold text-ink">Add a competitor</h3>
-          <p className="mt-1 text-sm text-ink-faint">
+          <p className="mt-1 text-sm text-ink-soft">
             Aliases and domain help Lettertrace catch every way an AI answer might refer to them.
           </p>
           <form onSubmit={handleAdd} className="mt-5 grid gap-4 sm:grid-cols-3">
@@ -211,7 +211,7 @@ export function CompetitorsClient({
               </span>
               <div>
                 <h3 className="text-lg font-semibold text-ink">Suggested competitors</h3>
-                <p className="mt-1 text-sm text-ink-faint">
+                <p className="mt-1 text-sm text-ink-soft">
                   Let AI propose direct competitors based on your brand and topics. You decide
                   which ones to track.
                 </p>

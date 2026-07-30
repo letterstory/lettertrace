@@ -33,9 +33,16 @@ import { useTheme } from "@/components/theme";
 const BRAND = "#E07850"; // terracotta (you) — pops on both themes
 const TEAL = "#129C82"; // aqua (share / competitors)
 
+// `label` is the colour of every bit of text Recharts draws: axis ticks, the
+// value printed at the end of a bar, legends. It used to be --c-ink-faint,
+// which measured 4.63:1 on the card surface in dark mode — the dimmest token in
+// the system, and the reason the chart read as greyed-out next to its own
+// heading. These are the --c-ink-soft values, ~9:1, i.e. secondary text rather
+// than disabled text.
 const PALETTE = {
   light: {
     ink: "#1A1917",
+    label: "#45423C",
     faint: "#7C786F",
     grid: "rgba(26,25,23,0.08)",
     surface: "#FFFFFF",
@@ -43,6 +50,7 @@ const PALETTE = {
   },
   dark: {
     ink: "#F4F3EF",
+    label: "#BEBAB2",
     faint: "#8A867D",
     grid: "rgba(255,255,255,0.10)",
     surface: "#1F1D1A",
@@ -55,7 +63,7 @@ function useChartTheme() {
   const p = PALETTE[theme];
   return {
     ...p,
-    axisTick: { fill: p.faint, fontSize: 12 },
+    axisTick: { fill: p.label, fontSize: 12 },
     tooltipStyle: {
       borderRadius: 4,
       border: `1px solid ${p.grid}`,
@@ -64,7 +72,7 @@ function useChartTheme() {
       fontSize: 12,
       color: p.ink,
     } as const,
-    legendStyle: { fontSize: 12, color: p.faint },
+    legendStyle: { fontSize: 12, color: p.label },
   };
 }
 

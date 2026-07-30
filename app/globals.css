@@ -191,9 +191,12 @@
   }
 }
 
-/* Recharts: keep tooltips/axes on-brand in both themes. */
+/* Recharts: keep tooltips/axes on-brand in both themes.
+   ink-soft, not ink-faint: a CSS rule beats the `fill` presentation attribute
+   Recharts sets, so this is what actually decides axis-label colour, and at
+   --c-ink-faint it measured 4.63:1 on a card in dark mode. */
 .recharts-cartesian-axis-tick-value {
-  fill: rgb(var(--c-ink-faint));
+  fill: rgb(var(--c-ink-soft));
   font-size: 12px;
 }
 .recharts-default-tooltip {
