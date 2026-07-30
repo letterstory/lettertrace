@@ -851,8 +851,8 @@ export async function getRunReport(
     { data: sourceRows },
     { data: responseTopicRows },
     { data: topicRows },
-    { count: competitorCount },
     { data: promptTargetRows },
+    { count: competitorCount },
   ] = await Promise.all([
     supabase
       .from("responses")

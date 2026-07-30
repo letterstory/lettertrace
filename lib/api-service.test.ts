@@ -274,6 +274,46 @@ describe("getRunReport", () => {
     expect(report!.entities[0].type).toBe("brand"); // brand sorts first
     expect(report!.entities[1]).toMatchObject({ name: "Rival", shareOfVoice: 0.75 });
   });
+
+  // Regression: the prompts and competitors queries once had their results
+  // swapped in the destructure — pages[] was always empty and the verdict
+  // read no-competitors no matter how many were registered.
+  it("routes prompt targets into pages[] and the competitor count into the verdict", async () => {
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({}) }),
+      projects: () => ({ data: PROJECT }),
+      responses: () => ({
+        count: 2,
+        data: [
+          { id: "resp-1", topic_id: null, prompt_id: "prompt-1" },
+          { id: "resp-2", topic_id: null, prompt_id: "prompt-1" },
+        ],
+      }),
+      mentions: () => ({ data: [makeMention({ response_id: "resp-1" })] }),
+      sources: () => ({
+        data: [
+          { response_id: "resp-1", url: "https://blog.example.com/posts/guide?utm_source=openai", is_owned: true },
+        ],
+      }),
+      prompts: () => ({
+        data: [{ id: "prompt-1", target_url: "https://blog.example.com/posts/guide" }],
+      }),
+      competitors: () => ({ count: 3 }),
+    });
+
+    const report = await getRunReport(db as never, "user-1", "run-1");
+    expect(report!.pages).toEqual([
+      expect.objectContaining({
+        url: "https://blog.example.com/posts/guide",
+        prompts: 1,
+        totalResponses: 2,
+        responsesCiting: 1,
+        citedRate: 0.5,
+      }),
+    ]);
+    // 3 competitors registered + informative answers → never "no-competitors".
+    expect(report!.verdict).not.toBe("no-competitors");
+  });
 });
 
 describe("triggerRunForProject", () => {
