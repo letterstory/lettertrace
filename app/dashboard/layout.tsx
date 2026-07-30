@@ -36,10 +36,6 @@ export default async function DashboardLayout({
   // provider, so any own key at all means they're never on the trial.
   const providers = await getConfiguredProviders(supabase, user.id);
 
-  // The first organization is free; another one needs the user's own key.
-  // Existing orgs are untouched — this only gates creating more.
-  const canAddOrg = projects.length === 0 || providers.length > 0;
-
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled() && providers.length === 0) {
     const used = await getTrialRunsUsed(supabase, user.id);
@@ -69,7 +65,6 @@ export default async function DashboardLayout({
                 brandName: p.brand_name,
               }))}
               activeId={project.id}
-              canAddOrg={canAddOrg}
             />
           ) : (
             <div className="rounded border border-ink/10 bg-paper-shade/50 px-4 py-3">

@@ -26,7 +26,7 @@ vi.mock("@/lib/trial", () => ({
 }));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 
-const { getProjects, getConfiguredProviders } = await import("@/lib/data");
+const { getConfiguredProviders } = await import("@/lib/data");
 const { POST } = await import("@/app/api/onboarding/complete/route");
 
 function req(body: unknown) {
@@ -95,36 +95,33 @@ describe("POST /api/onboarding/complete — topic validation", () => {
   });
 });
 
-describe("POST /api/onboarding/complete — second-organization gate", () => {
+describe("POST /api/onboarding/complete, creating more organizations", () => {
   const good = { ...BASE, topics: [{ name: "CDN", prompts: ["best cdn?"] }] };
 
-  it("refuses a second org on the trial, before spending a free run", async () => {
-    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+  // A second org used to be refused without the user's own key. The free-run
+  // allowance is counted per ACCOUNT (consume_trial_run), not per org, so extra
+  // orgs can't spend more of it — the gate only stopped people setting up the
+  // brands they wanted to monitor before deciding to bring a key.
+  // Reaching the database mock, which throws by design, proves it got through.
+  it("lets a keyless account create a second org", async () => {
     vi.mocked(getConfiguredProviders).mockResolvedValue([]);
-    const res = await POST(req(good));
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.needsKey).toBe(true);
-    expect(body.error).toMatch(/own API key/);
+    await expect(POST(req(good))).rejects.toThrow(/before touching the database/);
   });
 
-  it("allows a second org once the user has their own key", async () => {
-    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+  it("lets an account with a key create another org", async () => {
     vi.mocked(getConfiguredProviders).mockResolvedValue(["anthropic"]);
-    // Reaching the database mock proves the gate let it through.
     await expect(POST(req(good))).rejects.toThrow(/before touching the database/);
   });
 
-  it("always allows the first org, key or not", async () => {
-    vi.mocked(getProjects).mockResolvedValue([]);
+  it("still allows the very first org, key or not", async () => {
     vi.mocked(getConfiguredProviders).mockResolvedValue([]);
     await expect(POST(req(good))).rejects.toThrow(/before touching the database/);
   });
 
-  it("gates before validating topics, so no free run is risked either way", async () => {
-    vi.mocked(getProjects).mockResolvedValue([{ id: "p1" } as never]);
+  // Topic validation is the only thing that should reject the request now.
+  it("still validates topics for a keyless account", async () => {
     vi.mocked(getConfiguredProviders).mockResolvedValue([]);
     const res = await POST(req({ ...BASE, topics: [{ name: "", prompts: [] }] }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
   });
 });

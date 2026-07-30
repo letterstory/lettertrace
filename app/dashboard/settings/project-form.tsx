@@ -169,7 +169,7 @@ export default function ProjectForm({
           />
           <p className="mt-1.5 text-xs text-ink-faint">
             Comma-separated, main domain first. Sources cited from any of these
-            count as yours — include phantom sites for this brand.
+            count as yours. Include phantom sites for this brand.
           </p>
         </div>
         <div>

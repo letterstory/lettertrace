@@ -5,6 +5,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -32,9 +33,16 @@ import { useTheme } from "@/components/theme";
 const BRAND = "#E07850"; // terracotta (you) — pops on both themes
 const TEAL = "#129C82"; // aqua (share / competitors)
 
+// `label` is the colour of every bit of text Recharts draws: axis ticks, the
+// value printed at the end of a bar, legends. It used to be --c-ink-faint,
+// which measured 4.63:1 on the card surface in dark mode — the dimmest token in
+// the system, and the reason the chart read as greyed-out next to its own
+// heading. These are the --c-ink-soft values, ~9:1, i.e. secondary text rather
+// than disabled text.
 const PALETTE = {
   light: {
     ink: "#1A1917",
+    label: "#45423C",
     faint: "#7C786F",
     grid: "rgba(26,25,23,0.08)",
     surface: "#FFFFFF",
@@ -42,6 +50,7 @@ const PALETTE = {
   },
   dark: {
     ink: "#F4F3EF",
+    label: "#BEBAB2",
     faint: "#8A867D",
     grid: "rgba(255,255,255,0.10)",
     surface: "#1F1D1A",
@@ -54,7 +63,7 @@ function useChartTheme() {
   const p = PALETTE[theme];
   return {
     ...p,
-    axisTick: { fill: p.faint, fontSize: 12 },
+    axisTick: { fill: p.label, fontSize: 12 },
     tooltipStyle: {
       borderRadius: 4,
       border: `1px solid ${p.grid}`,
@@ -63,7 +72,7 @@ function useChartTheme() {
       fontSize: 12,
       color: p.ink,
     } as const,
-    legendStyle: { fontSize: 12, color: p.faint },
+    legendStyle: { fontSize: 12, color: p.label },
   };
 }
 
@@ -144,19 +153,34 @@ export function ShareBars({
   if (!data || data.length === 0) {
     return <Placeholder label="No share of voice yet" height={180} />;
   }
+  // Competitor names are real company names ("AWS Elastic Beanstalk", "Google
+  // Cloud Run"), and a fixed 110px axis truncated them to initials. Size the
+  // label gutter to the longest name actually present, capped so one very long
+  // name can't squeeze the bars out of existence.
+  const longest = data.reduce((n, d) => Math.max(n, d.name.length), 0);
+  const axisWidth = Math.min(200, Math.max(96, longest * 7.2));
+  // Share of voice splits 100% across every tracked brand, so with a handful of
+  // competitors nobody is near 100 and a fixed 0-100 axis spent three quarters
+  // of the width on empty space — the bars ended up too short to compare, which
+  // is the one thing this chart is for. Scale to the data, rounded up to a
+  // quarter so the gridlines stay meaningful, and let the printed values keep a
+  // short axis from reading as "almost everything".
+  const maxValue = data.reduce((n, d) => Math.max(n, d.value || 0), 0);
+  const ceiling = Math.min(100, Math.max(25, Math.ceil(maxValue / 25) * 25));
   const height = Math.max(160, data.length * 44 + 24);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart
         data={data}
         layout="vertical"
-        margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
+        // Room on the right for the value label that used to require a hover.
+        margin={{ top: 4, right: 44, bottom: 4, left: 8 }}
         barCategoryGap={12}
       >
         <CartesianGrid stroke={t.grid} horizontal={false} />
         <XAxis
           type="number"
-          domain={[0, 100]}
+          domain={[0, ceiling]}
           tick={t.axisTick}
           tickLine={false}
           axisLine={{ stroke: t.grid }}
@@ -168,7 +192,7 @@ export function ShareBars({
           tick={t.axisTick}
           tickLine={false}
           axisLine={false}
-          width={110}
+          width={axisWidth}
         />
         <Tooltip
           cursor={{ fill: t.cursor }}
@@ -179,6 +203,15 @@ export function ShareBars({
           {data.map((entry, i) => (
             <Cell key={i} fill={entry.isBrand ? BRAND : TEAL} />
           ))}
+          {/* The number is the point of the chart; reading it shouldn't need a
+              mouse, and doesn't work at all on touch. */}
+          <LabelList
+            dataKey="value"
+            position="right"
+            formatter={(v: number) => `${Math.round(v)}%`}
+            fill={t.axisTick.fill}
+            fontSize={12}
+          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>

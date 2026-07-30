@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getConfiguredProviders, getProjects, setActiveProject } from "@/lib/data";
+import { getConfiguredProviders, setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import {
@@ -59,24 +59,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Brand name is required." }, { status: 400 });
   }
 
-  // The first organization is free; another one needs the user's own key.
-  // Enforced here as well as in the UI: without it, a second org could be
-  // created by posting straight to this route, and its first monitor would
-  // quietly spend one of the account's free runs.
-  const [existingProjects, providers] = await Promise.all([
-    getProjects(supabase, user.id),
-    getConfiguredProviders(supabase, user.id),
-  ]);
-  if (existingProjects.length > 0 && providers.length === 0) {
-    return NextResponse.json(
-      {
-        error:
-          "Add your own API key before monitoring another brand. Free credits cover your first organization.",
-        needsKey: true,
-      },
-      { status: 403 },
-    );
-  }
+  // Creating an organization is free and unlimited: it is configuration, not
+  // consumption. A second org used to be refused without the user's own key,
+  // on the reasoning that its first monitor would spend a free run — but the
+  // free-run allowance is counted per ACCOUNT by consume_trial_run, not per
+  // org, so extra orgs can't spend more than the allowance either way. All the
+  // gate actually did was block someone from setting up the brands they wanted
+  // to monitor before deciding to bring a key.
+  const providers = await getConfiguredProviders(supabase, user.id);
   const name =
     typeof body.name === "string" && body.name.trim() ? body.name.trim() : brand_name;
   // First entry = primary domain; the rest are phantom sites for the brand.

@@ -17,7 +17,7 @@ export default function PrivacyPage() {
       intro="Lettertrace is operated by The Letter Company. This policy explains what we collect when you use the hosted service at lettertrace.com, why we collect it, and who else sees it."
     >
       <Section n={1} title="Information we collect">
-        <p><strong>Account information.</strong> Your email address, and — if you sign in with Google or GitHub — the name and profile picture that provider returns. We never receive your Google or GitHub password.</p>
+        <p><strong>Account information.</strong> Your email address, and, if you sign in with Google or GitHub, the name and profile picture that provider returns. We never receive your Google or GitHub password.</p>
         <p><strong>Monitoring configuration.</strong> The brands, domains, aliases, competitors, topics, and prompts you set up, plus your model and schedule preferences.</p>
         <p><strong>Run results.</strong> For each monitoring run we store the full text of the answers the AI models returned, the web sources they cited, and the brand and competitor mentions detected in them, along with sentiment and position.</p>
         <p><strong>Provider API keys.</strong> If you bring your own Anthropic or OpenAI key, we store it encrypted (see §5) so scheduled runs can use it. We also store a short hint such as <code>sk-…4a9c</code> so you can tell your keys apart.</p>
@@ -31,7 +31,7 @@ export default function PrivacyPage() {
         <p>When a monitoring run executes, we send your prompts to Anthropic and/or OpenAI. If web search is enabled for a project, those providers also run search queries derived from your prompts. The answers come back to us and are stored against your account.</p>
         <p><strong>Under bring-your-own-key, those requests are made with your API key, under your own account with that provider.</strong> How they handle, retain, and train on that traffic is governed by your agreement with them, not by this policy. Review Anthropic&apos;s and OpenAI&apos;s privacy terms directly.</p>
         <p>If you instead use trial runs on our shared keys, those requests are made under The Letter Company&apos;s provider accounts and are subject to our agreements with those providers.</p>
-        <p>Prompts are questions about a market or category. Do not put personal data, customer information, or confidential material into a prompt — it will be transmitted to a third-party model provider.</p>
+        <p>Prompts are questions about a market or category. Do not put personal data, customer information, or confidential material into a prompt. It will be transmitted to a third-party model provider.</p>
       </Section>
 
       <Section n={3} title="Website content we fetch">
@@ -51,7 +51,7 @@ export default function PrivacyPage() {
 
       <Section n={5} title="Security">
         <p><strong>Provider API keys are encrypted at rest using AES-256-GCM</strong> with a unique initialization vector per key. They are decrypted only in memory, at the moment a run executes.</p>
-        <p><strong>Lettertrace API keys are stored as SHA-256 hashes only</strong> — never in plaintext.</p>
+        <p><strong>Lettertrace API keys are stored as SHA-256 hashes only</strong>, never in plaintext.</p>
         <p><strong>Your data is isolated per account by Postgres Row Level Security</strong>, enforced by the database rather than only by application code. Elevated database access is limited to the scheduled-run job and the API-key-authenticated surface, where every query is scoped to the key&apos;s owner.</p>
         <p>Traffic to and from lettertrace.com is encrypted in transit over TLS. No system is perfectly secure, and we cannot guarantee absolute security.</p>
       </Section>
@@ -59,16 +59,16 @@ export default function PrivacyPage() {
       <Section n={6} title="Service providers">
         <p>We rely on the following processors to run Lettertrace:</p>
         <ul>
-          <li><strong>Supabase</strong> — database, authentication, and storage of everything described in §1.</li>
-          <li><strong>Vercel</strong> — application hosting and request logs.</li>
-          <li><strong>Anthropic</strong> and <strong>OpenAI</strong> — the AI models queried during runs, as described in §2.</li>
-          <li><strong>Google</strong> and <strong>GitHub</strong> — optional sign-in. They tell us your email, name, and profile picture; we tell them nothing about your usage.</li>
+          <li><strong>Supabase</strong>: database, authentication, and storage of everything described in §1.</li>
+          <li><strong>Vercel</strong>: application hosting and request logs.</li>
+          <li><strong>Anthropic</strong> and <strong>OpenAI</strong>: the AI models queried during runs, as described in §2.</li>
+          <li><strong>Google</strong> and <strong>GitHub</strong>: optional sign-in. They tell us your email, name, and profile picture; we tell them nothing about your usage.</li>
         </ul>
         <p>We may also disclose information where legally required, or to protect the rights and safety of our users or the service.</p>
       </Section>
 
       <Section n={7} title="Data retention">
-        <p>Your configuration and run history are retained for as long as your account is active, because the product&apos;s value is the trend over time — deleting old runs would erase the record of how your visibility changed.</p>
+        <p>Your configuration and run history are retained for as long as your account is active, because the product&apos;s value is the trend over time. Deleting old runs would erase the record of how your visibility changed.</p>
         <p>When you delete a project, its topics, prompts, competitors, runs, responses, sources, and mentions are deleted with it. When your account is deleted, everything associated with it is deleted.</p>
         <p>Deleting a provider API key removes the encrypted value immediately. Revoking a Lettertrace API key takes effect immediately.</p>
       </Section>
@@ -81,11 +81,11 @@ export default function PrivacyPage() {
           <li>Revoke Lettertrace API keys.</li>
           <li>Request a copy of your data, or deletion of your account, by emailing us.</li>
         </ul>
-        <p>Depending on where you live, you may have additional rights under the GDPR, the UK GDPR, or the CCPA — including access, correction, deletion, portability, and objecting to certain processing. We honour these requests regardless of where you are. We do not sell personal information as defined by the CCPA.</p>
+        <p>Depending on where you live, you may have additional rights under the GDPR, the UK GDPR, or the CCPA, including access, correction, deletion, portability, and objecting to certain processing. We honour these requests regardless of where you are. We do not sell personal information as defined by the CCPA.</p>
       </Section>
 
       <Section n={9} title="Cookies">
-        <p>We use cookies only for authentication — keeping you signed in and refreshing your session. We do not use advertising or cross-site tracking cookies. Clearing them signs you out.</p>
+        <p>We use cookies only for authentication, keeping you signed in and refreshing your session. We do not use advertising or cross-site tracking cookies. Clearing them signs you out.</p>
       </Section>
 
       <Section n={10} title="Children">

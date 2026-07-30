@@ -21,15 +21,9 @@ export interface OrgOption {
 export function OrgSwitcher({
   orgs,
   activeId,
-  canAddOrg,
 }: {
   orgs: OrgOption[];
   activeId: string;
-  /** False while the account is on the trial with one org already set up.
-   *  A second org can't produce a usable result on free credits — no
-   *  competitors, no calibrated prompts — and each one silently spends a
-   *  free run on its first monitor. */
-  canAddOrg: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -148,33 +142,14 @@ export function OrgSwitcher({
                 );
               })}
             </ul>
-            {canAddOrg ? (
-              <Link
-                href="/dashboard/new"
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-2 border-t border-ink/10 px-4 py-2.5 text-sm font-medium text-terracotta-dark transition hover:bg-ink/5"
-              >
-                <Plus className="h-4 w-4" aria-hidden />
-                New organization
-              </Link>
-            ) : (
-              <div className="border-t border-ink/10 px-4 py-3">
-                <p className="flex items-center gap-2 text-sm font-medium text-ink-faint">
-                  <Plus className="h-4 w-4 shrink-0" aria-hidden />
-                  New organization
-                </p>
-                <p className="mt-1 text-xs text-ink-faint">
-                  Add your own API key to monitor another brand.
-                </p>
-                <Link
-                  href="/dashboard/settings"
-                  onClick={() => setOpen(false)}
-                  className="mt-1 inline-block text-xs font-medium text-terracotta-dark transition hover:text-terracotta"
-                >
-                  Add a key →
-                </Link>
-              </div>
-            )}
+            <Link
+              href="/dashboard/new"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 border-t border-ink/10 px-4 py-2.5 text-sm font-medium text-terracotta-dark transition hover:bg-ink/5"
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+              New organization
+            </Link>
           </div>
         </>
       )}

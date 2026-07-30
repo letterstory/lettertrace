@@ -248,7 +248,7 @@ export function engineKeyMessage(key: ResolvedKey): string {
     const have = (key.available ?? []).map((p) => PROVIDERS[p].label);
     const alternatives =
       have.length === 1 ? have[0] : `${have.slice(0, -1).join(", ")} or ${have[have.length - 1]}`;
-    return `Your answer engine is set to ${engine}, but no ${providerLabel} key is saved. Add one in Settings, or switch your answer engine to ${alternatives} — you already have a key for that.`;
+    return `Your answer engine is set to ${engine}, but no ${providerLabel} key is saved. Add one in Settings, or switch your answer engine to ${alternatives}, which you already have a key for.`;
   }
   return `Your answer engine is set to ${engine}. Add ${article(providerLabel)} ${providerLabel} key in Settings to run.`;
 }
@@ -273,7 +273,7 @@ export function nextRunMessage(key: ResolvedKey): string {
   const providerLabel = PROVIDERS[key.requested.provider].label;
 
   if (key.source === "trial" && key.model !== key.requested.model) {
-    return `Your next run asks your active prompts to ${willRun}. Free runs use a cheaper model on our keys — add your own ${providerLabel} key to run ${chosen}.`;
+    return `Your next run asks your active prompts to ${willRun}. Free runs use a cheaper model on our keys. Add your own ${providerLabel} key to run ${chosen}.`;
   }
   return `Your next run asks your active prompts to ${willRun} and records where your brand shows up.`;
 }

@@ -24,7 +24,11 @@ export function DashboardNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-row gap-1 md:flex-col">
+    // Six labelled items in one un-wrapping row overflowed the viewport on a
+    // phone, pushing every dashboard page ~267px wide. Wrapping keeps the
+    // labels and needs no scrolling; the column layout at md+ must not wrap, or
+    // the fixed-height sidebar would spill items into a second column.
+    <nav className="flex flex-row flex-wrap gap-1 md:flex-col md:flex-nowrap">
       {NAV_ITEMS.map(({ href, label, icon }) => {
         const active =
           href === "/dashboard"

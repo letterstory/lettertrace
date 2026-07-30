@@ -39,7 +39,7 @@ export default function TermsPage() {
       </Section>
 
       <Section n={5} title="Your content">
-        <p>You keep ownership of everything you put into Lettertrace — your brand configuration, topics, prompts, and competitor lists — and of the reports generated from your runs. You grant us a limited licence to store, process, and transmit that content as needed to operate the service for you.</p>
+        <p>You keep ownership of everything you put into Lettertrace: your brand configuration, topics, prompts, and competitor lists, and of the reports generated from your runs. You grant us a limited licence to store, process, and transmit that content as needed to operate the service for you.</p>
         <p>You are responsible for having the right to monitor the brands and domains you configure.</p>
       </Section>
 
@@ -68,11 +68,11 @@ export default function TermsPage() {
       </Section>
 
       <Section n={9} title="Third-party services">
-        <p>Lettertrace depends on Anthropic, OpenAI, Supabase, Vercel, and — if you use social sign-in — Google and GitHub. We do not control those services. Outages, changes, price increases, or policy changes on their side may affect or interrupt Lettertrace, and we are not liable for them.</p>
+        <p>Lettertrace depends on Anthropic, OpenAI, Supabase, Vercel, and, if you use social sign-in, Google and GitHub. We do not control those services. Outages, changes, price increases, or policy changes on their side may affect or interrupt Lettertrace, and we are not liable for them.</p>
       </Section>
 
       <Section n={10} title="Scope of these terms">
-        <p>These terms govern the hosted service we operate at lettertrace.com. They do not grant any licence to the Lettertrace software itself, and they do not cover any separately operated deployment of it — we provide no warranty or support for those and are not responsible for how they behave.</p>
+        <p>These terms govern the hosted service we operate at lettertrace.com. They do not grant any licence to the Lettertrace software itself, and they do not cover any separately operated deployment of it. We provide no warranty or support for those and are not responsible for how they behave.</p>
       </Section>
 
       <Section n={11} title="Availability and changes">
