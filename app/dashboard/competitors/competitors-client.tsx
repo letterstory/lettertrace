@@ -247,8 +247,12 @@ export function CompetitorsClient({
               />
             </div>
             <div className="flex items-center gap-3 sm:col-span-3">
-              <Button type="submit" disabled={submitting || !name.trim()}>
-                {submitting && <Spinner />}
+              <Button
+                type="submit"
+                loading={submitting}
+                loadingText="Adding…"
+                disabled={!name.trim()}
+              >
                 Add competitor
               </Button>
               {error && <p className="text-sm text-terracotta-dark">{error}</p>}

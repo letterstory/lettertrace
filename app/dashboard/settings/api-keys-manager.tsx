@@ -138,9 +138,8 @@ export default function ApiKeysManager({ keys }: { keys: ApiKeyPublic[] }) {
           aria-label="API key name"
           className="max-w-xs"
         />
-        <Button type="submit" size="sm" disabled={creating}>
-          {creating ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-          Create key
+        <Button type="submit" size="sm" loading={creating} loadingText="Creating…">
+          <Plus className="h-3.5 w-3.5" /> Create key
         </Button>
       </form>
 
