@@ -71,6 +71,15 @@ export function detectMention(text: string, terms: string[]): MentionHit {
 // Common second-level public-suffix labels (so "acme.co.uk" -> "acme", not "co").
 const PUBLIC_SLD_LABELS = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
 
+// Domain labels that are ordinary English words match everywhere — "you"
+// (you.com) as a word-boundary term reads a ~100% mention rate off every
+// answer's prose. Such labels never become terms; the brand still matches via
+// its name and aliases ("You.com").
+const COMMON_WORD_LABELS = new Set([
+  "you", "the", "and", "for", "are", "can", "get", "one", "now", "how",
+  "who", "new", "all", "our", "out", "use", "app", "web", "here", "there", "about",
+]);
+
 // Convenience: the full term set for a brand / competitor.
 export function brandTerms(brandName: string, aliases: string[], domain?: string | null): string[] {
   const terms = [brandName, ...aliases];
@@ -93,7 +102,7 @@ export function brandTerms(brandName: string, aliases: string[], domain?: string
     } else if (labels.length === 1) {
       sld = labels[0];
     }
-    if (sld && sld.length >= 2) terms.push(sld);
+    if (sld && sld.length >= 3 && !COMMON_WORD_LABELS.has(sld)) terms.push(sld);
   }
   return terms;
 }

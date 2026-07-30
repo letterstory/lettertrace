@@ -37,3 +37,12 @@ describe("detectMention vs link surfaces", () => {
     expect(hit.mentioned).toBe(true);
   });
 });
+
+describe("common-word domain labels never become terms", () => {
+  it("you.com does not make 'you' a brand term", () => {
+    const terms = brandTerms("You.com", [], "you.com");
+    expect(terms).not.toContain("you");
+    expect(detectMention("Here is what you should do.", terms).mentioned).toBe(false);
+    expect(detectMention("You.com is a solid AI search pick.", terms).mentioned).toBe(true);
+  });
+});
