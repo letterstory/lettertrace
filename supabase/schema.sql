@@ -242,6 +242,13 @@ create table if not exists public.prompts (
   created_at timestamptz not null default now()
 );
 
+-- The page this prompt was written to surface, when there is one. Content
+-- teams map questions to pages; this records the mapping so the run report
+-- can answer "when the question my page was built for gets asked, is MY page
+-- the one the answer cites?" — per-URL cited-hit rates, not just brand-level.
+alter table public.prompts
+  add column if not exists target_url text;
+
 -- ---------- runs -----------------------------------------------------
 create table if not exists public.runs (
   id uuid primary key default gen_random_uuid(),

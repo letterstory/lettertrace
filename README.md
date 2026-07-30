@@ -187,6 +187,17 @@ curl -X POST https://your-app.com/api/v1/projects/<project-id>/prompts \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"prompts": [{"text": "best crm for startups", "topic": "CRM"}]}'
 
+# Map a prompt to the page it was written to surface (optional target_url on
+# create or PATCH; null clears it). The run report then carries per-URL
+# cited-hit rates under `pages` — "when the question my page was built for
+# gets asked, is MY page the one the answer cites?"
+curl -X POST https://your-app.com/api/v1/projects/<project-id>/prompts \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"prompts": [{"text": "best crm for startups", "topic": "CRM", "target_url": "https://acme.io/blog/best-crm"}]}'
+curl -X PATCH https://your-app.com/api/v1/prompts/<prompt-id> \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"target_url": "https://acme.io/blog/best-crm"}'
+
 # A project's tracked competitors: list / bulk-add (already-tracked names are
 # skipped, not errors) / stop tracking one. Candidates your stored answers
 # named but nobody tracks come from /competitors/discovered — confirm the real

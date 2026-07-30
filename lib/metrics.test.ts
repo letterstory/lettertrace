@@ -7,6 +7,8 @@ import {
   computeMeasurementQuality,
   measurementVerdict,
   LOW_INFORMATIVE_RATE,
+  computePageStats,
+  pageKey,
 } from "@/lib/metrics";
 import type { Mention } from "@/lib/types";
 
@@ -269,5 +271,56 @@ describe("measurementVerdict", () => {
     expect(
       measurementVerdict({ ...base, informativeRate: LOW_INFORMATIVE_RATE - 0.01, brandMentioned: false }),
     ).toBe("thin-sample");
+  });
+});
+
+describe("pageKey", () => {
+  it("reduces a URL to host + path, dropping noise that varies per citation", () => {
+    expect(pageKey("https://www.acme.io/Blog/Best-CRM/?utm_source=openai#top")).toBe(
+      "acme.io/blog/best-crm",
+    );
+    expect(pageKey("acme.io/blog/best-crm")).toBe("acme.io/blog/best-crm");
+    expect(pageKey("not a url")).toBeNull();
+  });
+});
+
+describe("computePageStats", () => {
+  const prompts = [
+    { id: "p1", target_url: "https://acme.io/blog/best-crm" },
+    { id: "p2", target_url: "acme.io/blog/best-crm/" }, // same page, different spelling
+    { id: "p3", target_url: null }, // unmapped prompts don't produce a row
+  ];
+  const responses = [
+    { id: "r1", prompt_id: "p1" },
+    { id: "r2", prompt_id: "p1" },
+    { id: "r3", prompt_id: "p2" },
+    { id: "r4", prompt_id: "p3" },
+    { id: "r5", prompt_id: null },
+  ];
+  const sources = [
+    // r1 cited the page (with tracking params, as search engines append them).
+    { response_id: "r1", url: "https://acme.io/blog/best-crm?utm_source=openai" },
+    // r2 cited the site but a DIFFERENT page — that's the whole point of
+    // page-level tracking: the site being cited isn't the page being cited.
+    { response_id: "r2", url: "https://acme.io/blog/other-post" },
+    { response_id: "r4", url: "https://acme.io/blog/best-crm" },
+  ];
+
+  it("counts only answers from the page's own prompts, matching by host+path", () => {
+    const stats = computePageStats(prompts, responses, sources);
+    expect(stats).toHaveLength(1);
+    const stat = stats[0];
+    // Two spellings of the same page collapse into one row (first wins).
+    expect(stat.url).toBe("https://acme.io/blog/best-crm");
+    expect(stat.prompts).toBe(2);
+    expect(stat.totalResponses).toBe(3); // r1, r2, r3 — r4's prompt is unmapped
+    expect(stat.responsesCiting).toBe(1); // only r1; r2 cited another page
+    expect(stat.citedRate).toBeCloseTo(1 / 3);
+    expect(stat.citedRateInterval.low).toBeGreaterThanOrEqual(0);
+    expect(stat.citedRateInterval.high).toBeLessThanOrEqual(1);
+  });
+
+  it("returns [] when no prompt is mapped to a page", () => {
+    expect(computePageStats([{ id: "p1", target_url: null }], responses, sources)).toEqual([]);
   });
 });
