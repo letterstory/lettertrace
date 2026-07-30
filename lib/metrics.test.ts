@@ -220,6 +220,24 @@ describe("computeMeasurementQuality", () => {
   });
 });
 
+describe("measurementVerdict interval-aware thin-sample gate", () => {
+  const base = { totalResponses: 30, brandMentioned: false, competitorsTracked: 3 };
+
+  it("a borderline rate on a real sample is not thin — the interval clears the floor", () => {
+    // 14/30 informative: point rate 0.47 (< 0.5) but Wilson upper ~0.64.
+    expect(measurementVerdict({ ...base, informativeRate: 0.47, informativeBasis: 30 })).toBe("real-gap");
+  });
+
+  it("a confidently uninformative sample still reads thin-sample", () => {
+    // 6/30 informative: Wilson upper ~0.36 — the zero measures nothing.
+    expect(measurementVerdict({ ...base, informativeRate: 0.2, informativeBasis: 30 })).toBe("thin-sample");
+  });
+
+  it("without a basis the point-rate gate applies (old reports)", () => {
+    expect(measurementVerdict({ ...base, informativeRate: 0.47 })).toBe("thin-sample");
+  });
+});
+
 describe("measurementVerdict", () => {
   const base = {
     totalResponses: 20,

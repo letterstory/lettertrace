@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActorType, Competitor, LogChannel, Project, Prompt, Provider } from "@/lib/types";
 import { runQuery, analyzeResponse, humanError, type AnalyzeEntity } from "@/lib/llm";
 import { detectMention, brandTerms } from "@/lib/mentions";
+import { pageKey } from "@/lib/metrics";
 import { modelLabel } from "@/lib/models";
 import { logActivity } from "@/lib/activity";
 
@@ -31,6 +32,20 @@ export function hostOf(domain: string | null): string {
 }
 
 // A cited source is "owned" when its domain is, or is a subdomain of, the host.
+/** Links written inline in the answer text (markdown targets + bare URLs),
+ *  deduped by page identity, trailing punctuation trimmed. These are real
+ *  citations some engines never repeat in their structured source list. */
+export function extractInlineLinks(text: string): { url: string; domain: string }[] {
+  const found = new Map<string, { url: string; domain: string }>();
+  for (const match of text.matchAll(/\bhttps?:\/\/[^\s<>"')\]]+/gi)) {
+    const url = match[0].replace(/[.,;:!?]+$/, "");
+    const key = pageKey(url);
+    if (!key || found.has(key)) continue;
+    found.set(key, { url, domain: hostOf(url) });
+  }
+  return [...found.values()];
+}
+
 export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean {
   if (!ownedHost || !sourceDomain) return false;
   return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
@@ -230,18 +245,37 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
       const responseId = respRow.id as string;
       succeeded++;
 
-      // Store the web sources the model cited (native web search).
-      if (sources.length > 0) {
-        const sourceRows = sources.map((s) => ({
-          response_id: responseId,
-          run_id: runId,
-          project_id: project.id,
-          url: s.url,
-          domain: s.domain,
-          title: s.title,
-          snippet: s.snippet,
-          is_owned: ownedHosts.some((h) => isOwnedDomain(s.domain, h)),
-        }));
+      // Store the web sources the model cited: the provider's structured
+      // citations PLUS links written inline in the answer text. Some engines
+      // (ChatGPT especially) cite as markdown links without repeating them in
+      // the structured list — skipping those under-counts citations, and the
+      // pages it misses are often the very ones being tracked. Inline links
+      // are deduped against the structured set by page identity (host+path).
+      const structuredKeys = new Set(sources.map((s) => pageKey(s.url)).filter(Boolean));
+      const inline = extractInlineLinks(answer).filter((l) => !structuredKeys.has(pageKey(l.url)));
+      if (sources.length > 0 || inline.length > 0) {
+        const sourceRows = [
+          ...sources.map((s) => ({
+            response_id: responseId,
+            run_id: runId,
+            project_id: project.id,
+            url: s.url,
+            domain: s.domain,
+            title: s.title,
+            snippet: s.snippet,
+            is_owned: ownedHosts.some((h) => isOwnedDomain(s.domain, h)),
+          })),
+          ...inline.map((l) => ({
+            response_id: responseId,
+            run_id: runId,
+            project_id: project.id,
+            url: l.url,
+            domain: l.domain,
+            title: null,
+            snippet: null,
+            is_owned: ownedHosts.some((h) => isOwnedDomain(l.domain, h)),
+          })),
+        ];
         await supabase.from("sources").insert(sourceRows);
       }
 

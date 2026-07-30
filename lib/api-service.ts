@@ -926,6 +926,7 @@ export async function getRunReport(
       informativeRate: quality.informativeRate,
       brandMentioned: summary.brandResponsesMentioned > 0,
       competitorsTracked: competitorCount ?? 0,
+      informativeBasis: quality.totalResponses,
     }),
     pages: computePageStats(
       (promptTargetRows ?? []) as { id: string; target_url: string | null }[],
