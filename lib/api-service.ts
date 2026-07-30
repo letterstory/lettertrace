@@ -891,7 +891,25 @@ export async function getRunReport(
   }));
 
   const summary = computeRunSummary(mentions, totalResponses, project.brand_name);
-  const quality = computeMeasurementQuality(mentions, totalResponses);
+  // Page-targeted prompts (target_url) measure RETRIEVAL of one page — their
+  // answers are how-to explanations that legitimately name nobody. Counting
+  // them in the naming-quality basis would read "you added page tracking" as
+  // "your prompts can't elicit names" and flip healthy runs to thin-sample,
+  // so informativeRate is computed over the non-page responses only.
+  // (summary/entities/citations keep the full run — only naming quality has a
+  // reduced basis, and quality.totalResponses reports that basis.)
+  const pagePromptIds = new Set(
+    ((promptTargetRows ?? []) as { id: string; target_url: string | null }[])
+      .filter((p) => p.target_url)
+      .map((p) => p.id),
+  );
+  const pageResponseIds = new Set(
+    responseRows.filter((r) => r.prompt_id && pagePromptIds.has(r.prompt_id)).map((r) => r.id),
+  );
+  const quality = computeMeasurementQuality(
+    mentions.filter((m) => !pageResponseIds.has(m.response_id)),
+    Math.max(0, totalResponses - pageResponseIds.size),
+  );
 
   return {
     run,
@@ -1243,6 +1261,9 @@ export async function getProjectHistory(
     const totalResponses = run.completed_count;
     const summary = computeRunSummary(mentions, totalResponses, project.brand_name);
     const citations = computeCitationStats(sourcesByRun.get(run.id) ?? [], totalResponses);
+    // NB: history's informativeRate is portfolio-wide (page-targeted responses
+    // included) — this endpoint deliberately avoids per-run response/prompt
+    // joins to stay cheap. The run REPORT carries the naming-basis rate.
     const quality = computeMeasurementQuality(mentions, totalResponses);
     return {
       runId: run.id,

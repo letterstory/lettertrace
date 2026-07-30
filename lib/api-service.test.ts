@@ -314,6 +314,42 @@ describe("getRunReport", () => {
     // 3 competitors registered + informative answers → never "no-competitors".
     expect(report!.verdict).not.toBe("no-competitors");
   });
+
+  // Page-targeted answers are how-to explanations that name nobody; counting
+  // them in informativeRate flipped healthy runs to thin-sample the moment a
+  // brand started tracking pages.
+  it("excludes page-targeted responses from the naming-quality basis", async () => {
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({}) }),
+      projects: () => ({ data: PROJECT }),
+      responses: () => ({
+        count: 4,
+        data: [
+          { id: "resp-1", topic_id: null, prompt_id: "ask-1" },
+          { id: "resp-2", topic_id: null, prompt_id: "ask-1" },
+          { id: "resp-3", topic_id: null, prompt_id: "page-1" },
+          { id: "resp-4", topic_id: null, prompt_id: "page-1" },
+        ],
+      }),
+      // One naming answer among the two non-page responses; page answers name nobody.
+      mentions: () => ({ data: [makeMention({ response_id: "resp-1" })] }),
+      prompts: () => ({
+        data: [
+          { id: "ask-1", target_url: null },
+          { id: "page-1", target_url: "https://blog.example.com/posts/guide" },
+        ],
+      }),
+      competitors: () => ({ count: 2 }),
+    });
+
+    const report = await getRunReport(db as never, "user-1", "run-1");
+    // Basis is the 2 non-page responses → 1/2 informative, not 1/4.
+    expect(report!.quality.totalResponses).toBe(2);
+    expect(report!.quality.informativeRate).toBe(0.5);
+    // The run's own total stays the full 4.
+    expect(report!.totalResponses).toBe(4);
+    expect(report!.verdict).not.toBe("thin-sample");
+  });
 });
 
 describe("triggerRunForProject", () => {
