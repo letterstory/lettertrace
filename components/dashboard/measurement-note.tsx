@@ -12,11 +12,17 @@ import { cn } from "@/lib/utils";
 // simply wrong.
 //
 // The distinguishing number already existed — computeMeasurementQuality's
-// informativeRate, the share of answers that named ANY tracked company — but it
-// was computed and never shown, so the two cases were indistinguishable in the
-// UI. Observed live: one brand sat at 0% with 70% of answers naming its
-// competitors (a real authority gap) while another sat at 0% with 16% (prompts
-// that were asking for explanations, not recommendations).
+// informativeRate — but it was computed and never shown, so the two cases were
+// indistinguishable in the UI. Observed live: one brand sat at 0% with 70% of
+// answers naming its tracked competitors (a real authority gap) while another
+// sat at 0% with 16%.
+//
+// Note what informativeRate actually counts: answers naming a company WE TRACK,
+// not answers naming any company. Checking the low case showed its answers were
+// full of vendors (Kore.ai, Boomi, Airia) that simply weren't on its competitor
+// list, each appearing once — a mismatched list in an immature category, not
+// prompts that failed to ask for recommendations. So the low-rate copy must not
+// blame the prompts, which an earlier draft of it did.
 
 export function MeasurementNote({
   totalResponses,
@@ -58,12 +64,14 @@ export function MeasurementNote({
   if (verdict === "thin-sample") {
     return (
       <Note tone="warn">
-        Only {named} named any company you track, so these rates rest on a thin
-        sample. Questions that ask <em>how to do</em> something get explanations;
-        questions that ask <em>what to use</em> get recommendations, and only those
-        can move your visibility.{" "}
-        <NoteLink href="/dashboard/topics">Review your prompts</NoteLink>
-        {!brandMentioned && ". A 0% here is more likely a measurement gap than a loss."}
+        Only {named} named a company you track, so there is little here to compare
+        against. Usually that means the models are naming companies missing from
+        your{" "}
+        <NoteLink href="/dashboard/competitors">competitor list</NoteLink>, or that
+        this category has no settled set of vendors yet. It can also mean your{" "}
+        <NoteLink href="/dashboard/topics">prompts</NoteLink> aren&apos;t asking for
+        recommendations.
+        {!brandMentioned && " Either way, read this 0% as not-yet-measured rather than as a loss."}
       </Note>
     );
   }
