@@ -253,7 +253,9 @@ export function Onboarding() {
           This usually takes a minute or two.
         </p>
         <div className="mt-5">
-          <Spinner className="text-terracotta" />
+          {/* Page-level, not inline next to a label, so it carries the wait on
+              its own and is sized to be seen. */}
+          <Spinner className="h-6 w-6 text-terracotta" />
         </div>
       </div>
     );
