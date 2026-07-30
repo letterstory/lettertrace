@@ -11,8 +11,13 @@ import { cn } from "@/lib/utils";
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
 
+// `transition-colors`, not `transition-all`. A button's label changes width when
+// it swaps to a loading state ("Save changes" -> "Saving..."), and `all` animates
+// the resulting width and height too: the button crawls to its new size, and
+// mid-transition it reads as two overlapping buttons with two overlapping labels.
+// Nothing here needs a layout property animated — only the hover/focus colours do.
 const buttonBase =
-  "inline-flex items-center justify-center gap-2 rounded font-medium tracking-tight transition-all disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
+  "inline-flex items-center justify-center gap-2 rounded font-medium tracking-tight transition-colors disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-ink text-paper hover:bg-ink/90 shadow-sm",
@@ -31,6 +36,10 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   href?: string;
+  /** In flight: shows a spinner and blocks input. */
+  loading?: boolean;
+  /** What to say while loading. Defaults to the idle label. */
+  loadingText?: ReactNode;
 }
 
 export function Button({
@@ -39,6 +48,9 @@ export function Button({
   href,
   className,
   children,
+  loading,
+  loadingText,
+  disabled,
   ...props
 }: ButtonProps) {
   const classes = cn(buttonBase, buttonVariants[variant], buttonSizes[size], className);
@@ -50,9 +62,60 @@ export function Button({
     );
   }
   return (
-    <button className={classes} {...props}>
-      {children}
+    <button
+      className={classes}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      {...props}
+    >
+      {loading === undefined ? children : <ButtonLabel loading={loading} loadingText={loadingText}>{children}</ButtonLabel>}
     </button>
+  );
+}
+
+/**
+ * Both labels, stacked in one grid cell, with the inactive one hidden by
+ * `visibility` rather than unmounted.
+ *
+ * The button is therefore always as wide as its widest state, so entering and
+ * leaving the loading state moves nothing — no reflow of the row it sits in, no
+ * width for a transition to animate, and no window in which two labels can be
+ * painted at once. Rendering only the active label would be simpler and is what
+ * the call sites used to do by hand; it is also what made the button resize
+ * under the user's cursor every time they saved.
+ */
+function ButtonLabel({
+  loading,
+  loadingText,
+  children,
+}: {
+  loading: boolean;
+  loadingText?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <span className="grid place-items-center">
+      <span
+        className={cn(
+          "col-start-1 row-start-1 inline-flex items-center gap-2",
+          loading && "invisible",
+        )}
+      >
+        {children}
+      </span>
+      <span
+        className={cn(
+          "col-start-1 row-start-1 inline-flex items-center gap-2",
+          !loading && "invisible",
+        )}
+        // Hidden from assistive tech when idle; when loading, aria-busy on the
+        // button plus this text is what announces the state.
+        aria-hidden={!loading}
+      >
+        <Spinner />
+        {loadingText ?? children}
+      </span>
+    </span>
   );
 }
 
@@ -223,14 +286,42 @@ export function EmptyState({
   );
 }
 
+/**
+ * Indeterminate loading indicator: a circular track with a rotating arc.
+ *
+ * Was a `rounded-sm` bordered box with a transparent top edge, which is the
+ * cheap CSS trick for a spinner and looks like exactly what it is — a square
+ * corner tumbling end over end. Two things fix that. An actual circle, so the
+ * silhouette doesn't change as it turns, and a low-opacity full ring behind the
+ * arc, which gives the arc a path to travel along: without it the eye reads a
+ * shape flickering, with it the eye reads rotation.
+ *
+ * `shrink-0` because this is nearly always a flex child next to a label, and a
+ * shrinkable circle becomes an oval on a narrow button.
+ *
+ * Sized and coloured through `className` (height/width and text colour), since
+ * it draws with currentColor and inherits from whatever it sits inside.
+ */
 export function Spinner({ className }: { className?: string }) {
   return (
-    <span
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      // Slower rather than stopped under reduced motion: a frozen spinner is
+      // indistinguishable from a hung request, which is worse than the motion.
       className={cn(
-        "inline-block h-4 w-4 animate-spin rounded-sm border-2 border-current border-t-transparent",
+        "h-4 w-4 shrink-0 animate-spin [animation-duration:0.7s] motion-reduce:[animation-duration:2.4s]",
         className,
       )}
       aria-hidden
-    />
+    >
+      <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+      <path
+        d="M14.5 8A6.5 6.5 0 0 0 8 1.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
