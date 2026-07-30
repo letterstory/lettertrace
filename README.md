@@ -136,7 +136,7 @@ Instead of a key per provider, you can connect a single **LLM router** (gateway)
 | Router | Engines it serves | Notes |
 |---|---|---|
 | **[OpenRouter](https://openrouter.ai/)** | Claude, ChatGPT | 400+ models behind one key. Requests pin the upstream provider (`allow_fallbacks: false`) so routing changes can't move your trend line. |
-| **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT | No markup on tokens, which matters when the key is yours. |
+| **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT | No markup on tokens, which matters when the key is yours. Mirrors both providers' native APIs, so a routed answer is the same request a direct key sends — forced browse included. |
 
 Settings → **Or use one router key**, or from the terminal:
 
@@ -155,6 +155,8 @@ Three things are worth understanding before you rely on one.
 ```bash
 ROUTER_API_KEY=sk-or-v1-... npx tsx scripts/probe-router.ts openrouter
 ```
+
+The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.
 
 **Gemini, Google AI Overviews and Perplexity still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label.
 

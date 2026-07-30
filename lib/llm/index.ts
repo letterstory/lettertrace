@@ -279,7 +279,7 @@ function extractJson<T>(raw: string): T {
  * shape once keeps those two decisions — how to ask, and where to send it — from
  * being made on different criteria.
  */
-type CallShape = "anthropic" | "openai-chat" | "google" | "perplexity";
+type CallShape = RouteShape | "google" | "perplexity";
 
 const DIRECT_SHAPE: Record<Provider, CallShape> = {
   anthropic: "anthropic",
@@ -351,6 +351,20 @@ export async function verifyKey(
   }
 }
 
+/**
+ * Output-token ceiling for the reachability ping.
+ *
+ * Deliberately not the 4 the direct verifyKey uses. Gateways impose their own
+ * floors: Concentrate rejects an OpenAI request under 16 output tokens outright
+ * — with a 402 whose text blames "the remaining balance", which is doubly
+ * misleading — so an 8-token ping reported a perfectly good credential as
+ * unreachable and refused to let it serve GPT. Measured: 8 fails, 16 and 64
+ * succeed on the same key. Perplexity has the same floor (see
+ * PERPLEXITY_MIN_MAX_TOKENS), so this is a class of behaviour, not one vendor's
+ * quirk.
+ */
+const PING_MAX_TOKENS = 16;
+
 /** One provider's result from checking a router credential. */
 export interface RouterProviderCheck {
   provider: Provider;
@@ -416,7 +430,7 @@ export async function verifyRouterKey(
       };
 
       try {
-        await utilityChat({ provider, model, apiKey, route }, model, undefined, "ping", 8);
+        await utilityChat({ provider, model, apiKey, route }, model, undefined, "ping", PING_MAX_TOKENS);
       } catch (err) {
         return { ...base, error: humanError(err) };
       }
@@ -492,8 +506,14 @@ export async function runQuery(
         : anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS, plan)
             .then((res) => ({ ...res, sources: [] }));
     }
-    // OpenAI-shaped: the router's own web flag replaces the Responses API's
-    // forced tool, so the browse can't be compelled — see PLUGIN_SEARCH_CAVEAT.
+    // A router mirroring the Responses API takes the direct OpenAI path
+    // wholesale, forced tool_choice and all, so the measurement is the same one.
+    if (plan.shape === "openai-responses" && webSearch) {
+      return openaiWebSearch(opts.apiKey, opts.model, opts.prompt, plan);
+    }
+    // Otherwise chat-completions: either no browsing was asked for, or this
+    // router expresses search through its own gateway flag, which can enable a
+    // browse but not compel one — see PLUGIN_SEARCH_CAVEAT.
     return gatewayQuery(opts.apiKey, opts.prompt, plan, webSearch);
   }
 
@@ -673,21 +693,29 @@ async function openaiWebSearch(
   apiKey: string,
   model: string,
   prompt: string,
+  plan?: RoutePlan,
 ): Promise<QueryResult> {
+  // A router that mirrors the Responses API answers on its own host; the body
+  // below is unchanged, which is the point — a routed OpenAI measurement is the
+  // same request as a direct one, forcing included.
+  const url = plan ? `${plan.baseUrl}/responses` : "https://api.openai.com/v1/responses";
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch("https://api.openai.com/v1/responses", {
+      const res = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
-          model,
+          model: plan ? plan.slug : model,
           tools: [{ type: "web_search_preview" }],
           // Force the browse; left to choose, the model often answers from
-          // memory and cites nothing.
+          // memory and cites nothing. Verified to survive routing: through
+          // Concentrate this returns sources even for a question the model can
+          // answer from recall, where the same request unforced returns none.
           tool_choice: { type: "web_search_preview" },
           input: prompt,
           max_output_tokens: ANSWER_MAX_TOKENS,
+          ...plan?.extraBody,
         }),
       });
       if (!res.ok) {
@@ -1327,7 +1355,7 @@ Generate ${opts.count} distinct questions a person might ask an AI assistant rel
   const system =
     shape === "anthropic"
       ? VARIATION_SYSTEM
-      : shape === "openai-chat"
+      : shape === "openai-chat" || shape === "openai-responses"
         ? VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }."
         : VARIATION_SYSTEM + "\nReturn a JSON array of strings.";
 

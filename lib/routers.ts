@@ -34,15 +34,24 @@ export type { RouterId };
  * Which wire format we speak to a router for a given provider.
  *
  * Both routers offer an Anthropic-Messages-compatible endpoint (a "skin") in
- * addition to the OpenAI-compatible one. Preferring the native shape wherever it
- * exists is the whole reason the Anthropic path survives routing intact: the
- * request is byte-for-byte the one we send Anthropic directly, including the
- * server-side `web_search_20250305` tool and its forcing `tool_choice`, and the
- * reply comes back in the shape the existing citation parser already reads.
- * Rewriting that into OpenAI chat-completions would mean giving up both the
- * forced browse and the inline citations.
+ * addition to the OpenAI-compatible one, and Concentrate also mirrors OpenAI's
+ * Responses API. Preferring the native shape wherever it exists is the whole
+ * reason a routed measurement survives intact: the request is byte-for-byte the
+ * one we send the provider directly — Anthropic's server-side
+ * `web_search_20250305` tool with its forcing `tool_choice`, OpenAI's
+ * `web_search_preview` with its own — and the reply comes back in the shape the
+ * existing citation parsers already read.
+ *
+ * The distinction is measured, not assumed. Asked "what is the capital of
+ * France?" — a question the model plainly knows — Concentrate's Responses
+ * endpoint with a forced `tool_choice` still returned two cited sources, while
+ * the same request with the tool merely offered returned none, and so did
+ * chat-completions with `web_search_options`. Forcing is honoured; the
+ * alternatives only permit. That difference is the whole reason this enum
+ * distinguishes 'openai-responses' from 'openai-chat' rather than treating any
+ * OpenAI-compatible endpoint as interchangeable.
  */
-export type RouteShape = "anthropic" | "openai-chat";
+export type RouteShape = "anthropic" | "openai-chat" | "openai-responses";
 
 /**
  * How native web search is expressed through a router for one provider.
@@ -153,15 +162,14 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         slugPrefix: "anthropic",
       },
       openai: {
-        shape: "openai-chat",
-        // Concentrate documents web search on its normalized Responses API but
-        // does not document the parameter that turns it on, and guessing one
-        // would produce exactly the failure this whole module guards against: a
-        // request that looks grounded, is accepted, and returns memory. Left at
-        // 'none' until Concentrate's surface is known; utility calls are
-        // unaffected, and monitored web-search runs are refused with a message
-        // that names the fix. Raise this to 'passthrough' once verified.
-        search: "none",
+        // Concentrate mirrors OpenAI's Responses API at /v1/responses, forced
+        // `tool_choice` included, so the monitored path sends the same request
+        // it sends OpenAI directly. Probed 2026-07-30 against gpt-4o-mini:
+        // forced returned sources on a question answerable from memory, offered
+        // returned none. `web_search_options` on chat-completions also reaches
+        // the web but cannot be compelled, so it is deliberately not used.
+        shape: "openai-responses",
+        search: "passthrough",
         slugPrefix: "openai",
       },
     },

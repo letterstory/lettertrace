@@ -41,6 +41,16 @@ describe("router registry", () => {
     expect(routerSupport("openrouter", "perplexity")).toBeNull();
   });
 
+  // Probed 2026-07-30 with a live key: Concentrate's /v1/responses honours a
+  // forced tool_choice (sources came back for a question answerable from
+  // memory), so its OpenAI path is the direct one rather than a normalized
+  // chat-completions approximation.
+  it("routes Concentrate's OpenAI traffic through the Responses API", () => {
+    const support = routerSupport("concentrate", "openai");
+    expect(support?.shape).toBe("openai-responses");
+    expect(support?.search).toBe("passthrough");
+  });
+
   it("prefers each router's Anthropic-compatible endpoint for Claude", () => {
     // Speaking Anthropic's own wire format is what preserves the forced
     // web_search tool and the inline citations the parser reads.
@@ -112,6 +122,25 @@ describe("routerCanMeasure", () => {
   });
 });
 
+/**
+ * Temporarily mark one engine as unsearchable and ask for the refusal.
+ *
+ * routerRefusalMessage reads the registry rather than taking support as an
+ * argument, so the only way to reach the 'none' branch is to put a router in
+ * that state. Restored in a finally, so a failing assertion can't leave the
+ * registry lying to every other test in the file.
+ */
+function refusalForSearchless(): string {
+  const support = ROUTERS.concentrate.providers.openai!;
+  const original = support.search;
+  support.search = "none";
+  try {
+    return routerRefusalMessage("concentrate", "openai", { webSearch: true, verified: [] });
+  } finally {
+    support.search = original;
+  }
+}
+
 describe("routerRefusalMessage", () => {
   it("names the alternative engines when the router can't serve one", () => {
     const message = routerRefusalMessage("openrouter", "google", {
@@ -122,13 +151,14 @@ describe("routerRefusalMessage", () => {
     expect(message).toContain("Anthropic (Claude) and OpenAI (ChatGPT)");
   });
 
+  // No shipped router currently has an engine it can reach but cannot ask to
+  // search — Concentrate held that spot until its Responses endpoint was probed
+  // and turned out to honour a forced browse. The branch stays because it is the
+  // guard for the next router added, so exercise it against a stub registry
+  // entry rather than deleting the coverage along with the example.
   it("offers turning grounding off when search can't be requested", () => {
-    const message = routerRefusalMessage("concentrate", "openai", {
-      webSearch: true,
-      verified: [],
-    });
+    const message = refusalForSearchless();
     expect(message).toContain("Turn off web search");
-    expect(message).toContain("Concentrate");
   });
 
   it("points at a re-check when only the probe is missing", () => {

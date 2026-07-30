@@ -272,14 +272,20 @@ describe("resolveRunKeyFor with a router credential", () => {
     expect(k.route?.router).toBe("openrouter");
   });
 
-  it("refuses a grounded run when the router can't request native search at all", async () => {
-    // Concentrate has no documented way to ask for OpenAI's web search, so the
-    // alternative to refusing is recording a memory answer as a measurement.
+  // Grounding is confirmed per ENGINE, not per credential. A key that carries
+  // Claude's web search says nothing about whether it carries OpenAI's — they
+  // are different endpoints on the router, and one can regress without the
+  // other. Treating one verified engine as blanket approval is how an
+  // unverified engine would slip into a monitored run.
+  it("won't lend one engine's confirmed grounding to another", async () => {
     hasRouter("concentrate", ["anthropic"]);
     const k = await runKeyFor(db(0), "user-1", "openai", "gpt-4o", { webSearch: true });
     expect(k.source).toBe("unroutable");
-    expect(engineKeyMessage(k)).toContain("web search");
-    expect(engineKeyMessage(k)).toContain("Turn off web search");
+    expect(engineKeyMessage(k)).toContain("hasn't been confirmed");
+    // Same key, the engine it WAS confirmed for: allowed.
+    const ok = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(ok.source).toBe("own");
+    expect(ok.route?.router).toBe("concentrate");
   });
 
   it("prefers the user's own direct key over a router that could serve it", async () => {
