@@ -35,8 +35,10 @@ export async function GET(
 }
 
 // POST /api/v1/projects/:id/runs — execute a monitoring run now (BYOK-only).
-// Optional body { provider?, model? } overrides the project default for this
-// run; no body keeps the default.
+// Optional body { provider?, model?, background? } — provider/model override
+// the project default for this run; background: true returns 202 as soon as
+// the run row exists (a run takes minutes; poll GET /v1/runs/:id/status).
+// No body keeps the default, synchronous behavior.
 export async function POST(
   request: Request,
   { params }: { params: { id: string } },
@@ -45,7 +47,7 @@ export async function POST(
   if (auth instanceof Response) return auth;
 
   // An absent (or empty) body is the common case and must keep working.
-  const options: { provider?: Provider; model?: string } = {};
+  const options: { provider?: Provider; model?: string; background?: boolean } = {};
   let raw: unknown = null;
   try {
     raw = await request.json();
@@ -67,6 +69,9 @@ export async function POST(
     }
     if (typeof b.model === "string" && b.model.trim().length > 0) {
       options.model = b.model.trim();
+    }
+    if (b.background === true) {
+      options.background = true;
     }
   }
 
@@ -95,16 +100,19 @@ export async function POST(
       });
       return NextResponse.json({ error: outcome.message }, { status });
     }
+    // A background acceptance is 202 (created and executing, not settled);
+    // the synchronous path stays 200 with the settled result.
+    const statusCode = outcome.result.status === "running" ? 202 : 200;
     await logApiRequest(auth, request, "v1", {
       category: "run",
       action: "api.trigger_run",
-      statusCode: 200,
+      statusCode,
       projectId: params.id,
       targetType: "run",
       targetId: outcome.result.runId,
       summary: `Triggered a run via the API (${outcome.result.status})`,
     });
-    return NextResponse.json(outcome.result);
+    return NextResponse.json(outcome.result, { status: statusCode });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
   }

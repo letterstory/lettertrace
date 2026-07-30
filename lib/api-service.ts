@@ -20,7 +20,8 @@ import {
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
-import { executeRun, type RunContext, type RunResult } from "@/lib/engine";
+import { waitUntil } from "@vercel/functions";
+import { executeRun, prepareRun, resumeRun, type RunContext, type RunResult } from "@/lib/engine";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
@@ -600,8 +601,16 @@ export async function getRunResponses(
   };
 }
 
+/** A run accepted in background mode: created and executing, not yet settled. */
+export interface BackgroundRunStart {
+  runId: string;
+  status: "running";
+  /** Planned ANSWERS (prompts × replicates), same meaning as runs.prompt_count. */
+  promptCount: number;
+}
+
 export type TriggerOutcome =
-  | { ok: true; result: RunResult }
+  | { ok: true; result: RunResult | BackgroundRunStart }
   // `invalid_engine` is the caller's request being malformed (a model the
   // provider doesn't offer), distinct from `no_key` which is about billing —
   // routes map them to 400 and 402 respectively.
@@ -619,7 +628,15 @@ export async function triggerRunForProject(
   supabase: SupabaseClient,
   userId: string,
   projectId: string,
-  options?: { provider?: Provider; model?: string; context?: RunContext },
+  options?: {
+    provider?: Provider;
+    model?: string;
+    context?: RunContext;
+    /** Return as soon as the run row exists; the queries finish after the
+     *  response is sent (a run takes minutes — no client should hold the
+     *  connection that long). Poll GET /v1/runs/:id/status to follow it. */
+    background?: boolean;
+  },
 ): Promise<TriggerOutcome> {
   const project = await getOwnedProject(supabase, userId, projectId);
   if (!project) {
@@ -656,15 +673,57 @@ export async function triggerRunForProject(
     };
   }
 
-  const result = await executeRun({
+  const runParams = {
     supabase,
     project,
     provider: key.provider,
     model: key.model,
     apiKey: key.apiKey!,
     context: options?.context,
-  });
+  };
+
+  if (options?.background) {
+    const prepared = await prepareRun(runParams);
+    // waitUntil keeps the serverless invocation alive past the response; the
+    // run settles its own row (completed/failed) exactly as in the sync path.
+    waitUntil(
+      resumeRun(prepared, runParams).catch(() => {
+        // resumeRun never rejects for per-prompt failures; this guards the
+        // run-row settle itself so a crash can't take down the invocation.
+      }),
+    );
+    return {
+      ok: true,
+      result: { runId: prepared.runId, status: "running", promptCount: prepared.jobs.length },
+    };
+  }
+
+  const result = await executeRun(runParams);
   return { ok: true, result };
+}
+
+/**
+ * The bare run row — the polling companion to background runs. Deliberately
+ * lean: the report recomputes aggregate math over every response, which is
+ * the wrong thing to hit every few seconds while a run is still answering.
+ * Ownership is checked run -> project -> user. Null when the run doesn't
+ * exist or isn't the user's.
+ */
+export async function getRunStatus(
+  supabase: SupabaseClient,
+  userId: string,
+  runId: string,
+): Promise<Run | null> {
+  const { data: runRow } = await supabase
+    .from("runs")
+    .select("*")
+    .eq("id", runId)
+    .maybeSingle();
+  const run = runRow as Run | null;
+  if (!run) return null;
+  const project = await getOwnedProject(supabase, userId, run.project_id);
+  if (!project) return null;
+  return run;
 }
 
 /** One completed run, reduced to the numbers that matter across time. */

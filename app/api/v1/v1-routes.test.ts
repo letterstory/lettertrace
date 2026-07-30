@@ -7,6 +7,7 @@ import {
   getProjectHistory,
   getRunReport,
   getRunResponses,
+  getRunStatus,
   listProjectPrompts,
   listRuns,
   setPromptActive,
@@ -28,6 +29,7 @@ import { PATCH as patchPromptRoute } from "@/app/api/v1/prompts/[id]/route";
 import { GET as getReportRoute } from "@/app/api/v1/runs/[id]/route";
 import { GET as getHistoryRoute } from "@/app/api/v1/projects/[id]/history/route";
 import { GET as getResponsesRoute } from "@/app/api/v1/runs/[id]/responses/route";
+import { GET as getStatusRoute } from "@/app/api/v1/runs/[id]/status/route";
 
 vi.mock("@/lib/api-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-auth")>()),
@@ -43,6 +45,7 @@ vi.mock("@/lib/api-service", async (importOriginal) => ({
   getProjectHistory: vi.fn(),
   getRunReport: vi.fn(),
   getRunResponses: vi.fn(),
+  getRunStatus: vi.fn(),
   setPromptActive: vi.fn(),
   triggerRunForProject: vi.fn(),
 }));
@@ -84,6 +87,7 @@ beforeEach(() => {
   vi.mocked(getProjectHistory).mockReset();
   vi.mocked(getRunReport).mockReset();
   vi.mocked(getRunResponses).mockReset();
+  vi.mocked(getRunStatus).mockReset();
   vi.mocked(setPromptActive).mockReset();
   vi.mocked(triggerRunForProject).mockReset();
 });
@@ -347,6 +351,46 @@ describe("POST /api/v1/projects/:id/runs", () => {
     );
   });
 
+  it("202s a background run and passes the flag through", async () => {
+    vi.mocked(triggerRunForProject).mockResolvedValue({
+      ok: true,
+      result: { runId: "r9", status: "running", promptCount: 12 },
+    });
+    const res = await postRunRoute(
+      req("/api/v1/projects/p1/runs", {
+        method: "POST",
+        body: JSON.stringify({ background: true }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(202);
+    const body = await res.json();
+    expect(body.runId).toBe("r9");
+    expect(body.status).toBe("running");
+    expect(triggerRunForProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
+      background: true,
+      context: RUN_CTX,
+    });
+  });
+
+  it("ignores a non-boolean background value", async () => {
+    vi.mocked(triggerRunForProject).mockResolvedValue({
+      ok: true,
+      result: { runId: "r1", status: "completed", totalResponses: 3, tokensUsed: 10 },
+    });
+    const res = await postRunRoute(
+      req("/api/v1/projects/p1/runs", {
+        method: "POST",
+        body: JSON.stringify({ background: "yes" }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(200);
+    expect(triggerRunForProject).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", {
+      context: RUN_CTX,
+    });
+  });
+
   it("400s on an unknown provider override", async () => {
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", {
@@ -484,6 +528,41 @@ describe("GET /api/v1/runs/:id/responses", () => {
     const body = await res.json();
     expect(body.responses[0].sources[0].url).toBe("https://credal.ai/blog");
     expect(getRunResponses).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "r1");
+  });
+});
+
+describe("GET /api/v1/runs/:id/status", () => {
+  it("404s for an unknown or unowned run", async () => {
+    vi.mocked(getRunStatus).mockResolvedValue(null);
+    const res = await getStatusRoute(req("/api/v1/runs/r1/status"), {
+      params: { id: "r1" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the bare run row, trimmed", async () => {
+    vi.mocked(getRunStatus).mockResolvedValue({
+      id: "r1",
+      project_id: "p1",
+      status: "running",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      prompt_count: 12,
+      completed_count: 5,
+      replicates: 2,
+      error: null,
+      started_at: "2026-07-30T01:00:00Z",
+      finished_at: null,
+      created_at: "2026-07-30T01:00:00Z",
+    });
+    const res = await getStatusRoute(req("/api/v1/runs/r1/status"), {
+      params: { id: "r1" },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.run).toMatchObject({ id: "r1", status: "running", completed_count: 5 });
+    expect(body.run).not.toHaveProperty("created_at");
+    expect(getRunStatus).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "r1");
   });
 });
 

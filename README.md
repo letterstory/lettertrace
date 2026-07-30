@@ -204,6 +204,14 @@ curl https://your-app.com/api/v1/projects/<project-id>/runs \
 curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
   -H "Authorization: Bearer lt_live_..."
 
+# A run takes minutes; {"background": true} returns 202 with the run id as
+# soon as the run exists, then poll the status endpoint until it settles.
+curl -X POST https://your-app.com/api/v1/projects/<project-id>/runs \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"background": true}'
+curl https://your-app.com/api/v1/runs/<run-id>/status \
+  -H "Authorization: Bearer lt_live_..."
+
 # Share-of-voice report for a run
 curl https://your-app.com/api/v1/runs/<run-id> \
   -H "Authorization: Bearer lt_live_..."

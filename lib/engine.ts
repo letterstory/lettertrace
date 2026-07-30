@@ -61,12 +61,7 @@ export interface RunResult {
   error?: string;
 }
 
-/**
- * Create a run for a project and execute every active prompt against the chosen
- * model with the user's key, detecting + storing brand/competitor mentions.
- * `supabase` may be a user-scoped (RLS) client or the service client (cron).
- */
-export async function executeRun(params: {
+export interface ExecuteRunParams {
   supabase: SupabaseClient;
   project: Project;
   provider: Provider;
@@ -74,8 +69,36 @@ export async function executeRun(params: {
   apiKey: string;
   /** Attribution for the activity log. Defaults to the internal system. */
   context?: RunContext;
-}): Promise<RunResult> {
-  const { supabase, project, provider, model, apiKey } = params;
+}
+
+/** A run row already created and logged, plus everything the job loop needs. */
+export interface PreparedRun {
+  runId: string;
+  /** One entry per planned ANSWER (prompts × replicates). */
+  jobs: Prompt[];
+  competitors: Competitor[];
+  attribution: {
+    userId: string;
+    projectId: string;
+    actorType: ActorType;
+    actorId: string | null;
+    actorLabel: string;
+    channel: LogChannel;
+    category: "run";
+    targetType: string;
+  };
+  startedMs: number;
+}
+
+/**
+ * Create the run row (status "running") and log run.started without executing
+ * anything. Callers that must answer immediately — a run takes minutes, and no
+ * HTTP client should have to hold a connection that long — return the run id
+ * from here and hand the PreparedRun to resumeRun after responding. Everyone
+ * else calls executeRun, which is exactly prepareRun + resumeRun.
+ */
+export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun> {
+  const { supabase, project, provider, model } = params;
   const startedMs = Date.now();
 
   // Attribution shared by every run event below. project.user_id is always the
@@ -143,7 +166,15 @@ export async function executeRun(params: {
     metadata: { provider, model, prompt_count: jobs.length, replicates },
   });
 
-  if (prompts.length === 0) {
+  return { runId, jobs, competitors, attribution, startedMs };
+}
+
+/** Execute a prepared run's jobs and settle the run row. */
+export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams): Promise<RunResult> {
+  const { supabase, project, provider, model, apiKey } = params;
+  const { runId, jobs, competitors, attribution, startedMs } = prepared;
+
+  if (jobs.length === 0) {
     await supabase
       .from("runs")
       .update({ status: "completed", finished_at: new Date().toISOString() })
@@ -339,4 +370,13 @@ export async function executeRun(params: {
   });
 
   return { runId, status, totalResponses: succeeded, tokensUsed, error: hardError };
+}
+
+/**
+ * Create a run for a project and execute every active prompt against the chosen
+ * model with the user's key, detecting + storing brand/competitor mentions.
+ * `supabase` may be a user-scoped (RLS) client or the service client (cron).
+ */
+export async function executeRun(params: ExecuteRunParams): Promise<RunResult> {
+  return resumeRun(await prepareRun(params), params);
 }
