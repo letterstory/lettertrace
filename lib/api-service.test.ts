@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mention, Project, Run } from "@/lib/types";
 import {
+  getRunStatus,
   createProject,
   createPrompts,
   getOwnedProject,
@@ -21,7 +22,15 @@ vi.mock("@/lib/trial", () => ({
   resolveRunKeyFor: vi.fn(),
   engineKeyMessage: vi.fn(),
 }));
-vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
+// Only the run EXECUTORS are stubbed. The abandoned-run helpers stay real:
+// they are the thing under test in getRunStatus, and mocking them would assert
+// that we called something rather than that a stranded row gets settled.
+vi.mock("@/lib/engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/engine")>()),
+  executeRun: vi.fn(),
+  prepareRun: vi.fn(),
+  resumeRun: vi.fn(),
+}));
 
 // ------------------------------------------------------------------
 // A tiny fake of the supabase query builder: per-table handlers receive the
@@ -884,5 +893,53 @@ describe("getRunResponses", () => {
       },
     ]);
     expect(second).toMatchObject({ prompt_text: null, sources: [], mentions: [] });
+  });
+});
+
+describe("getRunStatus", () => {
+  const longAgo = new Date(Date.now() - 60 * 60_000).toISOString();
+  const justNow = new Date(Date.now() - 30_000).toISOString();
+
+  it("returns a live run untouched", async () => {
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({ status: "running", started_at: justNow, finished_at: null }) }),
+      projects: () => ({ data: PROJECT }),
+    });
+    const run = await getRunStatus(db as never, "user-1", "run-1");
+    expect(run?.status).toBe("running");
+    // Nothing was written: a run in flight is not the sweeper's business.
+    expect(db.queries.some((q) => q.modifiers.some(([m]) => m === "update"))).toBe(false);
+  });
+
+  // The bug this closes: a background run outlives its invocation, the process
+  // is killed before it can settle its own row, and the row reads "running"
+  // forever — so a client polling this endpoint polls forever too.
+  it("settles a run that outlived any invocation that could finish it", async () => {
+    const db = fakeDb({
+      // The guarded update returns the rows it changed; the read returns the
+      // row. Same table, two shapes, so branch on which one this is.
+      runs: (q) =>
+        q.modifiers.some(([m]) => m === "update")
+          ? { data: [{ id: "run-1" }] }
+          : { data: makeRun({ status: "running", started_at: longAgo, finished_at: null }) },
+      projects: () => ({ data: PROJECT }),
+    });
+    const run = await getRunStatus(db as never, "user-1", "run-1");
+    expect(run?.status).toBe("failed");
+    expect(run?.error).toMatch(/interrupted/i);
+    expect(run?.finished_at).toBeTruthy();
+
+    const update = db.queries.find((q) => q.modifiers.some(([m]) => m === "update"));
+    expect(update?.table).toBe("runs");
+    // Guarded, so a run that settled itself in the meantime keeps its result.
+    expect(update?.filters).toContainEqual(["eq", "status", "running"]);
+  });
+
+  it("still refuses a run that isn't the caller's", async () => {
+    const db = fakeDb({
+      runs: () => ({ data: makeRun({ status: "running", started_at: longAgo }) }),
+      projects: () => ({ data: null }),
+    });
+    expect(await getRunStatus(db as never, "someone-else", "run-1")).toBeNull();
   });
 });

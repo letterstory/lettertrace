@@ -29,7 +29,16 @@ import {
 import { waitUntil } from "@vercel/functions";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
-import { executeRun, prepareRun, resumeRun, type RunContext, type RunResult } from "@/lib/engine";
+import {
+  executeRun,
+  prepareRun,
+  resumeRun,
+  isAbandoned,
+  settleAbandonedRun,
+  INTERRUPTED_RUN_ERROR,
+  type RunContext,
+  type RunResult,
+} from "@/lib/engine";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
@@ -1131,9 +1140,18 @@ export async function triggerRunForProject(
     // waitUntil keeps the serverless invocation alive past the response; the
     // run settles its own row (completed/failed) exactly as in the sync path.
     waitUntil(
-      resumeRun(prepared, runParams).catch(() => {
-        // resumeRun never rejects for per-prompt failures; this guards the
-        // run-row settle itself so a crash can't take down the invocation.
+      resumeRun(prepared, runParams).catch(async (err) => {
+        // resumeRun never rejects for per-prompt failures, so reaching here
+        // means the settle itself failed — and swallowing that left the row
+        // reading "running" forever, with the status endpoint reporting it to
+        // a poller that would never see a terminal state. Settle it here
+        // instead. Only a killed invocation can still strand a row, which is
+        // what the cron sweeper is for.
+        await settleAbandonedRun(
+          supabase,
+          prepared.runId,
+          `The run stopped unexpectedly: ${err instanceof Error ? err.message : "unknown error"}`,
+        ).catch(() => {});
       }),
     );
     return {
@@ -1167,6 +1185,22 @@ export async function getRunStatus(
   if (!run) return null;
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
+
+  // Settle a provably-dead run on the way past. The cron sweeper catches these
+  // too, but a poller shouldn't have to wait for the next scheduled tick to be
+  // told the thing it is polling is over — this endpoint exists precisely to
+  // answer "is it done yet", and "running" is a wrong answer for a run nothing
+  // is executing. The write is guarded and idempotent, so concurrent pollers
+  // and the sweeper can all race it harmlessly.
+  if (isAbandoned(run)) {
+    const settled = await settleAbandonedRun(supabase, run.id, INTERRUPTED_RUN_ERROR);
+    if (settled) {
+      return { ...run, status: "failed", error: INTERRUPTED_RUN_ERROR, finished_at: new Date().toISOString() };
+    }
+    // Lost the race: someone else settled it. Re-read rather than report stale.
+    const { data: fresh } = await supabase.from("runs").select("*").eq("id", run.id).maybeSingle();
+    return (fresh as Run | null) ?? run;
+  }
   return run;
 }
 
