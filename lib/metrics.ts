@@ -248,6 +248,42 @@ export function computeMeasurementQuality(
   };
 }
 
+/** Below this share of informative answers, a run's rates rest on too thin a
+ *  sample to read as a competitive result. */
+export const LOW_INFORMATIVE_RATE = 0.5;
+
+export type MeasurementVerdict =
+  | "no-data"
+  /** Nothing to compare against, so informativeRate says nothing about prompts. */
+  | "no-competitors"
+  /** Too few answers recommended anyone; the rates aren't measuring much yet. */
+  | "thin-sample"
+  /** Answers did recommend, and consistently not this brand. A real finding. */
+  | "real-gap"
+  | "healthy";
+
+/**
+ * How to read a run's rates.
+ *
+ * A 0% brand visibility means two entirely different things depending on this,
+ * and the UI used to present them identically. Observed live: one brand at 0%
+ * with 70% of answers naming its competitors (a genuine authority gap) and
+ * another at 0% with 16% (prompts that elicited explanations, not
+ * recommendations, so the 0% measured almost nothing).
+ */
+export function measurementVerdict(input: {
+  totalResponses: number;
+  informativeRate: number;
+  brandMentioned: boolean;
+  competitorsTracked: number;
+}): MeasurementVerdict {
+  if (input.totalResponses === 0) return "no-data";
+  if (input.competitorsTracked === 0) return "no-competitors";
+  if (input.informativeRate < LOW_INFORMATIVE_RATE) return "thin-sample";
+  if (!input.brandMentioned) return "real-gap";
+  return "healthy";
+}
+
 // Per-topic breakdown for the brand (uses topic_id stored on mention rows).
 export interface TopicStat {
   topicId: string | null;

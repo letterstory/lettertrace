@@ -18,12 +18,14 @@ import {
   StatCard,
 } from "@/components/ui";
 import { ShareBars, SentimentDonut, TrendChart } from "@/components/dashboard/charts-lazy";
+import { MeasurementNote } from "@/components/dashboard/measurement-note";
 import { Onboarding } from "./onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { getConfiguredProviders, getProject } from "@/lib/data";
 import {
   computeCitationStats,
   computeEntityStats,
+  computeMeasurementQuality,
   computeRunSummary,
   computeTopicStats,
   type EntityStat,
@@ -260,6 +262,9 @@ export default async function DashboardPage() {
   const stats = computeEntityStats(latestMentions, totalResponses, project.brand_name);
   const brand = stats.find((s) => s.type === "brand");
   const summary = computeRunSummary(latestMentions, totalResponses, project.brand_name);
+  // How much this run actually measured. Without it a 0% reads the same whether
+  // the models picked a competitor or recommended nobody at all.
+  const quality = computeMeasurementQuality(latestMentions, totalResponses);
 
   // Citations move before mentions do — for a brand with no mentions yet, this
   // is the only card on this page that will change.
@@ -367,6 +372,15 @@ export default async function DashboardPage() {
           hint="how early you appear"
         />
       </div>
+
+      {/* What the numbers above are worth. */}
+      <MeasurementNote
+        totalResponses={totalResponses}
+        responsesNamingSomeone={quality.responsesNamingSomeone}
+        informativeRate={quality.informativeRate}
+        brandMentioned={(summary.brandResponsesMentioned ?? 0) > 0}
+        competitorsTracked={competitors}
+      />
 
       {/* Trend + sentiment donut */}
       <div className="grid gap-6 lg:grid-cols-3">
