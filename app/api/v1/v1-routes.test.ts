@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticateApiKey } from "@/lib/api-auth";
 import { getProjects } from "@/lib/data";
 import {
+  createCompetitors,
   createProject,
   createPrompts,
+  deleteCompetitor,
+  discoverProjectCompetitors,
   getProjectHistory,
   getRunReport,
   getRunResponses,
   getRunStatus,
+  listProjectCompetitors,
   listProjectPrompts,
   listRuns,
   setPromptActive,
@@ -30,6 +34,12 @@ import { GET as getReportRoute } from "@/app/api/v1/runs/[id]/route";
 import { GET as getHistoryRoute } from "@/app/api/v1/projects/[id]/history/route";
 import { GET as getResponsesRoute } from "@/app/api/v1/runs/[id]/responses/route";
 import { GET as getStatusRoute } from "@/app/api/v1/runs/[id]/status/route";
+import {
+  GET as getCompetitorsRoute,
+  POST as postCompetitorsRoute,
+} from "@/app/api/v1/projects/[id]/competitors/route";
+import { GET as getDiscoveredRoute } from "@/app/api/v1/projects/[id]/competitors/discovered/route";
+import { DELETE as deleteCompetitorRoute } from "@/app/api/v1/competitors/[id]/route";
 
 vi.mock("@/lib/api-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-auth")>()),
@@ -38,14 +48,18 @@ vi.mock("@/lib/api-auth", async (importOriginal) => ({
 vi.mock("@/lib/data", () => ({ getProjects: vi.fn() }));
 vi.mock("@/lib/api-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-service")>()),
+  createCompetitors: vi.fn(),
   createProject: vi.fn(),
   createPrompts: vi.fn(),
+  deleteCompetitor: vi.fn(),
+  discoverProjectCompetitors: vi.fn(),
   listProjectPrompts: vi.fn(),
   listRuns: vi.fn(),
   getProjectHistory: vi.fn(),
   getRunReport: vi.fn(),
   getRunResponses: vi.fn(),
   getRunStatus: vi.fn(),
+  listProjectCompetitors: vi.fn(),
   setPromptActive: vi.fn(),
   triggerRunForProject: vi.fn(),
 }));
@@ -82,6 +96,10 @@ beforeEach(() => {
   vi.mocked(getProjects).mockReset();
   vi.mocked(createProject).mockReset();
   vi.mocked(createPrompts).mockReset();
+  vi.mocked(createCompetitors).mockReset();
+  vi.mocked(deleteCompetitor).mockReset();
+  vi.mocked(discoverProjectCompetitors).mockReset();
+  vi.mocked(listProjectCompetitors).mockReset();
   vi.mocked(listProjectPrompts).mockReset();
   vi.mocked(listRuns).mockReset();
   vi.mocked(getProjectHistory).mockReset();
@@ -480,11 +498,14 @@ describe("GET /api/v1/runs/:id", () => {
         responsesNamingNobody: 0,
         informativeRate: 1,
       },
+      verdict: "healthy",
       topics: [],
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });
     expect(res.status).toBe(200);
-    expect((await res.json()).summary.brandShareOfVoice).toBe(0.25);
+    const body = await res.json();
+    expect(body.summary.brandShareOfVoice).toBe(0.25);
+    expect(body.verdict).toBe("healthy");
   });
 });
 
@@ -644,5 +665,148 @@ describe("GET /api/v1/projects/:id/history", () => {
     expect(body.everMentioned).toBe(true);
     expect(body.firstMentionAt).toBe("2026-07-08T00:00:00Z");
     expect(getProjectHistory).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", 5);
+  });
+});
+
+describe("GET /api/v1/projects/:id/competitors", () => {
+  it("404s for a project that isn't the caller's", async () => {
+    vi.mocked(listProjectCompetitors).mockResolvedValue(null);
+    const res = await getCompetitorsRoute(req("/api/v1/projects/p1/competitors"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the tracked competitors", async () => {
+    vi.mocked(listProjectCompetitors).mockResolvedValue([
+      {
+        id: "c1",
+        name: "WEKA",
+        aliases: ["WekaIO"],
+        domain: "weka.io",
+        created_at: "2026-07-30T00:00:00Z",
+      },
+    ]);
+    const res = await getCompetitorsRoute(req("/api/v1/projects/p1/competitors"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).competitors[0].name).toBe("WEKA");
+    expect(listProjectCompetitors).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1");
+  });
+});
+
+describe("POST /api/v1/projects/:id/competitors", () => {
+  it("maps not_found/invalid to 404/400", async () => {
+    vi.mocked(createCompetitors).mockResolvedValue({
+      ok: false,
+      code: "not_found",
+      message: "Project not found.",
+    });
+    let res = await postCompetitorsRoute(
+      req("/api/v1/projects/p1/competitors", {
+        method: "POST",
+        body: JSON.stringify({ competitors: [{ name: "WEKA" }] }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(404);
+
+    vi.mocked(createCompetitors).mockResolvedValue({
+      ok: false,
+      code: "invalid",
+      message: "No usable entries",
+    });
+    res = await postCompetitorsRoute(
+      req("/api/v1/projects/p1/competitors", {
+        method: "POST",
+        body: JSON.stringify({ competitors: [] }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("201s with the created competitors and skip count", async () => {
+    vi.mocked(createCompetitors).mockResolvedValue({
+      ok: true,
+      created: [
+        {
+          id: "c1",
+          name: "WEKA",
+          aliases: [],
+          domain: "weka.io",
+          created_at: "2026-07-30T00:00:00Z",
+        },
+      ],
+      skipped: 1,
+    });
+    const res = await postCompetitorsRoute(
+      req("/api/v1/projects/p1/competitors", {
+        method: "POST",
+        body: JSON.stringify({ competitors: [{ name: "WEKA", domain: "weka.io" }] }),
+      }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.competitors[0].id).toBe("c1");
+    expect(body.skipped).toBe(1);
+    expect(createCompetitors).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "p1", [
+      { name: "WEKA", domain: "weka.io" },
+    ]);
+  });
+});
+
+describe("GET /api/v1/projects/:id/competitors/discovered", () => {
+  it("404s for a project that isn't the caller's", async () => {
+    vi.mocked(discoverProjectCompetitors).mockResolvedValue(null);
+    const res = await getDiscoveredRoute(req("/api/v1/projects/p1/competitors/discovered"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the candidates with scan stats", async () => {
+    vi.mocked(discoverProjectCompetitors).mockResolvedValue({
+      companies: [{ name: "Mountpoint for Amazon S3", answers: 7 }],
+      answersScanned: 120,
+      topCount: 7,
+    });
+    const res = await getDiscoveredRoute(req("/api/v1/projects/p1/competitors/discovered"), {
+      params: { id: "p1" },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.companies[0].name).toBe("Mountpoint for Amazon S3");
+    expect(body.answersScanned).toBe(120);
+  });
+});
+
+describe("DELETE /api/v1/competitors/:id", () => {
+  it("404s for an unknown or unowned competitor", async () => {
+    vi.mocked(deleteCompetitor).mockResolvedValue(null);
+    const res = await deleteCompetitorRoute(
+      req("/api/v1/competitors/c1", { method: "DELETE" }),
+      { params: { id: "c1" } },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("removes and echoes the competitor", async () => {
+    vi.mocked(deleteCompetitor).mockResolvedValue({
+      id: "c1",
+      name: "WEKA",
+      aliases: [],
+      domain: "weka.io",
+      created_at: "2026-07-30T00:00:00Z",
+    });
+    const res = await deleteCompetitorRoute(
+      req("/api/v1/competitors/c1", { method: "DELETE" }),
+      { params: { id: "c1" } },
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).removed.name).toBe("WEKA");
+    expect(deleteCompetitor).toHaveBeenCalledWith(AUTH_CTX.supabase, "user-1", "c1");
   });
 });
