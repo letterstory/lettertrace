@@ -1,7 +1,13 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { executeRun } from "@/lib/engine";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  executeRun,
+  settleAbandonedRun,
+  ABANDONED_RUN_MS,
+  INTERRUPTED_RUN_ERROR,
+} from "@/lib/engine";
 import { decryptSecret } from "@/lib/crypto";
 import type { Project } from "@/lib/types";
 
@@ -27,6 +33,36 @@ interface ProjectResult {
   totalResponses?: number;
 }
 
+/**
+ * Settle runs that nothing is executing any more.
+ *
+ * A run row is written "running" up front and settled by the code that executes
+ * it — so if that process dies mid-flight, nothing ever settles it. Background
+ * runs made this reachable in normal operation: they outlive the response but
+ * not the invocation, so a portfolio large enough to exceed maxDuration leaves
+ * the row "running" permanently, and GET /v1/runs/:id/status reports that to a
+ * poller forever.
+ *
+ * This is the only place that can fix a row whose executor is already gone, so
+ * it runs on every tick regardless of whether any project is due. Returns what
+ * it settled so an operator can see it in the response rather than inferring it
+ * from a client complaint.
+ */
+async function sweepAbandonedRuns(supabase: SupabaseClient): Promise<string[]> {
+  const cutoff = new Date(Date.now() - ABANDONED_RUN_MS).toISOString();
+  const { data } = await supabase
+    .from("runs")
+    .select("id")
+    .eq("status", "running")
+    .lt("started_at", cutoff);
+
+  const settled: string[] = [];
+  for (const row of (data ?? []) as { id: string }[]) {
+    if (await settleAbandonedRun(supabase, row.id, INTERRUPTED_RUN_ERROR)) settled.push(row.id);
+  }
+  return settled;
+}
+
 // Scheduler entrypoint. Runs every due project. Supports POST (manual curl)
 // and GET (Vercel Cron, which sends the Authorization: Bearer $CRON_SECRET header).
 // Constant-time comparison so the secret can't be probed via response timing.
@@ -44,13 +80,20 @@ async function handle(request: Request) {
 
   const supabase = createServiceClient();
 
+  // Before anything else, and unconditionally: a stranded row is stranded
+  // whether or not a project happens to be due this tick.
+  const sweptRunIds = await sweepAbandonedRuns(supabase);
+
   const { data: projectRows, error: projErr } = await supabase
     .from("projects")
     .select("*")
     .neq("schedule", "off");
 
   if (projErr) {
-    return NextResponse.json({ error: projErr.message }, { status: 500 });
+    return NextResponse.json(
+      { error: projErr.message, sweptRuns: sweptRunIds },
+      { status: 500 },
+    );
   }
 
   const projects = (projectRows ?? []) as Project[];
@@ -102,7 +145,7 @@ async function handle(request: Request) {
     }
   }
 
-  return NextResponse.json({ processed: results });
+  return NextResponse.json({ processed: results, sweptRuns: sweptRunIds });
 }
 
 export async function POST(request: Request) {
