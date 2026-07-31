@@ -351,6 +351,7 @@ npm run cli -- keys set anthropic                    # hidden prompt, key verifi
 # Set up an account over the API — the agent-drivable part:
 npm run cli -- projects create --name "Acme" --brand "Acme" --domains acme.io
 npm run cli -- prompts add <projectId> --text "best crm for startups" --topic CRM
+npm run cli -- competitors add Vanta Drata Secureframe          # who you're measured against
 npm run cli -- runs trigger <projectId>
 npm run cli -- runs get <runId>          # share-of-voice report (--json for full)
 
@@ -364,6 +365,33 @@ resolves the deployment from `--url`, then `$LETTERTRACE_URL`, then the URL save
 at login. Tokens live in `~/.lettertrace/config.json` (one per audience). The
 data commands use REST v1; the `mcp` commands speak the Model Context Protocol
 directly. The mechanism underneath is:
+
+#### Competitors from the CLI (`competitors`)
+
+Share of voice needs something to compare against, so setting competitors is part
+of standing a brand up rather than a later refinement — monitoring Vanta means
+tracking Drata and Secureframe, and that should be one command:
+
+```bash
+npm run cli -- competitors add Vanta Drata Secureframe   # several at once
+npm run cli -- competitors add Vanta --name Sprinto --domain sprinto.com --aliases "Sprinto Inc"
+npm run cli -- competitors Vanta                         # what's tracked, with ids
+npm run cli -- competitors remove <competitorId>
+```
+
+Anywhere a command takes a project, it accepts the **project name**, the **brand
+name**, a full id, or an unambiguous id prefix — the last because a shortened id
+is what you copy out of a table. Ids still work unchanged, so nothing an agent
+does needs to know about this; it exists so a person can say what they mean. An
+ambiguous name is refused with the ids listed rather than guessed at.
+
+Names the project already tracks are reported as skipped rather than failing, so
+re-running the same setup command is safe. The brand itself is refused — it
+cannot be its own competitor.
+
+`competitors discovered <projectId>` is the other direction: companies this
+project's own answers have already named that nobody is tracking. It is evidence
+from runs you have already paid for, not a guess.
 
 #### Setting your provider key from the CLI (`keys`)
 
