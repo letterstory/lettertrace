@@ -9,6 +9,7 @@ import {
 import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
 import {
   ROUTERS,
+  ROUTER_LIST,
   routerCanMeasure,
   routerProviders,
   routerRefusalMessage,
@@ -337,6 +338,15 @@ export async function resolveRunKey(
   });
 }
 
+/** The engines the shipped router covers, as prose. Read from the registry so
+ *  the sales line in the exhausted message can't outlive the support entry. */
+function routerCoverage(): string {
+  const names = routerProviders(ROUTER_LIST[0].id).map((p) => PROVIDERS[p].label);
+  return names.length <= 1
+    ? names[0] ?? "your engines"
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** The RouteInfo for a stored router credential. */
 function routeOf(key: DecryptedRouterKey): RouteInfo {
   return { router: key.router, baseUrl: key.baseUrl };
@@ -357,7 +367,17 @@ export function engineKeyMessage(key: ResolvedKey): string {
   if (key.source === "unroutable" && key.refusal) return key.refusal;
 
   if (key.source === "exhausted") {
-    return `You've used all ${key.limit ?? 0} free runs on ${engine}. Add your own ${providerLabel} key in Settings to keep monitoring.`;
+    // Name the router here and only here. A router key ranks BELOW the trial in
+    // both resolvers — a working grounded credential beats refusing — so a trial
+    // user never encounters one in the ordinary course of things, and they are
+    // the likeliest person to want one: no provider account yet, and a router is
+    // a single signup rather than one per assistant. This is the moment the
+    // choice is actually in front of them.
+    return (
+      `You've used all ${key.limit ?? 0} free runs on ${engine}. ` +
+      `Add your own ${providerLabel} key in Settings to keep monitoring, ` +
+      `or one ${ROUTER_LIST[0].label} key that covers ${routerCoverage()}.`
+    );
   }
   if (key.source === "mismatch") {
     const have = (key.available ?? []).map((p) => PROVIDERS[p].label);

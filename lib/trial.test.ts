@@ -438,3 +438,31 @@ describe("nextRunMessage", () => {
     expect(nextRunMessage(k)).not.toContain("Free runs");
   });
 });
+
+// A trial user is the likeliest person to want a router — no provider account
+// yet, and one signup instead of one per assistant — but a router key ranks
+// BELOW the trial in both resolvers, so they never meet one in the ordinary
+// course of things. The exhausted message is the one place the choice is in
+// front of them, and it has to name it.
+describe("the exhausted message offers the router", () => {
+  it("names both ways to keep monitoring", async () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    const k = await runKeyFor(db(5), "user-1", "anthropic", "claude-opus-4-8");
+    const message = engineKeyMessage(k);
+    expect(k.source).toBe("exhausted");
+    expect(message).toContain("Anthropic (Claude) key");
+    expect(message).toContain("Concentrate");
+  });
+
+  // The engines come from the registry, so the pitch can't outlive the support
+  // entry that backs it.
+  it("names the engines that router actually covers", async () => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
+    const k = await runKeyFor(db(5), "user-1", "anthropic");
+    const message = engineKeyMessage(k);
+    expect(message).toContain("Anthropic (Claude) and OpenAI (ChatGPT)");
+    // Never promises an engine a router can't measure.
+    expect(message).not.toContain("Perplexity");
+    expect(message).not.toContain("Gemini");
+  });
+});

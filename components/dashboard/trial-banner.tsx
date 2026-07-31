@@ -1,6 +1,7 @@
 import { KeyRound, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { ROUTER_LIST } from "@/lib/routers";
 
 // Shown in the dashboard when a user is running on the operator's shared (trial)
 // keys instead of their own. Nudges them toward BYOK, and hard-stops the message
@@ -18,6 +19,13 @@ export function TrialBanner({
   // Optional walkthrough explaining the BYOK model, shown once the free runs
   // are gone. Any embeddable player URL (e.g. a YouTube embed link).
   const videoUrl = process.env.NEXT_PUBLIC_BYOK_VIDEO_URL;
+
+  // The one moment the router is worth mentioning. A trial user is the likeliest
+  // person to want one — they have no provider account yet, and a router is a
+  // single signup instead of one per assistant — but the trial legitimately
+  // outranks a router key everywhere else in the resolver, so they would
+  // otherwise never see it offered. Here the choice is actually in front of them.
+  const router = ROUTER_LIST[0];
 
   return (
     <div
@@ -47,6 +55,12 @@ export function TrialBanner({
                     limit === 1 ? "run" : "runs"
                   } left, then you bring your own key.`}
             </p>
+            {exhausted && router && (
+              <p className="mt-1 text-xs text-ink-faint">
+                One key per assistant, or a single {router.label} key that covers them all —
+                either works.
+              </p>
+            )}
             {!exhausted && limit <= 12 && (
               <div className="mt-2 flex items-center gap-1.5">
                 {Array.from({ length: limit }, (_, i) => (
