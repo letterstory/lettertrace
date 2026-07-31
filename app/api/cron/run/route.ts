@@ -8,7 +8,7 @@ import {
   ABANDONED_RUN_MS,
   INTERRUPTED_RUN_ERROR,
 } from "@/lib/engine";
-import { decryptSecret } from "@/lib/crypto";
+import { resolveRunKey } from "@/lib/trial";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -104,25 +104,33 @@ async function handle(request: Request) {
     if (!isDue(project, now)) continue;
 
     try {
-      const { data: keyRow } = await supabase
-        .from("provider_keys")
-        .select("encrypted_key")
-        .eq("user_id", project.user_id)
-        .eq("provider", project.default_provider)
-        .maybeSingle();
-
-      if (!keyRow?.encrypted_key) {
-        results.push({ projectId: project.id, status: "skipped", reason: "no key" });
+      // Ask the run resolver rather than reading provider_keys directly. The
+      // direct read predates router credentials and silently skipped anyone
+      // paying through a gateway — their scheduled runs simply never happened,
+      // with "no key" as the only trace. The resolver also knows whether the
+      // project's grounding survives the route.
+      //
+      // Scheduled runs stay strictly self-funded: `source` is 'own' for both a
+      // direct key and a router key, and anything else — including a trial with
+      // free runs left — is skipped, so an unattended schedule can never spend
+      // the operator's allowance.
+      const key = await resolveRunKey(supabase, project.user_id, project);
+      if (key.source !== "own" || !key.apiKey) {
+        results.push({
+          projectId: project.id,
+          status: "skipped",
+          reason: key.source === "own" ? "no key" : key.source,
+        });
         continue;
       }
 
-      const apiKey = decryptSecret(keyRow.encrypted_key as string);
       const result = await executeRun({
         supabase,
         project,
-        provider: project.default_provider,
-        model: project.default_model,
-        apiKey,
+        provider: key.provider,
+        model: key.model,
+        apiKey: key.apiKey,
+        route: key.route,
         context: {
           channel: "cron",
           actorType: "cron",

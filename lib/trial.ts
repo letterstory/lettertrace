@@ -1,16 +1,42 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Project, Provider } from "@/lib/types";
-import { getDecryptedKey, getConfiguredProviders } from "@/lib/data";
+import type { Project, Provider, RouteInfo } from "@/lib/types";
+import {
+  getDecryptedKey,
+  getConfiguredProviders,
+  getDecryptedRouterKeys,
+  type DecryptedRouterKey,
+} from "@/lib/data";
 import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
+import {
+  ROUTERS,
+  ROUTER_LIST,
+  routerCanMeasure,
+  routerProviders,
+  routerRefusalMessage,
+  routerSupport,
+} from "@/lib/routers";
 import { article } from "@/lib/utils";
 
 // ------------------------------------------------------------------
-// Free-trial layer. When the operator configures a shared (trial) key, users
-// who haven't added their own key get a CONFIGURABLE number of free monitoring
-// runs on it (default 5). After that, data collection stops until they bring
-// their own key. With no trial keys set, the app is bring-your-own-key from
-// the start (the default). Token usage is still recorded per user so the
-// operator can watch spend, but the gate is runs.
+// Credential resolution + the free-trial layer.
+//
+// Three ways a call can be paid for, in this order of preference:
+//   1. the user's own provider key      (unlimited by us)
+//   2. an LLM router credential        (unlimited by us; one key, many engines)
+//   3. the operator's shared trial key (metered: a few free runs, then stop)
+//
+// A router key resolves to source 'own' deliberately, not to a source of its
+// own. `source` answers one question — who pays, and is it metered — and on that
+// question a router key is indistinguishable from a direct key: it is the user's
+// credential, we don't meter it, and no free run is consumed. Every gate that
+// reads `source` therefore keeps working unchanged. WHICH credential carried the
+// call travels separately, in `route`, because that is a different question with
+// a different consumer (it is recorded on the run so a step change in a trend
+// line can be attributed to a credential switch).
+//
+// With no trial keys set, the app is bring-your-own-key from the start (the
+// default). Token usage is still recorded per user so the operator can watch
+// spend, but the gate is runs.
 // ------------------------------------------------------------------
 
 const DEFAULT_TRIAL_RUN_LIMIT = 5;
@@ -70,13 +96,30 @@ export async function getTrialRunsUsed(
   return Number((data as { trial_runs_used?: number } | null)?.trial_runs_used ?? 0);
 }
 
-export type KeySource = "own" | "trial" | "none" | "exhausted" | "mismatch";
+export type KeySource =
+  | "own"
+  | "trial"
+  | "none"
+  | "exhausted"
+  | "mismatch"
+  // The only credential that could pay for this engine is a router that can't
+  // measure it comparably — a distinct state from "no key", because the fix is
+  // different (switch engine, turn off web search, or add a direct key) and
+  // because running it anyway would produce data that looks fine and isn't.
+  | "unroutable";
 
 export interface ResolvedKey {
   source: KeySource;
   apiKey?: string;
   provider: Provider;
   model: string; // model to run with (own -> project model; trial -> trial override)
+  /** Set when `apiKey` is a router credential: which gateway to call through.
+   *  Null/absent means a direct provider call, as it always was. */
+  route?: RouteInfo | null;
+  /** For 'unroutable': the pre-composed explanation, which needs the router and
+   *  the reason it refused — neither of which is recoverable from the fields
+   *  above once the resolver has returned. */
+  refusal?: string;
   /** What was ASKED for, before any substitution. `provider`/`model` above are
    *  what will actually be called, and the two differ whenever a trial forces a
    *  cheaper model or a non-run task falls back to another provider's key. Every
@@ -131,10 +174,30 @@ export async function resolveKey(
     p === preferred && preferredModel ? preferredModel : defaultModelFor(p);
   const requested = { provider: preferred, model: modelFor(preferred) };
 
-  // 1. The user's own key (unlimited by us).
+  // 1. Anything the user pays for, closest engine first: for each provider in
+  //    preference order, their own key and then a router that reaches it.
+  //
+  //    Provider order outranks credential type on purpose. These are suggestion
+  //    and classification calls, so the engine's suitability matters more than
+  //    which credential settles the bill, and a user holding a direct Claude key
+  //    should get Claude rather than Claude-via-a-gateway. Web search never
+  //    applies to utility work, so any router that reaches the engine will do.
+  const routerKeys = await getDecryptedRouterKeys(supabase, userId);
   for (const p of order) {
     const own = await getDecryptedKey(supabase, userId, p);
     if (own) return { source: "own", apiKey: own, provider: p, model: modelFor(p), requested };
+
+    const viaRouter = routerKeys.find((rk) => routerSupport(rk.router, p) !== null);
+    if (viaRouter) {
+      return {
+        source: "own",
+        apiKey: viaRouter.apiKey,
+        route: routeOf(viaRouter),
+        provider: p,
+        model: modelFor(p),
+        requested,
+      };
+    }
   }
 
   // 2. A trial key, if free runs remain.
@@ -183,13 +246,32 @@ export async function resolveRunKeyFor(
   supabase: SupabaseClient,
   userId: string,
   provider: Provider,
-  model?: string,
+  model: string | undefined,
+  // Required, not defaulted, so the compiler names every call site if this ever
+  // grows another caller. Getting it wrong is not a cosmetic bug: a router that
+  // hasn't been shown to pass native search through must not serve a project
+  // that asks for grounded answers, and only the caller knows whether it does.
+  opts: { webSearch: boolean },
 ): Promise<ResolvedKey> {
   const requested = { provider, model: model || defaultModelFor(provider) };
   const base = { provider, model: requested.model, requested };
 
   const own = await getDecryptedKey(supabase, userId, provider);
   if (own) return { ...base, source: "own", apiKey: own };
+
+  // A router credential, but only one that can measure this engine the same way
+  // a direct key would — see routerCanMeasure. A router that reaches the engine
+  // without carrying its web search is refused below rather than used here.
+  const routerKeys = await getDecryptedRouterKeys(supabase, userId);
+  const usable = routerKeys.find((rk) =>
+    routerCanMeasure(rk.router, provider, {
+      webSearch: opts.webSearch,
+      verified: rk.searchVerified,
+    }),
+  );
+  if (usable) {
+    return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };
+  }
 
   // The operator's shared key, but only for the engine actually chosen.
   const limit = trialRunLimit();
@@ -210,25 +292,64 @@ export async function resolveRunKeyFor(
     }
   }
 
+  // A router the user holds could reach this engine but not measure it. Reported
+  // as its own state, and before the mismatch/none branches: "no key" would be
+  // false (they have a credential that reaches it) and "switch engines" alone
+  // would omit the two other fixes — turning web search off, or re-checking the
+  // key. routerRefusalMessage picks whichever of the three applies.
+  const blocked = routerKeys.find((rk) => routerSupport(rk.router, provider) !== null);
+  if (blocked) {
+    return {
+      ...base,
+      source: "unroutable",
+      refusal: routerRefusalMessage(blocked.router, provider, {
+        webSearch: opts.webSearch,
+        verified: blocked.searchVerified,
+      }),
+    };
+  }
+
   // No key for the selected engine. Holding a key for a DIFFERENT one is the
   // more useful thing to report than "no key": the fix is a dropdown, not a
   // signup. This is the case that used to fall through and run on Claude.
-  const others = (await getConfiguredProviders(supabase, userId)).filter(
-    (p) => p !== provider,
-  );
+  //
+  // A router counts as holding keys for every engine it can serve: to a user who
+  // set up one router key and picked Gemini, "you have no keys" is simply wrong,
+  // and the engines their router does cover are exactly the switch worth
+  // offering. Deduped, since two routers can cover the same engine.
+  const direct = await getConfiguredProviders(supabase, userId);
+  const viaRouters = routerKeys.flatMap((rk) => routerProviders(rk.router));
+  const others = Array.from(new Set([...direct, ...viaRouters])).filter((p) => p !== provider);
   if (others.length > 0) return { ...base, source: "mismatch", available: others };
 
   if (trialKey) return { ...base, source: "exhausted", remaining: 0, limit };
   return { ...base, source: "none" };
 }
 
-/** Resolve the key for a project's monitoring run (delegates to resolveRunKeyFor). */
+/** Resolve the key for a project's monitoring run (delegates to resolveRunKeyFor).
+ *  The project is what knows whether its answers are supposed to be grounded. */
 export async function resolveRunKey(
   supabase: SupabaseClient,
   userId: string,
   project: Project,
 ): Promise<ResolvedKey> {
-  return resolveRunKeyFor(supabase, userId, project.default_provider, project.default_model);
+  return resolveRunKeyFor(supabase, userId, project.default_provider, project.default_model, {
+    webSearch: project.use_web_search,
+  });
+}
+
+/** The engines the shipped router covers, as prose. Read from the registry so
+ *  the sales line in the exhausted message can't outlive the support entry. */
+function routerCoverage(): string {
+  const names = routerProviders(ROUTER_LIST[0].id).map((p) => PROVIDERS[p].label);
+  return names.length <= 1
+    ? names[0] ?? "your engines"
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The RouteInfo for a stored router credential. */
+function routeOf(key: DecryptedRouterKey): RouteInfo {
+  return { router: key.router, baseUrl: key.baseUrl };
 }
 
 /**
@@ -241,8 +362,22 @@ export function engineKeyMessage(key: ResolvedKey): string {
   const engine = modelLabel(key.requested.provider, key.requested.model);
   const providerLabel = PROVIDERS[key.requested.provider].label;
 
+  // Composed by the resolver, which is the only place that still knows which
+  // router refused and why.
+  if (key.source === "unroutable" && key.refusal) return key.refusal;
+
   if (key.source === "exhausted") {
-    return `You've used all ${key.limit ?? 0} free runs on ${engine}. Add your own ${providerLabel} key in Settings to keep monitoring.`;
+    // Name the router here and only here. A router key ranks BELOW the trial in
+    // both resolvers — a working grounded credential beats refusing — so a trial
+    // user never encounters one in the ordinary course of things, and they are
+    // the likeliest person to want one: no provider account yet, and a router is
+    // a single signup rather than one per assistant. This is the moment the
+    // choice is actually in front of them.
+    return (
+      `You've used all ${key.limit ?? 0} free runs on ${engine}. ` +
+      `Add your own ${providerLabel} key in Settings to keep monitoring, ` +
+      `or one ${ROUTER_LIST[0].label} key that covers ${routerCoverage()}.`
+    );
   }
   if (key.source === "mismatch") {
     const have = (key.available ?? []).map((p) => PROVIDERS[p].label);
@@ -274,6 +409,14 @@ export function nextRunMessage(key: ResolvedKey): string {
 
   if (key.source === "trial" && key.model !== key.requested.model) {
     return `Your next run asks your active prompts to ${willRun}. Free runs use a cheaper model on our keys. Add your own ${providerLabel} key to run ${chosen}.`;
+  }
+  // Name the router when one is carrying the run. It is the same engine either
+  // way — which is why runs.provider doesn't change — but a user who set up a
+  // gateway should be able to see that it is the thing being billed, and a run
+  // recorded "via Concentrate" is what later explains a step in the trend line.
+  if (key.route) {
+    const routerLabel = ROUTERS[key.route.router].label;
+    return `Your next run asks your active prompts to ${willRun} via ${routerLabel} and records where your brand shows up.`;
   }
   return `Your next run asks your active prompts to ${willRun} and records where your brand shows up.`;
 }

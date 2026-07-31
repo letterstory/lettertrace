@@ -1140,7 +1140,9 @@ export async function triggerRunForProject(
     return { ok: false, code: "invalid_engine", message: override.message };
   }
 
-  const key = await resolveRunKeyFor(supabase, userId, override.provider, override.model);
+  const key = await resolveRunKeyFor(supabase, userId, override.provider, override.model, {
+    webSearch: project.use_web_search,
+  });
   if (key.source !== "own") {
     const providerLabel = PROVIDERS[key.requested.provider].label;
     return {
@@ -1159,6 +1161,7 @@ export async function triggerRunForProject(
     provider: key.provider,
     model: key.model,
     apiKey: key.apiKey!,
+    route: key.route,
     context: options?.context,
   };
 
@@ -1332,6 +1335,10 @@ export async function getProjectHistory(
       createdAt: run.created_at,
       provider: run.provider,
       model: run.model,
+      // Which credential carried this point. A history series is exactly where a
+      // credential switch needs to be visible: the engine is unchanged, so
+      // without this a step in the line has no candidate explanation.
+      route: run.route ?? null,
       totalResponses,
       brandResponsesMentioned: summary.brandResponsesMentioned,
       brandMentionRate: summary.brandMentionRate,

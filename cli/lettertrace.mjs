@@ -232,6 +232,102 @@ const commands = {
     info(c.dim("\nSet one with: lettertrace keys set <provider>  (the key is never typed as an argument)"));
   },
 
+  // LLM router credentials: one key that reaches several assistants. Same secret
+  // handling as `keys` — the key is never an argument — and the same
+  // server-derived catalog, so a router added to the deployment works here with
+  // no new CLI release.
+  async routers() {
+    const sub = rest_[0] ?? "list";
+
+    for (const banned of ["key", "api-key", "apikey", "secret"]) {
+      if (flags[banned] !== undefined) {
+        throw new UsageError(
+          `--${banned} is not accepted: a key on the command line leaks into shell history and process lists. ` +
+            `Pipe it in, set $${SECRET_ENV}, or use --key-file <path>. Rotate that key.`,
+        );
+      }
+    }
+
+    if (sub === "set") {
+      const router = need(rest_[1], "routers set needs a <router> (see `lettertrace routers`)");
+      const current = await withAutoLogin(() => rest(base, "GET", "/router-keys"));
+      const supported = current.routers ?? [];
+      const match = supported.find((r) => r.id === router);
+      if (!match) {
+        throw new UsageError(
+          `Unknown router "${router}". This deployment supports: ${supported.map((r) => r.id).join(", ") || "(none)"}.`,
+        );
+      }
+
+      const apiKey = await readSecret({
+        file: typeof flags["key-file"] === "string" ? flags["key-file"] : undefined,
+        label: `${match.label} key (input hidden): `,
+      });
+      const body = { api_key: apiKey };
+      if (typeof flags.label === "string") body.label = flags.label;
+      if (typeof flags["base-url"] === "string") body.base_url = flags["base-url"];
+
+      // Warn about the wait: this call makes a small request per engine plus a
+      // real web search, so it is slower than storing a provider key.
+      info(c.dim(`Checking what this ${match.label} key can measure (a few seconds)...`));
+      const out = await withAutoLogin(() => rest(base, "PUT", `/router-keys/${router}`, { body }));
+      if (JSON_OUT) return printJson(out);
+      ok(`Verified and stored your ${match.label} key (${out.key.key_hint}).`);
+      // The per-engine verdict is the point of the command: a stored key that
+      // can't carry web search can't serve a grounded project, and the user has
+      // no other way to find that out.
+      for (const check of out.checks ?? []) {
+        if (!check.reachable) {
+          info(c.dim(`  ${check.provider}: not reachable${check.error ? ` — ${check.error}` : ""}`));
+        } else if (check.searchWorks === false) {
+          info(c.dim(`  ${check.provider}: reachable, but web search is NOT confirmed`));
+        } else {
+          info(c.dim(`  ${check.provider}: measurable, web search available`));
+        }
+      }
+      return;
+    }
+
+    if (sub === "remove" || sub === "rm") {
+      const router = need(rest_[1], "routers remove needs a <router>");
+      const out = await withAutoLogin(() => rest(base, "DELETE", `/router-keys/${router}`));
+      if (JSON_OUT) return printJson(out);
+      ok(`Removed the ${router} router key (${out.key.key_hint}).`);
+      return;
+    }
+
+    const out = await withAutoLogin(() => rest(base, "GET", "/router-keys"));
+    if (JSON_OUT) return printJson(out);
+    const stored = new Map((out.keys ?? []).map((k) => [k.router, k]));
+    table(
+      (out.routers ?? []).map((r) => {
+        const row = stored.get(r.id);
+        return {
+          router: r.id,
+          name: r.label,
+          key: row?.key_hint ?? c.dim("not set"),
+          engines: (r.providers ?? []).join(", "),
+          grounded: row ? (row.search_verified ?? []).join(", ") || c.dim("none") : "",
+          where: r.key_url,
+        };
+      }),
+      [
+        { key: "router", label: "ROUTER" },
+        { key: "name", label: "NAME" },
+        { key: "key", label: "STORED KEY" },
+        { key: "engines", label: "ENGINES" },
+        { key: "grounded", label: "WEB SEARCH OK" },
+        { key: "where", label: "GET A KEY" },
+      ],
+    );
+    info(
+      c.dim(
+        "\nENGINES is what the router can reach; WEB SEARCH OK is what it was confirmed to ground.",
+      ),
+    );
+    info(c.dim("Set one with: lettertrace routers set <router>  (the key is never typed as an argument)"));
+  },
+
   async projects() {
     const sub = rest_[0] ?? "list";
     if (sub === "create") {
@@ -485,6 +581,14 @@ function printHelp() {
     `                                         --key-file (- = stdin), $${SECRET_ENV},`,
     "                                         piped stdin, or a hidden prompt — never a flag.",
     "  keys remove <provider>                 Forget the stored key for a provider",
+    "",
+    c.bold("ROUTER KEYS (one key, several assistants)"),
+    "  routers                                Which LLM router keys are stored, and what",
+    "                                         each one was confirmed able to measure",
+    "  routers set <router> [--key-file <p>] [--label <l>] [--base-url <u>]",
+    "                                         Verify + store a router key. Reads the secret",
+    "                                         the same way `keys set` does.",
+    "  routers remove <router>                Forget the stored key for a router",
     "",
     c.bold("DATA (REST v1)"),
     "  projects                               List organizations",

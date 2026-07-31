@@ -28,12 +28,22 @@ function splitEngine(value: string): { provider: string; model: string } {
 export default function ProjectForm({
   project,
   configuredProviders = [],
+  routedProviders = [],
+  routedGroundedProviders = [],
   onTrial = false,
 }: {
   project: Project | null;
   /** Providers the user has a key for, so the picker can flag an engine that
    *  can't run before they discover it as a failed run. */
   configuredProviders?: Provider[];
+  /** Providers a saved router credential can reach. Counts as having a key —
+   *  otherwise a user who set up one router key and no direct keys is told every
+   *  engine will fail, which is both wrong and the opposite of the point. */
+  routedProviders?: Provider[];
+  /** The subset whose live-web search the router was confirmed to carry. Split
+   *  from the above because the answer depends on the toggle in this very form:
+   *  with web search on, a router that can't ground can't serve the engine. */
+  routedGroundedProviders?: Provider[];
   /** Running on the operator's shared keys, which force a cheaper model. The
    *  picker promises "the assistant we query", so on the trial that promise is
    *  only true of the provider, not the model. */
@@ -61,10 +71,15 @@ export default function ProjectForm({
   const [error, setError] = useState<string | null>(null);
 
   // Reflects the CURRENT dropdown value, not the saved project, so the warning
-  // appears while they're choosing rather than after the next failed run.
+  // appears while they're choosing rather than after the next failed run. Same
+  // reason it reads the live web-search toggle: with grounding on, a router that
+  // doesn't carry native search can't serve the engine, and that combination is
+  // reachable in this form before anything is saved.
   const selectedProvider = splitEngine(engine).provider as Provider;
-  const engineNeedsKey =
-    Boolean(PROVIDERS[selectedProvider]) && !configuredProviders.includes(selectedProvider);
+  const covered =
+    configuredProviders.includes(selectedProvider) ||
+    (useWebSearch ? routedGroundedProviders : routedProviders).includes(selectedProvider);
+  const engineNeedsKey = Boolean(PROVIDERS[selectedProvider]) && !covered;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

@@ -117,6 +117,8 @@ function makeRun(overrides: Partial<Run>): Run {
     status: "completed",
     provider: "anthropic",
     model: "claude-sonnet-4-6",
+    // Direct provider key, as every run before router support was.
+    route: null,
     prompt_count: 2,
     completed_count: 2,
     replicates: 1,
@@ -433,7 +435,11 @@ describe("triggerRunForProject", () => {
       model: "gpt-4o-mini",
     });
     expect(outcome).toMatchObject({ ok: true, result: { runId: "run-10" } });
-    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o-mini");
+    // The project's grounding setting travels with the request: a router
+    // credential may serve an ungrounded project and not a grounded one.
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o-mini", {
+      webSearch: PROJECT.use_web_search,
+    });
     expect(executeRun).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -464,7 +470,9 @@ describe("triggerRunForProject", () => {
     });
 
     await triggerRunForProject(db as never, "user-1", "proj-1", { provider: "openai" });
-    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o");
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o", {
+      webSearch: PROJECT.use_web_search,
+    });
   });
 
   // Same validation on the per-run override: an unusable pair would otherwise

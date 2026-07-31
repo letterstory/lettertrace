@@ -12,7 +12,7 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable clone of tools like Profound / AthenaHQ / AirOps, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys. They're encrypted at rest and never leave your infrastructure.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
 - 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), and Perplexity Sonar. Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
@@ -124,10 +124,42 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ### 5. First monitor
 
-1. **Settings** → add your Anthropic, OpenAI, Google, and/or Perplexity API key (verified on save, encrypted at rest), then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews). Prefer a terminal? [`lettertrace keys set anthropic`](#setting-your-provider-key-from-the-cli-keys) does the same thing.
+1. **Settings** → add your Anthropic, OpenAI, Google, and/or Perplexity API key (verified on save, encrypted at rest), **or one [LLM router key](#llm-routers-one-key-several-assistants)**, then fill in your **brand & project** (name, aliases, and the answer engine to monitor with, including Gemini or Google AI Overviews). Prefer a terminal? [`lettertrace keys set anthropic`](#setting-your-provider-key-from-the-cli-keys) does the same thing.
 2. **Competitors** → add the brands you want to benchmark against.
 3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
 4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.
+
+## LLM routers (one key, several assistants)
+
+Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. One router ships today — the bar for adding another is a live probe, not a docs page, for the reason spelled out below:
+
+| Router | Engines it serves | Notes |
+|---|---|---|
+| **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT | No markup on tokens, which matters when the key is yours. Mirrors both providers' native APIs, so a routed answer is the same request a direct key sends — forced browse included. |
+
+Settings → **Or use one router key**, or from the terminal:
+
+```bash
+lettertrace routers                       # what's stored, and what each key can measure
+lettertrace routers set concentrate       # key read from a hidden prompt / stdin / --key-file
+lettertrace routers remove concentrate
+```
+
+Three things are worth understanding before you rely on one.
+
+**A router is a credential, not an answer engine.** A run served by Concentrate against Claude still measured Claude, so it is recorded as `provider = anthropic` with `route = concentrate` alongside it. Switching from a direct key to a router (or back) keeps one continuous trend line instead of splitting your history and share of voice across two entries that are the same answer surface.
+
+**Grounding is verified, not assumed.** Every monitored answer is supposed to come from the provider's *native* web search, forced. A gateway that normalizes requests can accept those parameters and quietly drop them, and an ungrounded answer is not a cheaper version of a grounded one — it is a different measurement that still looks like data. So saving a router key runs a real forced search per engine and stores which ones actually returned sources (`router_keys.search_verified`). An engine that didn't is allowed to serve projects with web search **off**, and refused for projects with it on, with a message naming the fix. Operators can run the same check without an account:
+
+```bash
+ROUTER_API_KEY=... npx tsx scripts/probe-router.ts concentrate
+```
+
+The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.
+
+**Gemini, Google AI Overviews and Perplexity still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label.
+
+Router keys are encrypted at rest exactly like provider keys, and resolution order is: your own provider key → your router key → the operator's trial key (if any) → nothing.
 
 ## Scheduled monitoring
 
@@ -138,7 +170,7 @@ curl -X POST https://your-app.com/api/cron/run \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
-The endpoint uses the Supabase **service role** to find due projects across all users, decrypts each owner's key, and runs them. Only requests with the correct `CRON_SECRET` are accepted.
+The endpoint uses the Supabase **service role** to find due projects across all users, resolves each owner's own credential — a provider key or a [router key](#llm-routers-one-key-several-assistants) — and runs them. Scheduled runs are strictly self-funded: an owner on the free trial is skipped rather than spending the operator's allowance unattended. Only requests with the correct `CRON_SECRET` are accepted.
 
 - **Vercel:** [`vercel.json`](./vercel.json) registers a daily cron. Set `CRON_SECRET` in your Vercel env, Vercel automatically sends it as the `Authorization` bearer.
 - **Anything else:** a system crontab, GitHub Actions, or any scheduler that can send an authenticated HTTP request works.
@@ -156,7 +188,7 @@ Set in your environment:
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
 
-> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
+> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
 
 ## Programmatic access (REST API + MCP)
 
@@ -224,6 +256,16 @@ jq -n --arg k "$(cat ./anthropic.key)" '{api_key: $k}' | \
     --data-binary @-
 curl -X DELETE https://your-app.com/api/v1/keys/openai \
   -H "Authorization: Bearer lt_live_..."
+
+# LLM router keys: same shape, same "keys:read"/"keys:write" scopes. The PUT
+# response carries `checks` — per engine, whether this credential was actually
+# observed to carry the provider's native web search.
+curl https://your-app.com/api/v1/router-keys \
+  -H "Authorization: Bearer lt_live_..."
+jq -n --arg k "$(cat ./concentrate.key)" '{api_key: $k}' | \
+  curl -X PUT https://your-app.com/api/v1/router-keys/concentrate \
+    -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+    --data-binary @-
 
 # Toggle a prompt on or off
 curl -X PATCH https://your-app.com/api/v1/prompts/<prompt-id> \
@@ -338,6 +380,16 @@ npm run cli -- keys remove openai          # forget the stored key
 **The key is never a command-line argument.** Anything in `argv` lands in your
 shell history and is readable by every process on the machine, and there's no
 taking that back — so `--key` is rejected outright rather than quietly accepted.
+
+`routers` is the same command for [LLM router keys](#llm-routers-one-key-several-assistants),
+with the same secret handling. It takes a few seconds longer because saving one
+runs a real forced web search per engine and reports what came back:
+
+```bash
+npm run cli -- routers                     # stored keys + what each can measure
+npm run cli -- routers set concentrate     # prompts, input hidden and not echoed
+npm run cli -- routers remove concentrate
+```
 The key is read from the first of these that's available:
 
 | Source | Use it for |
@@ -432,7 +484,7 @@ values
 
 Notes:
 
-- API-triggered runs are **BYOK-only** — the account must have its own provider key; free-trial runs stay dashboard-only. That key can be set over the API too (`PUT /api/v1/keys/<provider>`, or `lettertrace keys set`), so an agent never has to hand the user back to the browser mid-setup.
+- API-triggered runs are **BYOK-only** — the account must hold its own credential, either a provider key or a [router key](#llm-routers-one-key-several-assistants); free-trial runs stay dashboard-only. Either can be set over the API too (`PUT /api/v1/keys/<provider>`, `PUT /api/v1/router-keys/<router>`, or `lettertrace keys set` / `routers set`), so an agent never has to hand the user back to the browser mid-setup.
 - Projects created via the API start with `schedule: "off"` — trigger runs explicitly (or flip the schedule in the dashboard).
 - API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
 - Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
@@ -474,7 +526,8 @@ Deploy anywhere that runs Next.js. On **Vercel**: import the repo, set the env v
 
 ## Security notes
 
-- Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to any client — browser, REST, or CLI (only a masked hint like `sk-ant-…4a9c`). Whichever surface stores one, it goes through the same verify → encrypt → store path in `lib/provider-keys.ts`, and the CLI refuses to take a key as a command-line argument so it can't leak through shell history or `ps`.
+- Provider API keys are **encrypted with AES-256-GCM** using `ENCRYPTION_KEY` and are never returned to any client — browser, REST, or CLI (only a masked hint like `sk-ant-…4a9c`). Whichever surface stores one, it goes through the same verify → encrypt → store path in `lib/provider-keys.ts` (`lib/router-keys.ts` for router credentials), and the CLI refuses to take a key as a command-line argument so it can't leak through shell history or `ps`.
+- A self-hosted router base URL must be **https**: that value is where your API key gets sent, so a plain-http or malformed URL is rejected rather than stored.
 - All data is isolated per user by **Postgres Row Level Security**. The service-role key is used only by the cron endpoint and the API-key-authenticated surface (`/api/v1`, `/api/mcp`), where every query is scoped to the key's owner.
 - Lettertrace API keys are stored as **SHA-256 hashes** (never recoverable); the plaintext is shown once at creation.
 - Nothing is sent to any third party except the AI providers **you** configure, using **your** keys.
@@ -493,6 +546,7 @@ docs/
   prompt-playbook.md     What live client runs taught us about prompt shape
 scripts/
   pilot-client.ts        Dry-run a client through the pipeline (no DB writes)
+  probe-router.ts        Does a router really pass native web search through?
 lib/
   supabase/              Server / browser / middleware clients
   llm/                   Anthropic + OpenAI adapters (query, variations, sentiment)
@@ -501,6 +555,8 @@ lib/
   metrics.ts             Visibility / share-of-voice / sentiment aggregation
   crypto.ts              AES-256-GCM for BYOK keys
   provider-keys.ts       Verify → encrypt → store, shared by the dashboard + CLI
+  routers.ts             LLM router registry: engines served, how search travels
+  router-keys.ts         Verify → probe grounding → encrypt → store
   data.ts, types.ts, models.ts, utils.ts
 supabase/schema.sql      Postgres schema + RLS
 ```

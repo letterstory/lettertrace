@@ -230,6 +230,7 @@ export async function POST(request: Request) {
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey,
+      route: key.route,
       context: {
         channel: "dashboard",
         actorType: "user",

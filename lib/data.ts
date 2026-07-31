@@ -1,7 +1,13 @@
 import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret } from "@/lib/crypto";
-import type { Project, Provider, ProviderKeyPublic } from "@/lib/types";
+import type {
+  Project,
+  Provider,
+  ProviderKeyPublic,
+  RouterId,
+  RouterKeyPublic,
+} from "@/lib/types";
 
 // Server-side data helpers shared across pages and route handlers.
 // All expect a Supabase client already scoped to the request (RLS).
@@ -104,6 +110,72 @@ export async function getConfiguredProviders(
 ): Promise<Provider[]> {
   const keys = await getProviderKeysPublic(supabase, userId);
   return keys.map((k) => k.provider);
+}
+
+const ROUTER_KEY_COLUMNS = "id, router, label, base_url, key_hint, search_verified, created_at";
+
+/** Safe (no ciphertext) list of the user's stored LLM router keys. */
+export const getRouterKeysPublic = cache(async function getRouterKeysPublic(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<RouterKeyPublic[]> {
+  const { data } = await supabase
+    .from("router_keys")
+    .select(ROUTER_KEY_COLUMNS)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  return (data as RouterKeyPublic[] | null) ?? [];
+});
+
+/** A router credential with its plaintext key, for making calls (server-only). */
+export interface DecryptedRouterKey {
+  router: RouterId;
+  baseUrl: string | null;
+  /** Providers whose native web search this key was observed to pass through. */
+  searchVerified: Provider[];
+  apiKey: string;
+}
+
+/**
+ * The user's router credentials, decrypted, oldest first (server-only).
+ *
+ * Returns every stored router rather than a single "the" router: which one can
+ * serve a given engine depends on the engine, so the choice belongs to the
+ * resolver in lib/trial, not here. A row whose ciphertext won't decrypt is
+ * skipped — same as getDecryptedKey — since an undecryptable credential is
+ * indistinguishable from an absent one at the point of use.
+ */
+export async function getDecryptedRouterKeys(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<DecryptedRouterKey[]> {
+  const { data } = await supabase
+    .from("router_keys")
+    .select("router, base_url, search_verified, encrypted_key")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+
+  const rows = (data ?? []) as {
+    router: RouterId;
+    base_url: string | null;
+    search_verified: Provider[] | null;
+    encrypted_key: string;
+  }[];
+
+  const keys: DecryptedRouterKey[] = [];
+  for (const row of rows) {
+    try {
+      keys.push({
+        router: row.router,
+        baseUrl: row.base_url,
+        searchVerified: row.search_verified ?? [],
+        apiKey: decryptSecret(row.encrypted_key),
+      });
+    } catch {
+      continue;
+    }
+  }
+  return keys;
 }
 
 /** Decrypt the user's key for a provider (server-only). Returns null if none. */

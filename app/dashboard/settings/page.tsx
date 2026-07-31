@@ -1,12 +1,14 @@
-import { KeyRound, Building2, Palette, Plug } from "lucide-react";
+import { KeyRound, Building2, Palette, Plug, Shuffle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { getProject, getProviderKeysPublic } from "@/lib/data";
+import { getProject, getProviderKeysPublic, getRouterKeysPublic } from "@/lib/data";
 import { Card, CardBody, SectionHeading } from "@/components/ui";
 import { ThemeSwitch } from "@/components/theme";
 import KeysManager from "./keys-manager";
+import RoutersManager from "./routers-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
 import type { ApiKeyPublic } from "@/lib/types";
+import { routerCanMeasure, routerProviders } from "@/lib/routers";
 import { trialEnabled } from "@/lib/trial";
 
 export const dynamic = "force-dynamic";
@@ -18,9 +20,10 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const [project, keys, apiKeysRes] = await Promise.all([
+  const [project, keys, routerKeys, apiKeysRes] = await Promise.all([
     getProject(supabase, user.id),
     getProviderKeysPublic(supabase, user.id),
+    getRouterKeysPublic(supabase, user.id),
     supabase
       .from("api_keys")
       .select("id, name, key_hint, last_used_at, created_at")
@@ -28,6 +31,22 @@ export default async function SettingsPage() {
       .order("created_at", { ascending: true }),
   ]);
   const apiKeys = (apiKeysRes.data as ApiKeyPublic[] | null) ?? [];
+
+  // What the saved routers cover, split by whether their native web search was
+  // confirmed — the engine picker needs both, because the answer depends on the
+  // project's own web-search setting. Deduped: two routers can cover one engine.
+  const routedProviders = Array.from(
+    new Set(routerKeys.flatMap((k) => routerProviders(k.router))),
+  );
+  const routedGroundedProviders = Array.from(
+    new Set(
+      routerKeys.flatMap((k) =>
+        routerProviders(k.router).filter((p) =>
+          routerCanMeasure(k.router, p, { webSearch: true, verified: k.search_verified ?? [] }),
+        ),
+      ),
+    ),
+  );
 
   return (
     <div className="space-y-8">
@@ -58,6 +77,26 @@ export default async function SettingsPage() {
       <Card>
         <CardBody className="space-y-5">
           <div className="flex items-start gap-3">
+            <span className="mt-0.5 rounded bg-teal/15 p-2 text-teal-dark">
+              <Shuffle className="h-5 w-5" />
+            </span>
+            <div>
+              <h3 className="text-lg font-semibold text-ink">Or use one router key</h3>
+              <p className="mt-1 text-sm text-ink-soft">
+                A router (LLM gateway) reaches several assistants with a single key, so you
+                can skip the per-provider keys above. Runs are still recorded under the
+                assistant that answered, so switching between a direct key and a router
+                keeps one continuous history.
+              </p>
+            </div>
+          </div>
+          <RoutersManager keys={routerKeys} />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardBody className="space-y-5">
+          <div className="flex items-start gap-3">
             <span className="mt-0.5 rounded bg-butter-tint p-2 text-butter-ink">
               <Building2 className="h-5 w-5" />
             </span>
@@ -73,7 +112,9 @@ export default async function SettingsPage() {
           <ProjectForm
             project={project}
             configuredProviders={keys.map((k) => k.provider)}
-            onTrial={trialEnabled() && keys.length === 0}
+            routedProviders={routedProviders}
+            routedGroundedProviders={routedGroundedProviders}
+            onTrial={trialEnabled() && keys.length === 0 && routerKeys.length === 0}
           />
         </CardBody>
       </Card>

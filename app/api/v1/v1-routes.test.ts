@@ -619,6 +619,8 @@ describe("GET /api/v1/runs/:id/status", () => {
       status: "running",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      // Direct provider key, as every run before router support was.
+      route: null,
       prompt_count: 12,
       completed_count: 5,
       replicates: 2,

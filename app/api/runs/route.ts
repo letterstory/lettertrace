@@ -30,7 +30,10 @@ export async function POST() {
 
   // The selected engine has no key. Refusing beats running: the alternative is
   // storing another assistant's answers under this project's trend line.
-  if (key.source === "none" || key.source === "mismatch") {
+  // 'unroutable' belongs here too: the user holds a credential that reaches this
+  // engine, but not one that can measure it comparably. engineKeyMessage carries
+  // the reason and the fix.
+  if (key.source === "none" || key.source === "mismatch" || key.source === "unroutable") {
     return NextResponse.json(
       {
         error: engineKeyMessage(key),
@@ -69,6 +72,7 @@ export async function POST() {
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
+      route: key.route,
       context: {
         channel: "dashboard",
         actorType: "user",
@@ -90,6 +94,8 @@ export async function POST() {
       keySource: key.source,
       provider: key.provider,
       model: key.model,
+      // Which gateway carried it, if any — same reason the run row records it.
+      route: key.route?.router ?? null,
     });
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
