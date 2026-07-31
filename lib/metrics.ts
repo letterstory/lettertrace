@@ -312,6 +312,12 @@ export function pageKey(url: string): string | null {
   try {
     const u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    // Lowercasing the path is deliberate and technically wrong: paths are
+    // case-sensitive per RFC 3986, so /Blog/Post and /blog/post collide here.
+    // The trade favours recall, which is the right side for citation matching —
+    // an engine that reformats a URL's casing should not read as "your page
+    // wasn't cited". Revisit only if a real site serves different content at
+    // two casings of one path.
     const path = u.pathname.replace(/\/+$/, "").toLowerCase();
     return `${host}${path}`;
   } catch {

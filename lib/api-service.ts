@@ -29,7 +29,16 @@ import {
 import { waitUntil } from "@vercel/functions";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
-import { executeRun, prepareRun, resumeRun, type RunContext, type RunResult } from "@/lib/engine";
+import {
+  executeRun,
+  prepareRun,
+  resumeRun,
+  isAbandoned,
+  settleAbandonedRun,
+  INTERRUPTED_RUN_ERROR,
+  type RunContext,
+  type RunResult,
+} from "@/lib/engine";
 import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
@@ -37,6 +46,35 @@ import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 // the MCP tools so the two can't drift apart. Callers authenticate with a
 // Lettertrace API key, so `supabase` is the service-role client: RLS is
 // bypassed and every query here scopes by userId explicitly.
+
+/**
+ * Run queries concurrently and get the results back BY NAME.
+ *
+ * `Promise.all` over a list of queries hands back a positional array, and a
+ * positional destructure of seven heterogeneous queries is a trap the type
+ * system cannot spring: every PostgREST response carries both `data` and
+ * `count`, so pulling `{ count }` out of a `select()` type-checks perfectly.
+ * That is how getRunReport once read its competitor head-count out of the
+ * prompts query and its prompt targets out of the competitors query — pages[]
+ * came back empty and every report read no-competitors, through a typed
+ * codebase, past review, all the way to staging.
+ *
+ * Keying the queries removes the failure mode rather than fixing one instance
+ * of it: inserting, removing or reordering a query here cannot misalign
+ * anything, because nothing is aligned by position. Concurrency is unchanged —
+ * the builders are lazy and all start together inside the Promise.all.
+ */
+async function allOf<T extends Record<string, PromiseLike<unknown>>>(
+  queries: T,
+): Promise<{ [K in keyof T]: Awaited<T[K]> }> {
+  const keys = Object.keys(queries) as (keyof T)[];
+  const settled = await Promise.all(keys.map((k) => queries[k]));
+  const out = {} as { [K in keyof T]: Awaited<T[K]> };
+  keys.forEach((key, i) => {
+    out[key] = settled[i] as Awaited<T[typeof key]>;
+  });
+  return out;
+}
 
 /** A project row trimmed to what the API exposes. */
 export function projectSummary(p: Project) {
@@ -809,7 +847,7 @@ export interface RunReport {
   /** Per-URL cited-hit rates for prompts mapped to a target page: when the
    *  question a page was built for gets asked, is THAT page the one cited? */
   pages: PageStat[];
-  /** Per-topic brand visibility. Letterstory plans by topic, so this is the
+  /** Per-topic brand visibility. Content is usually planned by topic, so this is the
    *  join between "we published about X" and "are we surfacing for X". */
   topics: (TopicStat & { topic: string | null })[];
 }
@@ -845,29 +883,28 @@ export async function getRunReport(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [
-    { count },
-    { data: mentionRows },
-    { data: sourceRows },
-    { data: responseTopicRows },
-    { data: topicRows },
-    { data: promptTargetRows },
-    { count: competitorCount },
-  ] = await Promise.all([
-    supabase
+  const results = await allOf({
+    responseCount: supabase
       .from("responses")
       .select("id", { count: "exact", head: true })
       .eq("run_id", runId),
-    supabase.from("mentions").select("*").eq("run_id", runId),
-    supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
-    supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
-    supabase.from("topics").select("id, name").eq("project_id", run.project_id),
-    supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
-    supabase
+    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
+    sources: supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
+    responseTopics: supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
+    topics: supabase.from("topics").select("id, name").eq("project_id", run.project_id),
+    promptTargets: supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
+    competitors: supabase
       .from("competitors")
       .select("id", { count: "exact", head: true })
       .eq("project_id", run.project_id),
-  ]);
+  });
+  const { count } = results.responseCount;
+  const { data: mentionRows } = results.mentions;
+  const { data: sourceRows } = results.sources;
+  const { data: responseTopicRows } = results.responseTopics;
+  const { data: topicRows } = results.topics;
+  const { data: promptTargetRows } = results.promptTargets;
+  const { count: competitorCount } = results.competitors;
 
   const mentions = (mentionRows ?? []) as Mention[];
   const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
@@ -985,21 +1022,20 @@ export async function getRunResponses(
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
 
-  const [
-    { data: responseRows },
-    { data: sourceRows },
-    { data: mentionRows },
-    { data: promptRows },
-  ] = await Promise.all([
-    supabase
+  const results = await allOf({
+    responses: supabase
       .from("responses")
       .select("*")
       .eq("run_id", runId)
       .order("created_at", { ascending: true }),
-    supabase.from("sources").select("*").eq("run_id", runId),
-    supabase.from("mentions").select("*").eq("run_id", runId),
-    supabase.from("prompts").select("id, text").eq("project_id", run.project_id),
-  ]);
+    sources: supabase.from("sources").select("*").eq("run_id", runId),
+    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
+    prompts: supabase.from("prompts").select("id, text").eq("project_id", run.project_id),
+  });
+  const { data: responseRows } = results.responses;
+  const { data: sourceRows } = results.sources;
+  const { data: mentionRows } = results.mentions;
+  const { data: promptRows } = results.prompts;
 
   const promptTextById = new Map(
     ((promptRows ?? []) as Pick<Prompt, "id" | "text">[]).map((p) => [p.id, p.text]),
@@ -1134,9 +1170,18 @@ export async function triggerRunForProject(
     // waitUntil keeps the serverless invocation alive past the response; the
     // run settles its own row (completed/failed) exactly as in the sync path.
     waitUntil(
-      resumeRun(prepared, runParams).catch(() => {
-        // resumeRun never rejects for per-prompt failures; this guards the
-        // run-row settle itself so a crash can't take down the invocation.
+      resumeRun(prepared, runParams).catch(async (err) => {
+        // resumeRun never rejects for per-prompt failures, so reaching here
+        // means the settle itself failed — and swallowing that left the row
+        // reading "running" forever, with the status endpoint reporting it to
+        // a poller that would never see a terminal state. Settle it here
+        // instead. Only a killed invocation can still strand a row, which is
+        // what the cron sweeper is for.
+        await settleAbandonedRun(
+          supabase,
+          prepared.runId,
+          `The run stopped unexpectedly: ${err instanceof Error ? err.message : "unknown error"}`,
+        ).catch(() => {});
       }),
     );
     return {
@@ -1170,6 +1215,22 @@ export async function getRunStatus(
   if (!run) return null;
   const project = await getOwnedProject(supabase, userId, run.project_id);
   if (!project) return null;
+
+  // Settle a provably-dead run on the way past. The cron sweeper catches these
+  // too, but a poller shouldn't have to wait for the next scheduled tick to be
+  // told the thing it is polling is over — this endpoint exists precisely to
+  // answer "is it done yet", and "running" is a wrong answer for a run nothing
+  // is executing. The write is guarded and idempotent, so concurrent pollers
+  // and the sweeper can all race it harmlessly.
+  if (isAbandoned(run)) {
+    const settled = await settleAbandonedRun(supabase, run.id, INTERRUPTED_RUN_ERROR);
+    if (settled) {
+      return { ...run, status: "failed", error: INTERRUPTED_RUN_ERROR, finished_at: new Date().toISOString() };
+    }
+    // Lost the race: someone else settled it. Re-read rather than report stale.
+    const { data: fresh } = await supabase.from("runs").select("*").eq("id", run.id).maybeSingle();
+    return (fresh as Run | null) ?? run;
+  }
   return run;
 }
 
@@ -1194,7 +1255,7 @@ export interface ProjectHistory {
   brandName: string;
   points: HistoryPoint[];
   /** When the brand was first mentioned in any run, or null if never. This is
-   *  the event Letterstory is waiting on: publish, re-run, watch for it to flip. */
+   *  the event a content team is waiting on: publish, re-run, watch it flip. */
   firstMentionAt: string | null;
   /** True once any run has recorded a brand mention. */
   everMentioned: boolean;

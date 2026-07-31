@@ -39,9 +39,53 @@ function buildRegex(terms: string[]): RegExp | null {
 export function stripLinkSurfaces(text: string): string {
   const blank = (m: string) => " ".repeat(m.length);
   return text
-    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, blank) // whole markdown links
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, markdownLink)
     .replace(/\bhttps?:\/\/[^\s<>"')\]]+/gi, blank) // bare URLs
     .replace(/\bwww\.[^\s<>"')\]]+/gi, blank); // scheme-less www hosts
+}
+
+/**
+ * A markdown link keeps its LABEL and loses its target — unless the label is
+ * itself an address.
+ *
+ * Blanking the whole link was too broad. "[Vercel](https://vercel.com)" is the
+ * single most common way an assistant names a brand in a ranked list, and to
+ * the person reading the answer the brand is named: the label is the prose.
+ * Dropping it means a brand that assistants always link reads as never
+ * mentioned, which is the same class of error as counting a URL, pointing the
+ * other way — and the silent direction, because nobody notices a zero that
+ * looks plausible.
+ *
+ * "[vercel.com](https://vercel.com)" is different: what the reader sees is an
+ * address, so the answer cited a page rather than naming a company. Those are
+ * still blanked, which is what keeps a link from minting a first-mention.
+ *
+ * Length-preserving, and the label keeps its exact original offsets — the label
+ * starts one character into the match either way — so `firstPosition` and the
+ * prominence built on it stay valid.
+ */
+function markdownLink(match: string, label: string): string {
+  const keep = isAddress(label) ? "" : label;
+  return " " + keep + " ".repeat(match.length - keep.length - 1);
+}
+
+/**
+ * Does this link label read as an address rather than as words?
+ *
+ * A scheme or www prefix, or a bare dotted token with an optional path and
+ * nothing else around it. "Vercel" keeps its dots-free spelling and stays;
+ * "vercel.com" and "vercel.com/docs" go. A label with any surrounding prose
+ * ("Vercel — the hosting platform") is words, whatever else it contains.
+ *
+ * A brand whose NAME is a domain (You.com) is the residual cost: its label is
+ * indistinguishable from a citation of the same domain, so it is treated as
+ * one. That was the behaviour for every label before this change; it now
+ * applies only to the labels that genuinely look like addresses.
+ */
+function isAddress(label: string): boolean {
+  const trimmed = label.trim();
+  if (/^(?:https?:\/\/|www\.)/i.test(trimmed)) return true;
+  return /^[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/.test(trimmed);
 }
 
 export function detectMention(text: string, terms: string[]): MentionHit {
@@ -68,41 +112,30 @@ export function detectMention(text: string, terms: string[]): MentionHit {
   };
 }
 
-// Common second-level public-suffix labels (so "acme.co.uk" -> "acme", not "co").
-const PUBLIC_SLD_LABELS = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
-
-// Domain labels that are ordinary English words match everywhere — "you"
-// (you.com) as a word-boundary term reads a ~100% mention rate off every
-// answer's prose. Such labels never become terms; the brand still matches via
-// its name and aliases ("You.com").
-const COMMON_WORD_LABELS = new Set([
-  "you", "the", "and", "for", "are", "can", "get", "one", "now", "how",
-  "who", "new", "all", "our", "out", "use", "app", "web", "here", "there", "about",
-]);
-
-// Convenience: the full term set for a brand / competitor.
-export function brandTerms(brandName: string, aliases: string[], domain?: string | null): string[] {
-  const terms = [brandName, ...aliases];
-  if (domain) {
-    // Extract the registrable (second-level) domain label, e.g. "acme" from
-    // "https://www.acme.com/pricing" or "acme.co.uk" -> "acme".
-    const host = domain
-      .replace(/^https?:\/\//i, "")
-      .split("/")[0]
-      .replace(/^www\./i, "")
-      .toLowerCase();
-    const labels = host.split(".").filter(Boolean);
-    let sld = "";
-    if (labels.length >= 2) {
-      sld = labels[labels.length - 2];
-      // Handle two-part suffixes like ".co.uk" / ".com.au".
-      if (PUBLIC_SLD_LABELS.has(sld) && labels.length >= 3) {
-        sld = labels[labels.length - 3];
-      }
-    } else if (labels.length === 1) {
-      sld = labels[0];
-    }
-    if (sld && sld.length >= 3 && !COMMON_WORD_LABELS.has(sld)) terms.push(sld);
-  }
-  return terms;
+/**
+ * The full term set for a brand or competitor: its name and the aliases the
+ * owner supplied. Nothing is derived from the domain.
+ *
+ * A domain label used to be added as a term — "acme" from acme.com — and it was
+ * a steady source of false positives, because the label of a real brand is
+ * routinely an ordinary English word. you.com read a ~100% mention rate off the
+ * pronoun in every answer. #54 answered that with a denylist, but the denylist
+ * cannot be the rule: `monday`, `zoom`, `slack` and `box` are exactly as much
+ * ordinary English as `you`, they are real tracked brands, and they were still
+ * matching prose the day this was written — the list only ever grows one
+ * incident at a time, and every incident is discovered by a client looking at a
+ * wrong number.
+ *
+ * Measured before removing it: across 22 projects and 1000 stored answers, the
+ * domain label was the sole reason for a detection in 2 answers of one project
+ * — "OpenHands" written closed against a brand named "Open Hands". That is an
+ * alias, and aliases are per-brand, visible in Settings, and already built.
+ *
+ * The trade is deliberate. An inflated mention rate is the failure this product
+ * exists to prevent and nobody questions it; a missed spelling shows up as a
+ * zero the owner goes looking into. Given a choice of error, take the visible
+ * one.
+ */
+export function brandTerms(brandName: string, aliases: string[]): string[] {
+  return [brandName, ...aliases];
 }

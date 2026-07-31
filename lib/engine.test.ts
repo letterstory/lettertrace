@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { hostOf, isOwnedDomain } from "@/lib/engine";
+import {
+  hostOf,
+  isOwnedDomain,
+  isAbandoned,
+  settleAbandonedRun,
+  ABANDONED_RUN_MS,
+} from "@/lib/engine";
 
 describe("hostOf", () => {
   it("normalizes a messy domain entry to a registrable host", () => {
@@ -45,5 +51,95 @@ describe("extractInlineLinks", () => {
     expect(links).toHaveLength(2);
     expect(links[0].domain).toBe("blog.example.com");
     expect(links[1].url).toBe("https://other.io/x");
+  });
+});
+
+describe("isAbandoned", () => {
+  const started = (msAgo: number) => ({
+    status: "running",
+    started_at: new Date(Date.now() - msAgo).toISOString(),
+  });
+
+  it("leaves a run alone while an invocation could still be working on it", () => {
+    expect(isAbandoned(started(0))).toBe(false);
+    expect(isAbandoned(started(4 * 60_000))).toBe(false);
+    // Right up to the threshold: never race a run that is merely slow.
+    expect(isAbandoned(started(ABANDONED_RUN_MS - 1000))).toBe(false);
+  });
+
+  it("flags a run that has outlived any invocation that could settle it", () => {
+    expect(isAbandoned(started(ABANDONED_RUN_MS + 1000))).toBe(true);
+    expect(isAbandoned(started(6 * 60 * 60_000))).toBe(true);
+  });
+
+  it("only ever considers running rows", () => {
+    const old = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    expect(isAbandoned({ status: "completed", started_at: old })).toBe(false);
+    expect(isAbandoned({ status: "failed", started_at: old })).toBe(false);
+    expect(isAbandoned({ status: "pending", started_at: old })).toBe(false);
+  });
+
+  it("does not flag a running row with no start time", () => {
+    // Nothing can be concluded about its age; the alternative is failing runs
+    // at random on a row shape the writer never produces.
+    expect(isAbandoned({ status: "running", started_at: null })).toBe(false);
+  });
+
+  // The threshold has to sit above the platform ceiling every run route caps
+  // at (maxDuration = 300s), or the sweeper starts killing live runs.
+  it("is comfortably above the longest an invocation can last", () => {
+    expect(ABANDONED_RUN_MS).toBeGreaterThan(300_000);
+  });
+});
+
+describe("settleAbandonedRun", () => {
+  /** Records the filters a chained update was scoped by. */
+  function fakeDb(rows: { id: string }[]) {
+    const filters: [string, unknown][] = [];
+    let updated: Record<string, unknown> | null = null;
+    const db = {
+      from: () => ({
+        update: (values: Record<string, unknown>) => {
+          updated = values;
+          const chain = {
+            eq: (col: string, val: unknown) => {
+              filters.push([col, val]);
+              return chain;
+            },
+            select: async () => ({ data: rows }),
+          };
+          return chain;
+        },
+      }),
+    };
+    return { db: db as never, filters, updated: () => updated };
+  }
+
+  it("settles the row as failed, with the reason and a finish time", async () => {
+    const { db, updated } = fakeDb([{ id: "run-1" }]);
+    expect(await settleAbandonedRun(db, "run-1", "interrupted")).toBe(true);
+    expect(updated()).toMatchObject({ status: "failed", error: "interrupted" });
+    expect(typeof (updated() as { finished_at: string }).finished_at).toBe("string");
+  });
+
+  // The guard is the whole safety property: a run that settled itself between
+  // the sweeper's read and this write must not have its real result replaced
+  // by a failure.
+  it("only touches rows still marked running", async () => {
+    const { db, filters } = fakeDb([{ id: "run-1" }]);
+    await settleAbandonedRun(db, "run-1", "interrupted");
+    expect(filters).toContainEqual(["id", "run-1"]);
+    expect(filters).toContainEqual(["status", "running"]);
+  });
+
+  it("reports false when it changed nothing, so callers can't double-count", async () => {
+    const { db } = fakeDb([]);
+    expect(await settleAbandonedRun(db, "run-1", "interrupted")).toBe(false);
+  });
+
+  it("leaves completed_count alone — answers stored before the cut are real", async () => {
+    const { db, updated } = fakeDb([{ id: "run-1" }]);
+    await settleAbandonedRun(db, "run-1", "interrupted");
+    expect(Object.keys(updated() ?? {})).not.toContain("completed_count");
   });
 });

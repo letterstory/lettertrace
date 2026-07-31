@@ -84,6 +84,66 @@ export interface RunResult {
   error?: string;
 }
 
+/**
+ * How long a run may sit in "running" before it is treated as abandoned.
+ *
+ * A run cannot outlive the invocation executing it, and every route that starts
+ * one caps at maxDuration = 300s. So anything still "running" well past that is
+ * not slow, it is gone: the process was killed mid-flight and the code that
+ * settles the row never got to run. Three times the ceiling leaves room for a
+ * platform that is more generous than ours without ever racing a live run.
+ */
+export const ABANDONED_RUN_MS = 15 * 60 * 1000;
+
+/** True when a "running" row has outlived any invocation that could still be
+ *  working on it. Exported for tests and for callers that only want to report. */
+export function isAbandoned(run: { status: string; started_at: string | null }, now = Date.now()): boolean {
+  if (run.status !== "running") return false;
+  // No started_at is itself a broken row; created_at is not read here because
+  // the only writer of "running" sets started_at in the same insert.
+  if (!run.started_at) return false;
+  return now - new Date(run.started_at).getTime() > ABANDONED_RUN_MS;
+}
+
+/**
+ * Settle a run that will never finish itself.
+ *
+ * Every path that executes a run settles its own row on the way out — unless the
+ * process dies first, which is exactly what happens to a background run that
+ * outlives its serverless invocation. The row then reads "running" forever, and
+ * a client polling GET /v1/runs/:id/status polls forever with it: the status
+ * endpoint is a promise that the state is eventually terminal, and nothing was
+ * keeping that promise.
+ *
+ * Guarded on status = 'running' so it is idempotent and cannot race a run that
+ * settled itself between the read and this write — the loser of that race
+ * updates nothing rather than overwriting a real result with a failure.
+ * `completed_count` is deliberately left alone: answers stored before the
+ * interruption are real, and the run row should say how far it got.
+ */
+export async function settleAbandonedRun(
+  supabase: SupabaseClient,
+  runId: string,
+  reason: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("runs")
+    .update({
+      status: "failed",
+      finished_at: new Date().toISOString(),
+      error: reason,
+    })
+    .eq("id", runId)
+    .eq("status", "running")
+    .select("id");
+  return (data ?? []).length > 0;
+}
+
+/** What an interrupted run says for itself. Shared so the sweeper, the status
+ *  endpoint and the background catch can't describe it three different ways. */
+export const INTERRUPTED_RUN_ERROR =
+  "The run was interrupted before it finished — the server stopped executing it. Answers stored before that point were kept. Run it again to collect the rest.";
+
 export interface ExecuteRunParams {
   supabase: SupabaseClient;
   project: Project;
@@ -223,7 +283,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
 
   // Mention terms derive from the PRIMARY domain only: phantom-site names
   // aren't the brand name, so they shouldn't count as brand mentions.
-  const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domains[0] ?? null);
+  const bTerms = brandTerms(project.brand_name, project.brand_aliases);
   // Every domain (main + phantoms) counts when flagging cited sources as "yours".
   const ownedHosts = project.brand_domains.map(hostOf).filter(Boolean);
   let processed = 0; // asks attempted (success or failure)
