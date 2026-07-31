@@ -473,7 +473,7 @@ const commands = {
           { key: "example", label: "SEEN IN" },
         ],
       );
-      info(c.dim("\nTrack one with: lettertrace competitors add <projectId> <name>"));
+      info(c.dim("\nTrack one with: lettertrace competitors add <project> <name>"));
       return;
     }
 
@@ -486,7 +486,7 @@ const commands = {
     const rows = out.competitors ?? [];
     if (!rows.length) {
       info("No competitors tracked yet. Share of voice needs something to compare against —");
-      info(c.dim("add some with: lettertrace competitors add <projectId> Drata Secureframe"));
+      info(c.dim("add some with: lettertrace competitors add <project> Drata Secureframe"));
       return;
     }
     table(
