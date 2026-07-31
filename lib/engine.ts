@@ -13,6 +13,7 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
 import { modelLabel } from "@/lib/models";
 import { logActivity } from "@/lib/activity";
+import { selectAll } from "@/lib/paging";
 
 /**
  * Who/what asked for a run, forwarded to the activity log so every run — from
@@ -201,18 +202,21 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
     targetType: "run",
   };
 
-  const { data: promptRows } = await supabase
-    .from("prompts")
-    .select("*")
-    .eq("project_id", project.id)
-    .eq("is_active", true);
-  const prompts = (promptRows ?? []) as Prompt[];
+  // Paged: a run must ask the WHOLE portfolio. A silently truncated prompt list
+  // would just look like a smaller run, and the mention rate it produced would
+  // be over a different set of questions than the one before it.
+  const prompts = await selectAll<Prompt>((from, to) =>
+    supabase
+      .from("prompts")
+      .select("*")
+      .eq("project_id", project.id)
+      .eq("is_active", true)
+      .range(from, to),
+  );
 
-  const { data: competitorRows } = await supabase
-    .from("competitors")
-    .select("*")
-    .eq("project_id", project.id);
-  const competitors = (competitorRows ?? []) as Competitor[];
+  const competitors = await selectAll<Competitor>((from, to) =>
+    supabase.from("competitors").select("*").eq("project_id", project.id).range(from, to),
+  );
 
   // Ask each prompt `replicates` times. Provider answers vary between identical
   // calls, so one ask can't tell "not mentioned" from "mentioned, unlucky" — at

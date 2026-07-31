@@ -80,6 +80,13 @@ function fakeDb(handlers: Record<string, Handler>) {
           q.modifiers.push(["limit", ...args]);
           return proxy;
         },
+        // Paged reads ask for an inclusive range and stop on a short page. The
+        // handlers here return a single page's worth, which is what ends the
+        // loop — see lib/paging.
+        range: (...args: unknown[]) => {
+          q.modifiers.push(["range", ...args]);
+          return proxy;
+        },
         single: async () => result(),
         maybeSingle: async () => result(),
         then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
