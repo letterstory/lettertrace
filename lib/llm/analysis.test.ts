@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAnalysis, type AnalyzeEntity } from "@/lib/llm";
+import { parseAnalysis, humanError, type AnalyzeEntity } from "@/lib/llm";
 
 const entities: AnalyzeEntity[] = [
   { key: "brand", name: "Cloudflare" },
@@ -91,5 +91,25 @@ describe("parseAnalysis", () => {
     expect(parseAnalysis(entities, "nope")).toEqual([]);
     expect(parseAnalysis(entities, { results: "nope" })).toEqual([]);
     expect(parseAnalysis(entities, [null, 42, "x"])).toEqual([]);
+  });
+});
+
+describe("humanError on non-Error failures", () => {
+  // Supabase hands back a plain object, not an Error. It used to fall through
+  // to "Unknown error." — which is what a check-constraint violation reported
+  // while a deployment ran an older schema, turning a one-line fix into a
+  // debugging session.
+  it("keeps the message and code from a database error", () => {
+    const message = humanError({
+      code: "23514",
+      message: 'new row for relation "router_keys" violates check constraint',
+    });
+    expect(message).toContain("violates check constraint");
+    expect(message).toContain("23514");
+  });
+
+  it("still says something when there is nothing to say", () => {
+    expect(humanError({})).toBe("Unknown error.");
+    expect(humanError(null)).toBe("Unknown error.");
   });
 });

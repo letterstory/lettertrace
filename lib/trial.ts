@@ -338,13 +338,20 @@ export async function resolveRunKey(
   });
 }
 
-/** The engines the shipped router covers, as prose. Read from the registry so
- *  the sales line in the exhausted message can't outlive the support entry. */
-function routerCoverage(): string {
-  const names = routerProviders(ROUTER_LIST[0].id).map((p) => PROVIDERS[p].label);
+/**
+ * The routers on offer, by name, read from the registry.
+ *
+ * Deliberately no per-engine promise here. Routers differ in what they can
+ * actually MEASURE — one carries both engines' native search, another only
+ * Claude's — so a single line naming engines would over-promise for one of them
+ * the moment a second router exists. The settings card states coverage per
+ * router, where it can be accurate.
+ */
+function routerNames(): string {
+  const names = ROUTER_LIST.map((r) => r.label);
   return names.length <= 1
-    ? names[0] ?? "your engines"
-    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    ? names[0] ?? "a gateway"
+    : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
 /** The RouteInfo for a stored router credential. */
@@ -376,7 +383,7 @@ export function engineKeyMessage(key: ResolvedKey): string {
     return (
       `You've used all ${key.limit ?? 0} free runs on ${engine}. ` +
       `Add your own ${providerLabel} key in Settings to keep monitoring, ` +
-      `or one ${ROUTER_LIST[0].label} key that covers ${routerCoverage()}.`
+      `or one router key (${routerNames()}) that covers several assistants at once.`
     );
   }
   if (key.source === "mismatch") {

@@ -131,11 +131,12 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ## LLM routers (one key, several assistants)
 
-Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. One router ships today — the bar for adding another is a live probe, not a docs page, for the reason spelled out below:
+Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. The bar for adding one is a live probe, not a docs page — both entries below were corrected by probing:
 
 | Router | Engines it serves | Notes |
 |---|---|---|
-| **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT | No markup on tokens, which matters when the key is yours. Mirrors both providers' native APIs, so a routed answer is the same request a direct key sends — forced browse included. |
+| **[Concentrate](https://concentrate.ai/)** | Claude, ChatGPT — both grounded | No markup on tokens, which matters when the key is yours. Mirrors both providers' native APIs, so a routed answer is the same request a direct key sends — forced browse included. |
+| **[OpenRouter](https://openrouter.ai/)** | Claude grounded; ChatGPT **ungrounded only** | 400+ models behind one key. Its Anthropic endpoint carries Claude's forced web search intact, but it cannot ask an OpenAI model for its *own* search — the alternatives route through Exa, a third-party service — so GPT here serves projects with web search off. Requests pin the upstream (`allow_fallbacks: false`) so routing changes can't move a trend line. |
 
 Settings → **Or use one router key**, or from the terminal:
 
@@ -152,7 +153,8 @@ Three things are worth understanding before you rely on one.
 **Grounding is verified, not assumed.** Every monitored answer is supposed to come from the provider's *native* web search, forced. A gateway that normalizes requests can accept those parameters and quietly drop them, and an ungrounded answer is not a cheaper version of a grounded one — it is a different measurement that still looks like data. So saving a router key runs a real forced search per engine and stores which ones actually returned sources (`router_keys.search_verified`). An engine that didn't is allowed to serve projects with web search **off**, and refused for projects with it on, with a message naming the fix. Operators can run the same check without an account:
 
 ```bash
-ROUTER_API_KEY=... npx tsx scripts/probe-router.ts concentrate
+ROUTER_API_KEY_CONCENTRATE=... npx tsx scripts/probe-router.ts concentrate
+ROUTER_API_KEY_OPENROUTER=...  npx tsx scripts/probe-router.ts openrouter
 ```
 
 The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.

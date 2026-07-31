@@ -452,16 +452,19 @@ describe("the exhausted message offers the router", () => {
     expect(k.source).toBe("exhausted");
     expect(message).toContain("Anthropic (Claude) key");
     expect(message).toContain("Concentrate");
+    expect(message).toContain("OpenRouter");
   });
 
   // The engines come from the registry, so the pitch can't outlive the support
   // entry that backs it.
-  it("names the engines that router actually covers", async () => {
+  // No per-engine promise in this line. Routers differ in what they can
+  // MEASURE — Concentrate carries both engines' native search, OpenRouter only
+  // Claude's — so naming engines here would over-promise for one of them. The
+  // settings card states coverage per router, where it can be accurate.
+  it("promises no engine it might not be able to measure", async () => {
     process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-trial";
-    const k = await runKeyFor(db(5), "user-1", "anthropic");
-    const message = engineKeyMessage(k);
-    expect(message).toContain("Anthropic (Claude) and OpenAI (ChatGPT)");
-    // Never promises an engine a router can't measure.
+    const message = engineKeyMessage(await runKeyFor(db(5), "user-1", "anthropic"));
+    expect(message).toContain("router key");
     expect(message).not.toContain("Perplexity");
     expect(message).not.toContain("Gemini");
   });

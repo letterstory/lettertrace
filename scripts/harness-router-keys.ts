@@ -34,7 +34,8 @@ import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../lib/crypto";
-import type { Project } from "../lib/types";
+import { routerProviders, routerSupport } from "../lib/routers";
+import type { Project, Provider } from "../lib/types";
 
 // lib/data wraps its readers in React's cache(), which only exists inside
 // Next's runtime — importing it from a plain Node script throws before any
@@ -86,10 +87,17 @@ const SUPABASE_URL = requireEnv("NEXT_PUBLIC_SUPABASE_URL");
 const SERVICE_ROLE = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 requireEnv("ENCRYPTION_KEY"); // used by decryptSecret below
 
+const ROUTER = (flag("router") ?? "concentrate") as "concentrate" | "openrouter";
 const keyFile = flag("key-file");
-const ROUTER_KEY = (keyFile ? readFileSync(keyFile, "utf8") : process.env.ROUTER_API_KEY ?? "").trim();
+const ROUTER_KEY = (
+  keyFile
+    ? readFileSync(keyFile, "utf8")
+    : process.env[`ROUTER_API_KEY_${ROUTER.toUpperCase()}`] ?? process.env.ROUTER_API_KEY ?? ""
+).trim();
 if (!ROUTER_KEY) {
-  console.error("No router key. Set $ROUTER_API_KEY or pass --key-file <path>.");
+  console.error(
+    `No router key. Set $ROUTER_API_KEY_${ROUTER.toUpperCase()} (or $ROUTER_API_KEY), or pass --key-file <path>.`,
+  );
   process.exit(2);
 }
 
@@ -121,6 +129,16 @@ function check(name: string, ok: boolean, detail = ""): void {
 
 function section(title: string): void {
   say(`\n\x1b[1m${title}\x1b[0m`);
+}
+
+/**
+ * The engines THIS router is expected to ground — per router, not blanket.
+ * OpenRouter carries Claude's native search but cannot ask an OpenAI model for
+ * its own, so demanding both would assert something untrue of a
+ * correctly-working credential.
+ */
+function groundable(): Provider[] {
+  return routerProviders(ROUTER).filter((p) => routerSupport(ROUTER, p)?.search === "passthrough");
 }
 
 async function main() {
@@ -161,14 +179,14 @@ async function main() {
       // stored as if it were real.
       const { error: badRouter } = await admin.from("router_keys").insert({
         user_id: userId,
-        router: "openrouter",
+        router: "litellm",
         encrypted_key: "x",
         key_hint: "x",
       });
       check(
         "an unshipped router id is rejected by the check constraint",
         Boolean(badRouter),
-        "openrouter was accepted",
+        "litellm was accepted",
       );
     }
 
@@ -177,17 +195,17 @@ async function main() {
     // ------------------------------------------------------------------
     {
       const outcome = await setRouterKey(admin, userId, {
-        router: "concentrate",
+        router: ROUTER,
         apiKey: ROUTER_KEY,
         label: "harness",
       });
       check("the save path accepted a real key", outcome.ok, outcome.ok ? "" : outcome.message);
       if (!outcome.ok) throw new Error(`cannot continue: ${outcome.message}`);
 
+      const mustGround = groundable();
       check(
-        "grounding was confirmed for both engines it serves",
-        outcome.verification.searchVerified.includes("anthropic") &&
-          outcome.verification.searchVerified.includes("openai"),
+        `grounding confirmed for every engine this router can ground (${mustGround.join(", ")})`,
+        mustGround.every((p) => outcome.verification.searchVerified.includes(p)),
         `searchVerified=[${outcome.verification.searchVerified}]`,
       );
 
@@ -222,7 +240,7 @@ async function main() {
       check(
         "search_verified persisted",
         Array.isArray(stored?.search_verified) &&
-          (stored!.search_verified as string[]).length === 2,
+          (stored!.search_verified as string[]).length === mustGround.length,
         JSON.stringify(stored?.search_verified),
       );
 
@@ -244,7 +262,8 @@ async function main() {
       check("the credential round-trips through the decrypt helper", keys[0]?.apiKey === ROUTER_KEY);
       check(
         "its verified engines came with it",
-        keys[0]?.searchVerified.includes("anthropic") && keys[0]?.searchVerified.includes("openai"),
+        groundable().every((p) => keys[0]?.searchVerified.includes(p)),
+        `searchVerified=[${keys[0]?.searchVerified}]`,
       );
 
       // The resolver is what decides a run may use this credential at all.
@@ -253,7 +272,7 @@ async function main() {
       });
       check(
         "a grounded run resolves to the router",
-        grounded.source === "own" && grounded.route?.router === "concentrate",
+        grounded.source === "own" && grounded.route?.router === ROUTER,
         `source=${grounded.source} route=${grounded.route?.router}`,
       );
       check(
@@ -336,7 +355,7 @@ async function main() {
       );
       check(
         "the gateway is recorded alongside it",
-        run.route === "concentrate",
+        run.route === ROUTER,
         `route=${run.route}`,
       );
 
@@ -360,11 +379,11 @@ async function main() {
     section("Revoking it");
     // ------------------------------------------------------------------
     {
-      const removed = await removeRouterKey(admin, userId, "concentrate");
+      const removed = await removeRouterKey(admin, userId, ROUTER);
       check("remove returns the row it deleted", removed !== null);
       const after = await listRouterKeys(admin, userId);
       check("nothing is left behind", after.length === 0);
-      const again = await removeRouterKey(admin, userId, "concentrate");
+      const again = await removeRouterKey(admin, userId, ROUTER);
       check("removing a second time reports nothing stored", again === null);
     }
 

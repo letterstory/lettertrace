@@ -47,12 +47,13 @@ export type { RouterId };
  * endpoint with a forced `tool_choice` still returned two cited sources, while
  * the same request with the tool merely offered returned none, and so did
  * chat-completions with `web_search_options`. Forcing is honoured; the
- * alternatives only permit. That difference is why the OpenAI path names the
- * Responses API specifically rather than treating any OpenAI-compatible
- * endpoint as interchangeable: chat-completions is still used for routed calls
- * that aren't grounded, where there is nothing to force.
+ * alternatives only permit. That difference is why 'openai-responses' names the
+ * Responses API specifically rather than treating any OpenAI-compatible endpoint
+ * as interchangeable. 'openai-chat' is the plain chat-completions surface, used
+ * for routed calls that aren't grounded — where there is nothing to force — and
+ * for a router that has no Responses API at all.
  */
-export type RouteShape = "anthropic" | "openai-responses";
+export type RouteShape = "anthropic" | "openai-chat" | "openai-responses";
 
 /**
  * How native web search is expressed through a router for one provider.
@@ -114,10 +115,12 @@ export interface RouterInfo {
    * verification uses this same path.
    */
   anthropicAuth: "x-api-key" | "bearer";
+  /** Extra top-level body fields for a call through this router. */
+  extraBody?: (provider: Provider, opts: { webSearch: boolean }) => Record<string, unknown>;
   providers: Partial<Record<Provider, RouterProviderSupport>>;
 }
 
-// Google and Perplexity are deliberately absent from the router below.
+// Google and Perplexity are deliberately absent from the routers below.
 //
 // Not because the models are unreachable — they are — but because their
 // measurement paths don't survive normalization. Gemini's answers are grounded
@@ -162,12 +165,65 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       },
     },
   },
+  openrouter: {
+    id: "openrouter",
+    label: "OpenRouter",
+    blurb: "400+ models behind one key. Claude is measurable; GPT is not.",
+    keyUrl: "https://openrouter.ai/keys",
+    docsUrl: "https://openrouter.ai/docs",
+    keyPrefix: "sk-or-v1-",
+    openaiBaseUrl: "https://openrouter.ai/api/v1",
+    anthropicBaseUrl: "https://openrouter.ai/api",
+    // Both x-api-key and bearer were accepted when probed; x-api-key is what the
+    // Anthropic SDK sends unprompted, so it is the one with fewer moving parts.
+    anthropicAuth: "x-api-key",
+    extraBody: (provider) => ({
+      // Pin the upstream and refuse fallbacks. OpenRouter price-load-balances a
+      // model across upstream hosts that can serve different quantizations, and
+      // moves between them silently. For a product whose output is a trend line
+      // that is a measurement change disguised as a visibility change: the
+      // mention rate shifts because routing shifted. Verified accepted — a
+      // pinned request came back "served by: OpenAI".
+      provider: { order: [OPENROUTER_UPSTREAM[provider]], allow_fallbacks: false },
+    }),
+    providers: {
+      anthropic: {
+        // The Anthropic skin forwards the forced web_search tool intact. Probed
+        // 2026-07-31 with a live key: asked for the capital of France — a
+        // question answerable from memory — it still returned 13 cited sources.
+        shape: "anthropic",
+        search: "passthrough",
+        slugPrefix: "anthropic",
+      },
+      openai: {
+        // OpenRouter cannot ask an OpenAI model for its OWN web search:
+        // "The requested model does not support native web search. Use engine
+        // 'auto' or 'exa' instead." Both of those route the search through Exa,
+        // a third-party service — which measures something different from the
+        // provider's own browsing and breaks the README's claim that Lettertrace
+        // uses no search service beyond the provider's. So GPT through this
+        // router serves ungrounded projects and utility work only, and a
+        // grounded project is refused with a message naming the fix.
+        shape: "openai-chat",
+        search: "none",
+        slugPrefix: "openai",
+      },
+    },
+  },
+};
+
+/** OpenRouter's upstream-provider names, for the pinning above. */
+const OPENROUTER_UPSTREAM: Record<Provider, string> = {
+  anthropic: "anthropic",
+  openai: "openai",
+  google: "google-vertex",
+  perplexity: "perplexity",
 };
 
 export const ROUTER_LIST: RouterInfo[] = Object.values(ROUTERS);
 
 export function isRouterId(value: string): value is RouterId {
-  return value === "concentrate";
+  return value === "concentrate" || value === "openrouter";
 }
 
 /** Narrow an untrusted router value, or null. */
