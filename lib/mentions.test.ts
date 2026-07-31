@@ -13,7 +13,7 @@ describe("stripLinkSurfaces", () => {
 });
 
 describe("detectMention vs link surfaces", () => {
-  const terms = brandTerms("Runlayer", [], "runlayer.com");
+  const terms = brandTerms("Runlayer", ["runlayer.com"]);
 
   it("a brand string inside a link is a citation, not a mention", () => {
     const hit = detectMention(
@@ -38,17 +38,47 @@ describe("detectMention vs link surfaces", () => {
   });
 });
 
-describe("common-word domain labels never become terms", () => {
-  it("you.com does not make 'you' a brand term", () => {
-    const terms = brandTerms("You.com", [], "you.com");
-    expect(terms).not.toContain("you");
-    expect(detectMention("Here is what you should do.", terms).mentioned).toBe(false);
-    expect(detectMention("You.com is a solid AI search pick.", terms).mentioned).toBe(true);
+describe("terms come from the name and aliases, never the domain", () => {
+  // The domain label was a standing source of false positives: a real brand's
+  // label is routinely an ordinary English word, and a denylist can only name
+  // the ones that have already burned someone.
+  it("does not turn a domain into a term", () => {
+    expect(brandTerms("You.com", [])).toEqual(["You.com"]);
+    expect(brandTerms("Monday.com", [])).toEqual(["Monday.com"]);
+    expect(brandTerms("Acme", ["Acme Inc"])).toEqual(["Acme", "Acme Inc"]);
+  });
+
+  it("stops ordinary prose reading as a mention", () => {
+    // Both matched before, off the domain label: 'you' from you.com and
+    // 'monday' from monday.com.
+    expect(detectMention("Here is what you should do.", brandTerms("You.com", [])).mentioned).toBe(false);
+    expect(detectMention("On Monday we shipped it.", brandTerms("Monday.com", [])).mentioned).toBe(false);
+  });
+
+  // The limit of this change, asserted so nobody reads more into it. A brand
+  // whose NAME is an ordinary word still matches that word — matching is
+  // case-insensitive and the name is the one term we cannot drop. Nothing about
+  // domains can fix that; it is a naming choice, and the fix is to register the
+  // brand under the name answers actually use.
+  it("cannot save a brand whose own name is an ordinary word", () => {
+    expect(detectMention("You can zoom in on the chart.", brandTerms("Zoom", [])).mentioned).toBe(true);
+    expect(detectMention("On Monday we shipped it.", brandTerms("Monday", [])).mentioned).toBe(true);
+  });
+
+  it("still names the brand when the answer writes it out", () => {
+    expect(detectMention("You.com is a solid AI search pick.", brandTerms("You.com", [])).mentioned).toBe(true);
+    expect(detectMention("Monday.com is the tracker they use.", brandTerms("Monday.com", [])).mentioned).toBe(true);
+  });
+
+  // The one thing the label bought, now bought explicitly and per-brand.
+  it("covers a spelling the name misses through an alias", () => {
+    const terms = brandTerms("Open Hands", ["OpenHands"]);
+    expect(detectMention("Tools here include OpenHands and Factory.", terms).mentioned).toBe(true);
   });
 });
 
 describe("markdown link labels", () => {
-  const terms = brandTerms("Vercel", [], "vercel.com");
+  const terms = brandTerms("Vercel", []);
 
   // The shape this exists for: a ranked list where every brand name is a link.
   // To the reader the brand is named — the label IS the prose.

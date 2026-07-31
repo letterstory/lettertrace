@@ -260,7 +260,7 @@ async function runPrompt(
 ): Promise<PromptOutcome> {
   const apiKey = keyFor(provider);
   const model = ANSWER_MODEL[provider];
-  const bTerms = brandTerms(client.brandName, client.brandAliases, client.brandDomains[0]);
+  const bTerms = brandTerms(client.brandName, client.brandAliases);
   const ownedHosts = client.brandDomains.map(hostOf).filter(Boolean);
 
   const base: PromptOutcome = {
