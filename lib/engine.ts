@@ -268,7 +268,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
 
   // Mention terms derive from the PRIMARY domain only: phantom-site names
   // aren't the brand name, so they shouldn't count as brand mentions.
-  const bTerms = brandTerms(project.brand_name, project.brand_aliases, project.brand_domains[0] ?? null);
+  const bTerms = brandTerms(project.brand_name, project.brand_aliases);
   // Every domain (main + phantoms) counts when flagging cited sources as "yours".
   const ownedHosts = project.brand_domains.map(hostOf).filter(Boolean);
   let processed = 0; // asks attempted (success or failure)

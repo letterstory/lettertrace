@@ -112,41 +112,30 @@ export function detectMention(text: string, terms: string[]): MentionHit {
   };
 }
 
-// Common second-level public-suffix labels (so "acme.co.uk" -> "acme", not "co").
-const PUBLIC_SLD_LABELS = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
-
-// Domain labels that are ordinary English words match everywhere — "you"
-// (you.com) as a word-boundary term reads a ~100% mention rate off every
-// answer's prose. Such labels never become terms; the brand still matches via
-// its name and aliases ("You.com").
-const COMMON_WORD_LABELS = new Set([
-  "you", "the", "and", "for", "are", "can", "get", "one", "now", "how",
-  "who", "new", "all", "our", "out", "use", "app", "web", "here", "there", "about",
-]);
-
-// Convenience: the full term set for a brand / competitor.
-export function brandTerms(brandName: string, aliases: string[], domain?: string | null): string[] {
-  const terms = [brandName, ...aliases];
-  if (domain) {
-    // Extract the registrable (second-level) domain label, e.g. "acme" from
-    // "https://www.acme.com/pricing" or "acme.co.uk" -> "acme".
-    const host = domain
-      .replace(/^https?:\/\//i, "")
-      .split("/")[0]
-      .replace(/^www\./i, "")
-      .toLowerCase();
-    const labels = host.split(".").filter(Boolean);
-    let sld = "";
-    if (labels.length >= 2) {
-      sld = labels[labels.length - 2];
-      // Handle two-part suffixes like ".co.uk" / ".com.au".
-      if (PUBLIC_SLD_LABELS.has(sld) && labels.length >= 3) {
-        sld = labels[labels.length - 3];
-      }
-    } else if (labels.length === 1) {
-      sld = labels[0];
-    }
-    if (sld && sld.length >= 3 && !COMMON_WORD_LABELS.has(sld)) terms.push(sld);
-  }
-  return terms;
+/**
+ * The full term set for a brand or competitor: its name and the aliases the
+ * owner supplied. Nothing is derived from the domain.
+ *
+ * A domain label used to be added as a term — "acme" from acme.com — and it was
+ * a steady source of false positives, because the label of a real brand is
+ * routinely an ordinary English word. you.com read a ~100% mention rate off the
+ * pronoun in every answer. #54 answered that with a denylist, but the denylist
+ * cannot be the rule: `monday`, `zoom`, `slack` and `box` are exactly as much
+ * ordinary English as `you`, they are real tracked brands, and they were still
+ * matching prose the day this was written — the list only ever grows one
+ * incident at a time, and every incident is discovered by a client looking at a
+ * wrong number.
+ *
+ * Measured before removing it: across 22 projects and 1000 stored answers, the
+ * domain label was the sole reason for a detection in 2 answers of one project
+ * — "OpenHands" written closed against a brand named "Open Hands". That is an
+ * alias, and aliases are per-brand, visible in Settings, and already built.
+ *
+ * The trade is deliberate. An inflated mention rate is the failure this product
+ * exists to prevent and nobody questions it; a missed spelling shows up as a
+ * zero the owner goes looking into. Given a choice of error, take the visible
+ * one.
+ */
+export function brandTerms(brandName: string, aliases: string[]): string[] {
+  return [brandName, ...aliases];
 }
