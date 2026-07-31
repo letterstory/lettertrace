@@ -21,6 +21,12 @@ import { c, printJson, table, kv, ok, info, fail } from "./output.mjs";
 import { banner, withSpinner } from "./brand.mjs";
 
 // --- arg parsing ----------------------------------------------------
+// Flags that are switches, not settings. Without this list a flag swallows the
+// following word as its value, so `--json competitors <id>` set json to
+// "competitors" and then failed with "Unknown command: <id>" — the documented
+// "every command takes --json" only worked if you put it last.
+const BOOLEAN_FLAGS = new Set(["json", "on", "off", "mcp", "both", "ipv6", "help"]);
+
 function parseArgs(argv) {
   const positionals = [];
   const flags = {};
@@ -29,7 +35,7 @@ function parseArgs(argv) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
         flags[key] = next;
         i++;
       } else {
@@ -334,6 +340,125 @@ const commands = {
     info(c.dim("Set one with: lettertrace routers set <router>  (the key is never typed as an argument)"));
   },
 
+  // Competitors. Share of voice is meaningless without something to compare
+  // against, so this is part of setting a brand up rather than a later refinement
+  // — "monitoring Vanta, track Drata and Secureframe" should be one command, not
+  // a trip to the dashboard.
+  async competitors() {
+    const sub = rest_[0];
+
+    if (sub === "add") {
+      const projectId = need(rest_[1], "competitors add needs a <projectId>");
+      // Two shapes, because both are natural. Several names positionally for the
+      // common case, or one competitor with its aliases and domain spelled out.
+      //   competitors add <id> Drata Secureframe
+      //   competitors add <id> --name Drata --domain drata.com --aliases "Drata Inc"
+      const positional = rest_.slice(2);
+      const entries = positional.length
+        ? positional.map((name) => ({ name }))
+        : [
+            {
+              name: need(flags.name, "competitors add needs names, or --name"),
+              ...(flags.domain ? { domain: String(flags.domain) } : {}),
+              ...(flags.aliases
+                ? {
+                    aliases: String(flags.aliases)
+                      .split(",")
+                      .map((a) => a.trim())
+                      .filter(Boolean),
+                  }
+                : {}),
+            },
+          ];
+      if (positional.length && (flags.domain || flags.aliases)) {
+        throw new UsageError(
+          "--domain and --aliases describe ONE competitor, so they can't be combined with a list of names. " +
+            "Add the detailed one on its own, or list the names and set details later.",
+        );
+      }
+
+      const out = await withAutoLogin(() =>
+        rest(base, "POST", `/projects/${projectId}/competitors`, { body: { competitors: entries } }),
+      );
+      if (JSON_OUT) return printJson(out);
+      // This endpoint answers { competitors, skipped } where prompts answers
+      // { created, skipped }. Read the one this route actually sends.
+      const added = out.competitors ?? out.created ?? [];
+      const names = added.map((c) => c.name).join(", ");
+      // "skipped" means already tracked — worth saying out loud, because a user
+      // re-running the same command should be told nothing was lost.
+      ok(
+        `Tracking ${added.length} new competitor${added.length === 1 ? "" : "s"}` +
+          (names ? `: ${names}` : "") +
+          (out.skipped ? ` (${out.skipped} already tracked)` : "") +
+          ".",
+      );
+      return;
+    }
+
+    if (sub === "remove" || sub === "rm") {
+      const competitorId = need(rest_[1], "competitors remove needs a <competitorId>");
+      const out = await withAutoLogin(() => rest(base, "DELETE", `/competitors/${competitorId}`));
+      if (JSON_OUT) return printJson(out);
+      ok(`Stopped tracking ${out.removed?.name ?? competitorId}.`);
+      return;
+    }
+
+    if (sub === "discovered") {
+      // Not a guess: companies THIS project's own answers already named, which
+      // nobody is tracking. The evidence is the answers you paid for.
+      const projectId = need(rest_[1], "competitors discovered needs a <projectId>");
+      const out = await withAutoLogin(() =>
+        rest(base, "GET", `/projects/${projectId}/competitors/discovered`),
+      );
+      if (JSON_OUT) return printJson(out);
+      const rows = out.discovered ?? out.companies ?? [];
+      if (!rows.length) {
+        info("No untracked companies have shown up in this project's answers yet.");
+        return;
+      }
+      table(
+        rows.map((d) => ({
+          name: d.name,
+          answers: d.responses ?? d.count ?? "",
+          example: (d.example ?? d.snippet ?? "").slice(0, 60),
+        })),
+        [
+          { key: "name", label: "COMPANY" },
+          { key: "answers", label: "ANSWERS" },
+          { key: "example", label: "SEEN IN" },
+        ],
+      );
+      info(c.dim("\nTrack one with: lettertrace competitors add <projectId> <name>"));
+      return;
+    }
+
+    // list: competitors <projectId>
+    const projectId = need(sub, "competitors needs a <projectId> (or a subcommand: add, remove, discovered)");
+    const out = await withAutoLogin(() => rest(base, "GET", `/projects/${projectId}/competitors`));
+    if (JSON_OUT) return printJson(out);
+    const rows = out.competitors ?? [];
+    if (!rows.length) {
+      info("No competitors tracked yet. Share of voice needs something to compare against —");
+      info(c.dim("add some with: lettertrace competitors add <projectId> Drata Secureframe"));
+      return;
+    }
+    table(
+      rows.map((x) => ({
+        id: x.id,
+        name: x.name,
+        domain: x.domain ?? "",
+        aliases: (x.aliases ?? []).join(", "),
+      })),
+      [
+        { key: "id", label: "ID" },
+        { key: "name", label: "NAME" },
+        { key: "domain", label: "DOMAIN" },
+        { key: "aliases", label: "ALIASES" },
+      ],
+    );
+  },
+
   async projects() {
     const sub = rest_[0] ?? "list";
     if (sub === "create") {
@@ -614,6 +739,11 @@ function printHelp() {
     "  prompts <projectId>                    List a project's prompts",
     "  prompts add <projectId> --text <t> --topic <top>",
     "  prompts toggle <promptId> --on|--off",
+    "  competitors <projectId>                Competitors tracked for a project",
+    "  competitors add <projectId> <name...>  Track competitors by name",
+    "  competitors add <projectId> --name <n> [--domain <d>] [--aliases a,b]",
+    "  competitors remove <competitorId>      Stop tracking one",
+    "  competitors discovered <projectId>     Companies the answers named but nobody tracks",
     "  runs <projectId> [--limit <n>]         List runs",
     "  runs trigger <projectId> [--provider <p>] [--model <m>]",
     "  runs get <runId>                       Share-of-voice report",
