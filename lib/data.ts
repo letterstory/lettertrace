@@ -1,6 +1,7 @@
 import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret } from "@/lib/crypto";
+import { selectAll } from "@/lib/paging";
 import type {
   Project,
   Provider,
@@ -19,12 +20,19 @@ export const getProjects = cache(async function getProjects(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project[]> {
-  const { data } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: true });
-  return (data as Project[] | null) ?? [];
+  // Paged, because an account can hold more projects than a single PostgREST
+  // read returns. One account per customer-fleet is a supported shape — every
+  // client is a project on it — and the 1001st would otherwise vanish from the
+  // org switcher, from `lettertrace projects`, and from the CLI's name lookup,
+  // which would then report a real project as "no project called that".
+  return selectAll<Project>((from, to) =>
+    supabase
+      .from("projects")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: true })
+      .range(from, to),
+  );
 });
 
 /**

@@ -28,6 +28,7 @@ import {
 } from "@/lib/metrics";
 import { waitUntil } from "@vercel/functions";
 import { normalizeCompetitorList } from "@/lib/competitors";
+import { selectAll } from "@/lib/paging";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
 import {
   executeRun,
@@ -888,22 +889,33 @@ export async function getRunReport(
       .from("responses")
       .select("id", { count: "exact", head: true })
       .eq("run_id", runId),
-    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
-    sources: supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId),
-    responseTopics: supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId),
+    // These four grow with answers, prompts and entities, so they page rather
+    // than trusting a single unpaginated read — see lib/paging. They hand back
+    // rows directly; only the un-paged queries carry a { data } envelope.
+    mentions: selectAll<Mention>((f, t) =>
+      supabase.from("mentions").select("*").eq("run_id", runId).range(f, t),
+    ),
+    sources: selectAll<Pick<Source, "response_id" | "url" | "is_owned">>((f, t) =>
+      supabase.from("sources").select("response_id, url, is_owned").eq("run_id", runId).range(f, t),
+    ),
+    responseTopics: selectAll<{ id: string; topic_id: string | null; prompt_id: string | null }>(
+      (f, t) => supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId).range(f, t),
+    ),
     topics: supabase.from("topics").select("id, name").eq("project_id", run.project_id),
-    promptTargets: supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id),
+    promptTargets: selectAll<{ id: string; target_url: string | null }>((f, t) =>
+      supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id).range(f, t),
+    ),
     competitors: supabase
       .from("competitors")
       .select("id", { count: "exact", head: true })
       .eq("project_id", run.project_id),
   });
   const { count } = results.responseCount;
-  const { data: mentionRows } = results.mentions;
-  const { data: sourceRows } = results.sources;
-  const { data: responseTopicRows } = results.responseTopics;
+  const mentionRows = results.mentions;
+  const sourceRows = results.sources;
+  const responseTopicRows = results.responseTopics;
   const { data: topicRows } = results.topics;
-  const { data: promptTargetRows } = results.promptTargets;
+  const promptTargetRows = results.promptTargets;
   const { count: competitorCount } = results.competitors;
 
   const mentions = (mentionRows ?? []) as Mention[];
@@ -1023,19 +1035,29 @@ export async function getRunResponses(
   if (!project) return null;
 
   const results = await allOf({
-    responses: supabase
-      .from("responses")
-      .select("*")
-      .eq("run_id", runId)
-      .order("created_at", { ascending: true }),
-    sources: supabase.from("sources").select("*").eq("run_id", runId),
-    mentions: supabase.from("mentions").select("*").eq("run_id", runId),
-    prompts: supabase.from("prompts").select("id, text").eq("project_id", run.project_id),
+    // Every one of these grows with the size of the run — see lib/paging.
+    responses: selectAll<Response>((f, t) =>
+      supabase
+        .from("responses")
+        .select("*")
+        .eq("run_id", runId)
+        .order("created_at", { ascending: true })
+        .range(f, t),
+    ),
+    sources: selectAll<Source>((f, t) =>
+      supabase.from("sources").select("*").eq("run_id", runId).range(f, t),
+    ),
+    mentions: selectAll<Mention>((f, t) =>
+      supabase.from("mentions").select("*").eq("run_id", runId).range(f, t),
+    ),
+    prompts: selectAll<Pick<Prompt, "id" | "text">>((f, t) =>
+      supabase.from("prompts").select("id, text").eq("project_id", run.project_id).range(f, t),
+    ),
   });
-  const { data: responseRows } = results.responses;
-  const { data: sourceRows } = results.sources;
-  const { data: mentionRows } = results.mentions;
-  const { data: promptRows } = results.prompts;
+  const responseRows = results.responses;
+  const sourceRows = results.sources;
+  const mentionRows = results.mentions;
+  const promptRows = results.prompts;
 
   const promptTextById = new Map(
     ((promptRows ?? []) as Pick<Prompt, "id" | "text">[]).map((p) => [p.id, p.text]),
