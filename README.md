@@ -351,7 +351,7 @@ npm run cli -- keys set anthropic                    # hidden prompt, key verifi
 # Set up an account over the API — the agent-drivable part:
 npm run cli -- projects create --name "Acme" --brand "Acme" --domains acme.io
 npm run cli -- prompts add <projectId> --text "best crm for startups" --topic CRM
-npm run cli -- competitors add <projectId> Drata Secureframe   # who you're measured against
+npm run cli -- competitors add Vanta Drata Secureframe          # who you're measured against
 npm run cli -- runs trigger <projectId>
 npm run cli -- runs get <runId>          # share-of-voice report (--json for full)
 
@@ -373,11 +373,17 @@ of standing a brand up rather than a later refinement — monitoring Vanta means
 tracking Drata and Secureframe, and that should be one command:
 
 ```bash
-npm run cli -- competitors add <projectId> Drata Secureframe   # several at once
-npm run cli -- competitors add <projectId> --name Sprinto --domain sprinto.com --aliases "Sprinto Inc"
-npm run cli -- competitors <projectId>                         # what's tracked, with ids
+npm run cli -- competitors add Vanta Drata Secureframe   # several at once
+npm run cli -- competitors add Vanta --name Sprinto --domain sprinto.com --aliases "Sprinto Inc"
+npm run cli -- competitors Vanta                         # what's tracked, with ids
 npm run cli -- competitors remove <competitorId>
 ```
+
+Anywhere a command takes a project, it accepts the **project name**, the **brand
+name**, a full id, or an unambiguous id prefix — the last because a shortened id
+is what you copy out of a table. Ids still work unchanged, so nothing an agent
+does needs to know about this; it exists so a person can say what they mean. An
+ambiguous name is refused with the ids listed rather than guessed at.
 
 Names the project already tracks are reported as skipped rather than failing, so
 re-running the same setup command is safe. The brand itself is refused — it

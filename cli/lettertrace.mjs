@@ -108,6 +108,50 @@ async function withAutoLogin(fn) {
 }
 
 // --- commands -------------------------------------------------------
+
+// A project can be named on the command line instead of pointed at by uuid.
+// Nothing about the API changes — an agent keeps passing ids — but a person
+// demoing this should be able to say what they mean:
+//
+//   lettertrace competitors add Vanta Drata Secureframe
+//
+// Accepts, in order: a full uuid (used as-is, no lookup), the project name, the
+// brand name, or an unambiguous id prefix — the last because a shortened id is
+// exactly what someone copies out of a table or a screen recording.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function resolveProject(ref) {
+  if (UUID_RE.test(ref)) return ref;
+
+  const out = await withAutoLogin(() => rest(base, "GET", "/projects"));
+  const projects = out.projects ?? [];
+  const needle = ref.trim().toLowerCase();
+
+  const byName = projects.filter((p) => (p.name ?? "").toLowerCase() === needle);
+  const byBrand = projects.filter((p) => (p.brand_name ?? "").toLowerCase() === needle);
+  // A prefix only counts when it could plausibly be one — four hex characters or
+  // more — so a brand called "Ada" never gets read as an id.
+  const byPrefix = /^[0-9a-f]{4,}$/i.test(ref)
+    ? projects.filter((p) => p.id.startsWith(ref.toLowerCase()))
+    : [];
+
+  const matches = byName.length ? byName : byBrand.length ? byBrand : byPrefix;
+
+  if (matches.length === 1) return matches[0].id;
+
+  if (matches.length > 1) {
+    throw new UsageError(
+      `"${ref}" matches ${matches.length} projects. Use the id instead:\n` +
+        matches.map((p) => `  ${p.id}  ${p.name}${p.brand_name && p.brand_name !== p.name ? ` (${p.brand_name})` : ""}`).join("\n"),
+    );
+  }
+
+  const known = projects.length
+    ? projects.map((p) => `  ${p.name}${p.brand_name && p.brand_name !== p.name ? ` (${p.brand_name})` : ""}`).join("\n")
+    : "  (none yet — create one with `lettertrace projects create`)";
+  throw new UsageError(`No project called "${ref}". Yours:\n${known}`);
+}
+
 const commands = {
   async login() {
     const opts = { scope: scopeFlag(), ipv6: IPV6 };
@@ -348,7 +392,7 @@ const commands = {
     const sub = rest_[0];
 
     if (sub === "add") {
-      const projectId = need(rest_[1], "competitors add needs a <projectId>");
+      const projectId = await resolveProject(need(rest_[1], "competitors add needs a <project> (name or id)"));
       // Two shapes, because both are natural. Several names positionally for the
       // common case, or one competitor with its aliases and domain spelled out.
       //   competitors add <id> Drata Secureframe
@@ -407,7 +451,7 @@ const commands = {
     if (sub === "discovered") {
       // Not a guess: companies THIS project's own answers already named, which
       // nobody is tracking. The evidence is the answers you paid for.
-      const projectId = need(rest_[1], "competitors discovered needs a <projectId>");
+      const projectId = await resolveProject(need(rest_[1], "competitors discovered needs a <project>"));
       const out = await withAutoLogin(() =>
         rest(base, "GET", `/projects/${projectId}/competitors/discovered`),
       );
@@ -434,7 +478,9 @@ const commands = {
     }
 
     // list: competitors <projectId>
-    const projectId = need(sub, "competitors needs a <projectId> (or a subcommand: add, remove, discovered)");
+    const projectId = await resolveProject(
+      need(sub, "competitors needs a <project> (or a subcommand: add, remove, discovered)"),
+    );
     const out = await withAutoLogin(() => rest(base, "GET", `/projects/${projectId}/competitors`));
     if (JSON_OUT) return printJson(out);
     const rows = out.competitors ?? [];
@@ -489,7 +535,7 @@ const commands = {
   async prompts() {
     const sub = rest_[0];
     if (sub === "add") {
-      const projectId = need(rest_[1], "prompts add needs a <projectId>");
+      const projectId = await resolveProject(need(rest_[1], "prompts add needs a <project>"));
       const body = {
         prompts: [
           {
@@ -516,7 +562,7 @@ const commands = {
       return;
     }
     // list: prompts <projectId>
-    const projectId = need(sub, "prompts needs a <projectId>");
+    const projectId = await resolveProject(need(sub, "prompts needs a <project>"));
     const out = await withAutoLogin(() => rest(base, "GET", `/projects/${projectId}/prompts`));
     if (JSON_OUT) return printJson(out.prompts);
     table(out.prompts, [
@@ -530,7 +576,7 @@ const commands = {
   async runs() {
     const sub = rest_[0];
     if (sub === "trigger") {
-      const projectId = need(rest_[1], "runs trigger needs a <projectId>");
+      const projectId = await resolveProject(need(rest_[1], "runs trigger needs a <project>"));
       const body = {};
       if (flags.provider) body.provider = flags.provider;
       if (flags.model) body.model = flags.model;
@@ -583,7 +629,7 @@ const commands = {
       return;
     }
     // list: runs <projectId>
-    const projectId = need(sub, "runs needs a <projectId>");
+    const projectId = await resolveProject(need(sub, "runs needs a <project>"));
     const query = flags.limit ? { limit: Number(flags.limit) } : undefined;
     const out = await withAutoLogin(() => rest(base, "GET", `/projects/${projectId}/runs`, { query }));
     if (JSON_OUT) return printJson(out.runs);
@@ -597,7 +643,7 @@ const commands = {
   },
 
   async history() {
-    const projectId = need(rest_[0], "history needs a <projectId>");
+    const projectId = await resolveProject(need(rest_[0], "history needs a <project>"));
     const query = flags.limit ? { limit: Number(flags.limit) } : undefined;
     const out = await withAutoLogin(() =>
       rest(base, "GET", `/projects/${projectId}/history`, { query }),
@@ -734,21 +780,22 @@ function printHelp() {
     "  routers remove <router>                Forget the stored key for a router",
     "",
     c.bold("DATA (REST v1)"),
+    c.dim("  <project> is a project name, a brand name, or an id (full or a unique prefix)"),
     "  projects                               List organizations",
     "  projects create --name <n> --brand <b> [--domains a,b] [--description <d>]",
-    "  prompts <projectId>                    List a project's prompts",
-    "  prompts add <projectId> --text <t> --topic <top>",
+    "  prompts <project>                      List a project's prompts",
+    "  prompts add <project> --text <t> --topic <top>",
     "  prompts toggle <promptId> --on|--off",
-    "  competitors <projectId>                Competitors tracked for a project",
-    "  competitors add <projectId> <name...>  Track competitors by name",
-    "  competitors add <projectId> --name <n> [--domain <d>] [--aliases a,b]",
+    "  competitors <project>                  Competitors tracked for a project",
+    "  competitors add <project> <name...>    Track competitors by name",
+    "  competitors add <project> --name <n> [--domain <d>] [--aliases a,b]",
     "  competitors remove <competitorId>      Stop tracking one",
-    "  competitors discovered <projectId>     Companies the answers named but nobody tracks",
-    "  runs <projectId> [--limit <n>]         List runs",
-    "  runs trigger <projectId> [--provider <p>] [--model <m>]",
+    "  competitors discovered <project>       Companies the answers named but nobody tracks",
+    "  runs <project> [--limit <n>]           List runs",
+    "  runs trigger <project> [--provider <p>] [--model <m>]",
     "  runs get <runId>                       Share-of-voice report",
     "  runs responses <runId>                 Raw answers, sources, mentions",
-    "  history <projectId> [--limit <n>]      Brand visibility over time",
+    "  history <project> [--limit <n>]        Brand visibility over time",
     "  logs [--channel c] [--category c] [--status s] [--days n] [--q text] [--limit n]",
     "                                         Account activity feed (users, agents, cron)",
     "",
