@@ -1,7 +1,11 @@
-// Tiny output helpers. Color is used only on a TTY and honors NO_COLOR; every
-// command also supports --json for raw, scriptable output.
+// Tiny output helpers. Color is used only on a TTY and honors NO_COLOR /
+// FORCE_COLOR; every command also supports --json for raw, scriptable output.
+// The detector is shared with brand.mjs so the intro splash and the help/body
+// text below it always agree on whether color is on.
 
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+import { supportsColor } from "./brand.mjs";
+
+const useColor = supportsColor(process.stdout);
 const wrap = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 
 export const c = {

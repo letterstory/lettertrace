@@ -18,6 +18,7 @@ import { rest, ApiError } from "./http.mjs";
 import { listTools, callTool, renderToolResult } from "./mcp.mjs";
 import { readSecret, SecretInputError, SECRET_ENV } from "./secret.mjs";
 import { c, printJson, table, kv, ok, info, fail } from "./output.mjs";
+import { banner, withSpinner } from "./brand.mjs";
 
 // --- arg parsing ----------------------------------------------------
 function parseArgs(argv) {
@@ -193,8 +194,13 @@ const commands = {
       const body = { api_key: apiKey };
       if (typeof flags.label === "string") body.label = flags.label;
 
-      info(c.dim(`Verifying the key against ${match.label}...`));
-      const out = await withAutoLogin(() => rest(base, "PUT", `/keys/${provider}`, { body }));
+      const out = await withAutoLogin(() =>
+        withSpinner(
+          `Verifying your ${match.label} key...`,
+          () => rest(base, "PUT", `/keys/${provider}`, { body }),
+          { enabled: !JSON_OUT },
+        ),
+      );
       if (JSON_OUT) return printJson(out);
       ok(`Verified and stored your ${match.label} key (${out.key.key_hint}).`);
       return;
@@ -404,9 +410,14 @@ const commands = {
       if (flags.provider) body.provider = flags.provider;
       if (flags.model) body.model = flags.model;
       const out = await withAutoLogin(() =>
-        rest(base, "POST", `/projects/${projectId}/runs`, {
-          body: Object.keys(body).length ? body : undefined,
-        }),
+        withSpinner(
+          "Running your prompts across the model...",
+          () =>
+            rest(base, "POST", `/projects/${projectId}/runs`, {
+              body: Object.keys(body).length ? body : undefined,
+            }),
+          { enabled: !JSON_OUT },
+        ),
       );
       if (JSON_OUT) return printJson(out);
       ok(`Run ${c.bold(out.runId)} ${out.status} (${out.totalResponses} responses).`);
@@ -528,7 +539,13 @@ const commands = {
         if (k === "json" || k === "url") continue;
         args[k] = coerce(v);
       }
-      const result = await withAutoLoginMcp(() => callTool(base, name, args));
+      const result = await withAutoLoginMcp(() =>
+        withSpinner(
+          `Calling ${name}...`,
+          () => callTool(base, name, args),
+          { enabled: !JSON_OUT },
+        ),
+      );
       if (JSON_OUT) return printJson(result);
       const { text, isError } = renderToolResult(result);
       if (isError) fail(text || "Tool returned an error.");
@@ -562,9 +579,10 @@ async function withAutoLoginMcp(fn) {
 }
 
 function printHelp() {
+  // The splash is decorative: keep it off stdout under --json so nothing but
+  // the (already non-JSON) help text is added for a script that asks for it.
+  if (!JSON_OUT) process.stdout.write(banner());
   const lines = [
-    `${c.bold("lettertrace")} - OAuth-authenticated CLI for a Lettertrace deployment`,
-    "",
     c.bold("USAGE"),
     "  lettertrace <command> [args] [--json] [--url <base>]",
     "",
@@ -616,7 +634,7 @@ function printHelp() {
 
 // --- dispatch -------------------------------------------------------
 async function main() {
-  if (!command || command === "help" || flags.help || flags.h) {
+  if (!command || command === "help" || command === "-h" || flags.help || flags.h) {
     printHelp();
     return;
   }
