@@ -22,10 +22,31 @@
  */
 
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PROVIDERS, analysisModelFor } from "../lib/models";
 import { ROUTERS, isRouterId, routerProviders, routerSupport } from "../lib/routers";
 import { probeRouterSearch, humanError } from "../lib/llm";
 import type { Provider, RouterId } from "../lib/types";
+
+/** Read .env.local into the environment, so a key set there is found without
+ *  being exported by hand. Existing variables always win. */
+function loadEnvLocal(): void {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  let raw = "";
+  try {
+    raw = readFileSync(resolve(repoRoot, ".env.local"), "utf8");
+  } catch {
+    return;
+  }
+  for (const line of raw.split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (!m) continue;
+    const value = m[2].trim().replace(/^["']|["']$/g, "");
+    if (value && !process.env[m[1]]) process.env[m[1]] = value;
+  }
+}
+loadEnvLocal();
 
 function parseArgs(argv: string[]) {
   const positional: string[] = [];
@@ -42,16 +63,27 @@ function parseArgs(argv: string[]) {
   return { positional, flags };
 }
 
-function readKey(flags: Record<string, string>): string {
+/**
+ * The key, from a file or the environment — never from an argument, which would
+ * land in shell history and in `ps`.
+ *
+ * $ROUTER_API_KEY_<ROUTER> is checked before the generic $ROUTER_API_KEY so a
+ * machine configured for several gateways doesn't need the variable rewritten
+ * between probes.
+ */
+function readKey(router: string, flags: Record<string, string>): string {
   if (flags["key-file"]) {
     const key = readFileSync(flags["key-file"], "utf8").trim();
     if (key) return key;
     throw new Error(`--key-file ${flags["key-file"]} is empty.`);
   }
-  const env = process.env.ROUTER_API_KEY?.trim();
-  if (env) return env;
+  const specific = process.env[`ROUTER_API_KEY_${router.toUpperCase()}`]?.trim();
+  if (specific) return specific;
+  const generic = process.env.ROUTER_API_KEY?.trim();
+  if (generic) return generic;
   throw new Error(
-    "No key. Set $ROUTER_API_KEY or pass --key-file <path>. A key given as an argument would land in your shell history.",
+    `No key. Set $ROUTER_API_KEY_${router.toUpperCase()} (or $ROUTER_API_KEY), or pass --key-file <path>. ` +
+      "A key given as an argument would land in your shell history.",
   );
 }
 
@@ -66,7 +98,7 @@ async function main() {
     process.exit(2);
   }
   const router: RouterId = routerArg;
-  const apiKey = readKey(flags);
+  const apiKey = readKey(router, flags);
   const baseUrl = flags["base-url"] || null;
 
   // Default to every engine the registry says this router serves; --provider

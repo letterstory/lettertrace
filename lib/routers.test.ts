@@ -15,10 +15,7 @@ import type { Provider } from "@/lib/types";
 describe("router registry", () => {
   it("narrows only known routers", () => {
     expect(isRouterId("concentrate")).toBe(true);
-    // OpenRouter was built and then dropped before shipping: its entries rested
-    // on documentation where Concentrate's rest on a live probe. Nothing should
-    // accept the identifier while the registry has no entry for it.
-    expect(isRouterId("openrouter")).toBe(false);
+    expect(isRouterId("openrouter")).toBe(true);
     expect(isRouterId("litellm")).toBe(false);
     expect(parseRouterId(42)).toBeNull();
     expect(parseRouterId("concentrate")).toBe("concentrate");
@@ -36,6 +33,7 @@ describe("router registry", () => {
 
   it("serves only the engines whose measurement survives a gateway", () => {
     expect(routerProviders("concentrate")).toEqual(["anthropic", "openai"]);
+    expect(routerProviders("openrouter")).toEqual(["anthropic", "openai"]);
     // Gemini's grounding chunks, the AI Overviews pseudo-model and Perplexity's
     // always-on search are all provider-shaped; routed, they'd answer with a
     // different measurement under the same label.
@@ -54,9 +52,51 @@ describe("router registry", () => {
   });
 
   // The Anthropic SDK sends one auth header, not both, so the entry has to match
-  // what the router documents or every routed Claude call 401s.
-  it("records the auth header for the Anthropic surface", () => {
+  // what the router accepts or every routed Claude call 401s. Both probed live.
+  it("records the auth header for each Anthropic surface", () => {
     expect(ROUTERS.concentrate.anthropicAuth).toBe("bearer");
+    expect(ROUTERS.openrouter.anthropicAuth).toBe("x-api-key");
+  });
+
+  // Probed 2026-07-31 against a live key. OpenRouter carries Claude's forced
+  // web_search (13 sources on a question answerable from memory) but cannot ask
+  // an OpenAI model for its OWN search — "does not support native web search,
+  // use engine auto or exa" — and Exa is a third-party service that measures
+  // something different. So GPT through OpenRouter is ungrounded-only.
+  it("records what each router can actually ground", () => {
+    expect(routerSupport("openrouter", "anthropic")?.search).toBe("passthrough");
+    expect(routerSupport("openrouter", "openai")?.search).toBe("none");
+    expect(routerSupport("concentrate", "anthropic")?.search).toBe("passthrough");
+    expect(routerSupport("concentrate", "openai")?.search).toBe("passthrough");
+  });
+
+  it("still serves ungrounded work on the engine it cannot ground", () => {
+    // A refusal would be wrong: nothing is being claimed about the live web.
+    expect(routerCanMeasure("openrouter", "openai", { webSearch: false, verified: [] })).toBe(true);
+    expect(routerCanMeasure("openrouter", "openai", { webSearch: true, verified: ["openai"] })).toBe(false);
+  });
+});
+
+describe("OpenRouter request body", () => {
+  it("pins the upstream and forbids fallbacks", () => {
+    // Unpinned, OpenRouter price-load-balances across upstreams that can serve
+    // different quantizations, so a trend line moves when routing moves.
+    // Verified accepted: a pinned request came back "served by: OpenAI".
+    const body = ROUTERS.openrouter.extraBody!("anthropic", { webSearch: true }) as {
+      provider: { order: string[]; allow_fallbacks: boolean };
+    };
+    expect(body.provider).toEqual({ order: ["anthropic"], allow_fallbacks: false });
+  });
+
+  it("never asks for a web plugin", () => {
+    // The plugin would route through Exa for OpenAI models, which is a
+    // third-party search service and a different measurement.
+    const body = ROUTERS.openrouter.extraBody!("openai", { webSearch: true }) as Record<string, unknown>;
+    expect(body.plugins).toBeUndefined();
+  });
+
+  it("Concentrate needs no extra body", () => {
+    expect(ROUTERS.concentrate.extraBody).toBeUndefined();
   });
 });
 
@@ -113,26 +153,6 @@ describe("routerCanMeasure", () => {
   });
 });
 
-/**
- * Temporarily mark one engine as unsearchable and ask for the refusal.
- *
- * routerRefusalMessage reads the registry rather than taking support as an
- * argument, so the only way to reach the 'none' branch is to put a router in
- * that state — and no shipped router is in it, now that Concentrate's Responses
- * endpoint turned out to honour a forced browse. Restored in a finally, so a
- * failing assertion can't leave the registry lying to every other test.
- */
-function refusalForSearchless(): string {
-  const support = ROUTERS.concentrate.providers.openai!;
-  const original = support.search;
-  support.search = "none";
-  try {
-    return routerRefusalMessage("concentrate", "openai", { webSearch: true, verified: [] });
-  } finally {
-    support.search = original;
-  }
-}
-
 describe("routerRefusalMessage", () => {
   it("names the alternative engines when the router can't serve one", () => {
     const message = routerRefusalMessage("concentrate", "google", {
@@ -143,10 +163,16 @@ describe("routerRefusalMessage", () => {
     expect(message).toContain("Anthropic (Claude) and OpenAI (ChatGPT)");
   });
 
-  // The branch stays because it is the guard for the next router added, so
-  // exercise it against a stub rather than deleting the coverage with the case.
+  // OpenRouter cannot ask an OpenAI model for its own web search — its only
+  // options route through Exa — so this is the real case, not a stub.
   it("offers turning grounding off when search can't be requested", () => {
-    expect(refusalForSearchless()).toContain("Turn off web search");
+    const message = routerRefusalMessage("openrouter", "openai", {
+      webSearch: true,
+      verified: [],
+    });
+    expect(message).toContain("Turn off web search");
+    expect(message).toContain("OpenRouter");
+    expect(message).toContain("OpenAI (ChatGPT)");
   });
 
   it("points at a re-check when only the probe is missing", () => {

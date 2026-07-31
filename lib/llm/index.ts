@@ -109,6 +109,7 @@ interface RoutePlan {
   search: SearchSupport;
   /** Which header carries the key on the Anthropic surface — see the registry. */
   anthropicAuth: "x-api-key" | "bearer";
+  extraBody: Record<string, unknown>;
 }
 
 /**
@@ -163,6 +164,7 @@ function planRoute(
     baseUrl,
     search: support.search,
     anthropicAuth: info.anthropicAuth,
+    extraBody: info.extraBody?.(provider, { webSearch: opts.webSearch }) ?? {},
   };
 }
 
@@ -206,6 +208,7 @@ async function anthropicChat(
     max_tokens: maxTokens,
     ...(system ? { system } : {}),
     messages: [{ role: "user", content: user }],
+    ...(plan?.extraBody ?? {}),
   };
   const msg = await client.messages.create(
     params as unknown as Anthropic.MessageCreateParamsNonStreaming,
@@ -241,6 +244,7 @@ async function openaiChat(
     max_tokens: maxTokens,
     messages,
     ...(json ? { response_format: { type: "json_object" } } : {}),
+    ...(plan?.extraBody ?? {}),
   };
   const res = await client.chat.completions.create(
     params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
@@ -564,6 +568,7 @@ async function gatewayQuery(
     model: plan.slug,
     max_tokens: ANSWER_MAX_TOKENS,
     messages: [{ role: "user", content: prompt }],
+    ...plan.extraBody,
   };
   const res = (await client.chat.completions.create(
     params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
@@ -641,6 +646,7 @@ async function anthropicWebSearch(
     // us to check the live web. Costs roughly 4x the tokens of a memory answer.
     tool_choice: { type: "tool", name: "web_search" },
     messages: [{ role: "user", content: prompt }],
+    ...(plan?.extraBody ?? {}),
   };
   const msg = await client.messages.create(
     params as unknown as Anthropic.MessageCreateParamsNonStreaming,
@@ -712,6 +718,7 @@ async function openaiWebSearch(
           tool_choice: { type: "web_search_preview" },
           input: prompt,
           max_output_tokens: ANSWER_MAX_TOKENS,
+          ...plan?.extraBody,
         }),
       });
       if (!res.ok) {
@@ -1724,6 +1731,17 @@ export function humanError(err: unknown): string {
       return "Couldn't reach the AI provider (connection dropped). Please try again.";
     }
     return err.message;
+  }
+  // A Supabase/PostgREST error is a plain object, not an Error, so it used to
+  // fall through to "Unknown error." — which is what a check-constraint
+  // violation reported while a deployment was running an older schema. The
+  // message and code are the entire diagnosis; throwing them away turned a
+  // one-line fix into a debugging session.
+  if (err && typeof err === "object") {
+    const e = err as { message?: unknown; code?: unknown };
+    if (typeof e.message === "string" && e.message.trim()) {
+      return typeof e.code === "string" && e.code ? `${e.message} (${e.code})` : e.message;
+    }
   }
   return "Unknown error.";
 }
