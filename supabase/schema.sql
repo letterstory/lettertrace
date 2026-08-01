@@ -32,6 +32,13 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- Stamped the first time an operator alert goes out for this account, and used
+-- as the lock that makes it go out exactly once. A confirmation link that gets
+-- double-clicked, or a user who signs in from two devices at once, must not mail
+-- the operator twice. See alertNewSignup in lib/notify-signup.
+alter table public.profiles
+  add column if not exists admin_alerted_at timestamptz;
+
 -- Free-trial usage: tokens a user has consumed against the operator's shared
 -- (trial) keys before bringing their own. Safe to re-run.
 alter table public.profiles
