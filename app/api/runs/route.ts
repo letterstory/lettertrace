@@ -4,7 +4,14 @@ import { getProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveRunKey, consumeTrialRun, recordTrialUsage, engineKeyMessage } from "@/lib/trial";
+import {
+  resolveRunKey,
+  consumeTrialRun,
+  recordTrialUsage,
+  recordTrialSpend,
+  runBudgetMicros,
+  engineKeyMessage,
+} from "@/lib/trial";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -73,6 +80,7 @@ export async function POST() {
       model: key.model,
       apiKey: key.apiKey!,
       route: key.route,
+      budgetMicros: runBudgetMicros(key),
       context: {
         channel: "dashboard",
         actorType: "user",
@@ -81,9 +89,12 @@ export async function POST() {
       },
     });
 
-    // Record token spend against the operator's shared key for cost visibility.
+    // Bill the operator's shared key. Tokens for visibility, dollars for the
+    // ceiling — the run may already have stopped itself on that ceiling, but it
+    // still has to be recorded or the next run starts from a stale total.
     if (key.source === "trial") {
       await recordTrialUsage(supabase, result.tokensUsed);
+      await recordTrialSpend(supabase, result.spendMicros);
     }
 
     // Echo the engine that actually answered. The caller asked for

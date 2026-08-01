@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { scrapeDomain } from "@/lib/scrape";
 import { suggestFromSite, humanError } from "@/lib/llm";
-import { resolveKey, recordTrialUsage, pickDefaultProvider } from "@/lib/trial";
+import {
+  resolveKey,
+  recordTrialUsage,
+  recordTrialSpend,
+  pickDefaultProvider,
+} from "@/lib/trial";
+import { spendMicros } from "@/lib/pricing";
 import { logDashboard } from "@/lib/activity";
 
 export const maxDuration = 60;
@@ -65,7 +71,15 @@ export async function POST(request: Request) {
       brandName,
       siteText: scrape.text,
     });
-    if (key.source === "trial") await recordTrialUsage(supabase, suggestion.tokens);
+    // Metered even though no free RUN is consumed: these endpoints spend the
+    // operator's key, so without this a script could call them forever.
+    if (key.source === "trial") {
+      await recordTrialUsage(supabase, suggestion.tokens);
+      await recordTrialSpend(
+        supabase,
+        spendMicros({ provider: key.provider, model: key.model, tokens: suggestion.tokens }),
+      );
+    }
     await logDashboard(user, request, {
       category: "onboarding",
       action: "onboarding.suggested",

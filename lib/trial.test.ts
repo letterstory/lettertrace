@@ -20,6 +20,7 @@ import {
   trialModelFor,
   trialEnabled,
   pickDefaultProvider,
+  runBudgetMicros,
 } from "@/lib/trial";
 
 // Grounding is a required argument on the real resolver (a router that can't
@@ -467,5 +468,126 @@ describe("the exhausted message offers the router", () => {
     expect(message).toContain("router key");
     expect(message).not.toContain("Perplexity");
     expect(message).not.toContain("Gemini");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The spend ceiling.
+//
+// Counting runs bounds how OFTEN a free user starts something, not what it
+// costs. These cases pin the second ceiling: that it refuses independently of
+// the run count, that it says so in words that match which limit was hit, and
+// that it never applies to a user spending their own money.
+// ---------------------------------------------------------------------------
+
+/** A profile with both meters set. */
+function meters(runsUsed: number, spendMicros: number) {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({
+            data: { trial_runs_used: runsUsed, trial_spend_micros: spendMicros },
+          }),
+        }),
+      }),
+    }),
+  } as never;
+}
+
+describe("the free-tier spend ceiling", () => {
+  beforeEach(() => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-operator";
+    process.env.TRIAL_SPEND_LIMIT_USD = "5";
+  });
+
+  afterEach(() => {
+    delete process.env.TRIAL_SPEND_LIMIT_USD;
+  });
+
+  it("serves a user who is under both ceilings", async () => {
+    const key = await resolveKey(meters(1, 2_000_000), "u1", "anthropic");
+    expect(key.source).toBe("trial");
+    expect(key.spentMicros).toBe(2_000_000);
+    expect(key.capMicros).toBe(5_000_000);
+  });
+
+  it("refuses on spend even with free runs left", async () => {
+    // The hole this closes: one run of a 500-prompt project costs more than the
+    // whole free tier, and the run counter says 1 of 5.
+    const key = await resolveKey(meters(1, 5_000_000), "u1", "anthropic");
+    expect(key.source).toBe("exhausted");
+    expect(key.exhaustedBy).toBe("spend");
+  });
+
+  it("still refuses on runs when spend is untouched", async () => {
+    const key = await resolveKey(meters(5, 0), "u1", "anthropic");
+    expect(key.source).toBe("exhausted");
+    expect(key.exhaustedBy).toBe("runs");
+  });
+
+  it("says which ceiling was hit", async () => {
+    const spent = await resolveKey(meters(1, 5_000_000), "u1", "anthropic");
+    const msg = engineKeyMessage(spent);
+    expect(msg).toContain("$5.00");
+    // The run-count wording would be actively misleading here: they have four
+    // runs left and would go looking for the bug.
+    expect(msg).not.toMatch(/all \d+ free runs/);
+
+    const runs = await resolveKey(meters(5, 0), "u1", "anthropic");
+    expect(engineKeyMessage(runs)).toMatch(/free runs/);
+  });
+
+  it("applies to the per-engine run resolver too", async () => {
+    const key = await runKeyFor(meters(0, 6_000_000), "u1", "anthropic");
+    expect(key.source).toBe("exhausted");
+    expect(key.exhaustedBy).toBe("spend");
+  });
+
+  it("never rations a user spending their own money", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-mine");
+    const key = await runKeyFor(meters(99, 999_000_000), "u1", "anthropic");
+    expect(key.source).toBe("own");
+    expect(runBudgetMicros(key)).toBeNull();
+  });
+
+  it("hands a run only what is left of the ceiling", async () => {
+    const key = await resolveKey(meters(0, 4_000_000), "u1", "anthropic");
+    expect(runBudgetMicros(key)).toBe(1_000_000);
+  });
+
+  it("never hands a run a negative budget", async () => {
+    // Overshoot is expected: cost is known only after the call, so the last
+    // answer of a run can carry the total past the cap.
+    const key = await resolveKey(meters(0, 4_000_000), "u1", "anthropic");
+    expect(runBudgetMicros(key)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("serves one micro-dollar under the cap and refuses at it", async () => {
+    // The boundary is exclusive: $5.00 spent of $5.00 means the $5 is gone.
+    // Verified against the live database at this exact granularity.
+    expect((await resolveKey(meters(0, 4_999_999), "u1", "anthropic")).source).toBe("trial");
+    expect((await resolveKey(meters(0, 5_000_000), "u1", "anthropic")).source).toBe("exhausted");
+  });
+
+  it("treats a limit of zero as no free tier at all", async () => {
+    process.env.TRIAL_SPEND_LIMIT_USD = "0";
+    const key = await resolveKey(meters(0, 0), "u1", "anthropic");
+    expect(key.source).toBe("exhausted");
+    expect(key.exhaustedBy).toBe("spend");
+  });
+
+  it("reads a profile with no spend column as unspent", async () => {
+    // A deployment that hasn't run the migration yet must still serve its
+    // users rather than refusing everyone as over-budget.
+    const legacy = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { trial_runs_used: 0 } }) }),
+        }),
+      }),
+    } as never;
+    const key = await resolveKey(legacy, "u1", "anthropic");
+    expect(key.source).toBe("trial");
   });
 });

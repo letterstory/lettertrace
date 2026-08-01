@@ -401,7 +401,7 @@ describe("POST /api/v1/projects/:id/runs", () => {
   it("returns the run result on success", async () => {
     vi.mocked(triggerRunForProject).mockResolvedValue({
       ok: true,
-      result: { runId: "r1", status: "completed", totalResponses: 3, tokensUsed: 10 },
+      result: { runId: "r1", status: "completed", totalResponses: 3, tokensUsed: 10 , spendMicros: 0},
     });
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", { method: "POST" }),
@@ -444,7 +444,7 @@ describe("POST /api/v1/projects/:id/runs", () => {
   it("ignores a non-boolean background value", async () => {
     vi.mocked(triggerRunForProject).mockResolvedValue({
       ok: true,
-      result: { runId: "r1", status: "completed", totalResponses: 3, tokensUsed: 10 },
+      result: { runId: "r1", status: "completed", totalResponses: 3, tokensUsed: 10 , spendMicros: 0},
     });
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", {
@@ -474,7 +474,7 @@ describe("POST /api/v1/projects/:id/runs", () => {
   it("passes a google provider override through", async () => {
     vi.mocked(triggerRunForProject).mockResolvedValue({
       ok: true,
-      result: { runId: "r3", status: "completed", totalResponses: 3, tokensUsed: 10 },
+      result: { runId: "r3", status: "completed", totalResponses: 3, tokensUsed: 10 , spendMicros: 0},
     });
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", {
@@ -495,7 +495,7 @@ describe("POST /api/v1/projects/:id/runs", () => {
   it("passes a provider/model override through", async () => {
     vi.mocked(triggerRunForProject).mockResolvedValue({
       ok: true,
-      result: { runId: "r2", status: "completed", totalResponses: 3, tokensUsed: 10 },
+      result: { runId: "r2", status: "completed", totalResponses: 3, tokensUsed: 10 , spendMicros: 0},
     });
     const res = await postRunRoute(
       req("/api/v1/projects/p1/runs", {

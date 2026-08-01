@@ -16,6 +16,7 @@ import {
   routerSupport,
 } from "@/lib/routers";
 import { article } from "@/lib/utils";
+import { formatUsd, trialSpendLimitMicros } from "@/lib/pricing";
 
 // ------------------------------------------------------------------
 // Credential resolution + the free-trial layer.
@@ -88,12 +89,57 @@ export async function getTrialRunsUsed(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<number> {
+  return (await getTrialUsage(supabase, userId)).runs;
+}
+
+/** What the free tier has cost this user so far, in micro-dollars. */
+export async function getTrialSpendMicros(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<number> {
+  return (await getTrialUsage(supabase, userId)).spendMicros;
+}
+
+export interface TrialUsage {
+  runs: number;
+  spendMicros: number;
+}
+
+/**
+ * Both meters in one read. They are always wanted together — the free tier is
+ * gated on whichever runs out first — and two round trips per resolve is two
+ * more than this needs.
+ *
+ * A missing profile row reads as zero usage rather than as an error: it is the
+ * state a brand-new account is in for the moment before the signup trigger
+ * lands, and refusing to serve them would be a worse bug than a free run.
+ */
+export async function getTrialUsage(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<TrialUsage> {
   const { data } = await supabase
     .from("profiles")
-    .select("trial_runs_used")
+    .select("trial_runs_used, trial_spend_micros")
     .eq("id", userId)
     .maybeSingle();
-  return Number((data as { trial_runs_used?: number } | null)?.trial_runs_used ?? 0);
+  const row = data as { trial_runs_used?: number; trial_spend_micros?: number } | null;
+  return {
+    runs: Number(row?.trial_runs_used ?? 0),
+    spendMicros: Number(row?.trial_spend_micros ?? 0),
+  };
+}
+
+/**
+ * Is this user still inside BOTH free-tier ceilings?
+ *
+ * Runs bound how often they can start something; spend bounds what those
+ * somethings may cost. Neither implies the other: five runs of a thousand
+ * prompts is a large bill under a small run count, and a script hammering
+ * /suggest spends without touching the run counter at all.
+ */
+function withinTrial(usage: TrialUsage, runLimit: number, capMicros: number): boolean {
+  return usage.runs < runLimit && usage.spendMicros < capMicros;
 }
 
 export type KeySource =
@@ -127,6 +173,14 @@ export interface ResolvedKey {
   requested: { provider: Provider; model: string };
   remaining?: number; // free runs left (for 'trial'/'exhausted')
   limit?: number; // the free-run allowance
+  /** For 'exhausted': WHICH ceiling was hit. The two need different words —
+   *  "you've used all 5 free runs" is simply false for someone stopped by the
+   *  spend cap on their second run, and sends them looking for a bug. */
+  exhaustedBy?: "runs" | "spend";
+  /** For 'trial'/'exhausted': operator-funded spend so far, and the ceiling,
+   *  both in micro-dollars. */
+  spentMicros?: number;
+  capMicros?: number;
   /** For 'mismatch': providers the user DOES hold a key for, so the message can
    *  name the one-click fix instead of just refusing. */
   available?: Provider[];
@@ -200,29 +254,42 @@ export async function resolveKey(
     }
   }
 
-  // 2. A trial key, if free runs remain.
+  // 2. A trial key, if free runs AND free spend remain.
   const limit = trialRunLimit();
-  const used = await getTrialRunsUsed(supabase, userId);
+  const cap = trialSpendLimitMicros();
+  const usage = await getTrialUsage(supabase, userId);
   let trialConfigured = false;
   for (const p of order) {
     const tk = trialKeyFor(p);
     if (!tk) continue;
     trialConfigured = true;
-    if (used < limit) {
+    if (withinTrial(usage, limit, cap)) {
       return {
         source: "trial",
         apiKey: tk,
         provider: p,
         model: trialModelFor(p, modelFor(p)),
         requested,
-        remaining: Math.max(0, limit - used),
+        remaining: Math.max(0, limit - usage.runs),
         limit,
+        spentMicros: usage.spendMicros,
+        capMicros: cap,
       };
     }
   }
 
   if (trialConfigured) {
-    return { source: "exhausted", provider: preferred, model: requested.model, requested, remaining: 0, limit };
+    return {
+      source: "exhausted",
+      provider: preferred,
+      model: requested.model,
+      requested,
+      remaining: Math.max(0, limit - usage.runs),
+      limit,
+      exhaustedBy: usage.spendMicros >= cap ? "spend" : "runs",
+      spentMicros: usage.spendMicros,
+      capMicros: cap,
+    };
   }
   return { source: "none", provider: preferred, model: requested.model, requested };
 }
@@ -275,10 +342,12 @@ export async function resolveRunKeyFor(
 
   // The operator's shared key, but only for the engine actually chosen.
   const limit = trialRunLimit();
+  const cap = trialSpendLimitMicros();
   const trialKey = trialKeyFor(provider);
+  let trialUsage: TrialUsage | null = null;
   if (trialKey) {
-    const used = await getTrialRunsUsed(supabase, userId);
-    if (used < limit) {
+    trialUsage = await getTrialUsage(supabase, userId);
+    if (withinTrial(trialUsage, limit, cap)) {
       return {
         ...base,
         source: "trial",
@@ -286,8 +355,10 @@ export async function resolveRunKeyFor(
         // Still a substitution, but within the chosen provider: the answers
         // remain that assistant's, and `requested` carries the difference.
         model: trialModelFor(provider, requested.model),
-        remaining: Math.max(0, limit - used),
+        remaining: Math.max(0, limit - trialUsage.runs),
         limit,
+        spentMicros: trialUsage.spendMicros,
+        capMicros: cap,
       };
     }
   }
@@ -322,7 +393,18 @@ export async function resolveRunKeyFor(
   const others = Array.from(new Set([...direct, ...viaRouters])).filter((p) => p !== provider);
   if (others.length > 0) return { ...base, source: "mismatch", available: others };
 
-  if (trialKey) return { ...base, source: "exhausted", remaining: 0, limit };
+  if (trialKey) {
+    const usage = trialUsage ?? (await getTrialUsage(supabase, userId));
+    return {
+      ...base,
+      source: "exhausted",
+      remaining: Math.max(0, limit - usage.runs),
+      limit,
+      exhaustedBy: usage.spendMicros >= cap ? "spend" : "runs",
+      spentMicros: usage.spendMicros,
+      capMicros: cap,
+    };
+  }
   return { ...base, source: "none" };
 }
 
@@ -374,6 +456,17 @@ export function engineKeyMessage(key: ResolvedKey): string {
   if (key.source === "unroutable" && key.refusal) return key.refusal;
 
   if (key.source === "exhausted") {
+    // The spend ceiling and the run ceiling are different refusals. Someone
+    // stopped on their second run by a large project needs to know it was the
+    // size of the run, not a count they haven't reached — otherwise the message
+    // contradicts the run counter sitting next to it.
+    if (key.exhaustedBy === "spend") {
+      return (
+        `This account has used its ${formatUsd(key.capMicros ?? 0)} of free ${engine} usage. ` +
+        `Add your own ${providerLabel} key in Settings to keep monitoring, ` +
+        `or one router key (${routerNames()}) that covers several assistants at once.`
+      );
+    }
     // Name the router here and only here. A router key ranks BELOW the trial in
     // both resolvers — a working grounded credential beats refusing — so a trial
     // user never encounters one in the ordinary course of things, and they are
@@ -429,13 +522,42 @@ export function nextRunMessage(key: ResolvedKey): string {
 }
 
 /** Add consumed tokens to the caller's trial tally (atomic, self-scoped rpc).
- * Recording only; the free tier is gated on runs, not tokens. */
+ * Recording only — the enforceable meter is spend, below. */
 export async function recordTrialUsage(
   supabase: SupabaseClient,
   tokens: number,
 ): Promise<void> {
   if (!tokens || tokens <= 0) return;
   await supabase.rpc("increment_trial_tokens", { amount: Math.round(tokens) });
+}
+
+/**
+ * How much this run may spend, given the key that will pay for it.
+ *
+ * Null for anything but a trial: on the user's own credential (direct or via a
+ * router) there is nothing for us to ration, and cutting their run short would
+ * be us rationing their money.
+ */
+export function runBudgetMicros(key: ResolvedKey): number | null {
+  if (key.source !== "trial") return null;
+  return Math.max(0, (key.capMicros ?? 0) - (key.spentMicros ?? 0));
+}
+
+/**
+ * Add operator-funded spend to the caller's tally (atomic, self-scoped rpc).
+ *
+ * Called AFTER the money is spent, unlike consumeTrialRun which gates before.
+ * That ordering is forced: the cost isn't known until the provider answers. The
+ * consequence is that the LAST call of a run can carry the total past the cap —
+ * bounded overshoot, by design. Enforcing per-call in advance would mean
+ * refusing on an estimate, and the estimate is the thing we're least sure of.
+ */
+export async function recordTrialSpend(
+  supabase: SupabaseClient,
+  micros: number,
+): Promise<void> {
+  if (!micros || micros <= 0) return;
+  await supabase.rpc("increment_trial_spend", { amount: Math.round(micros) });
 }
 
 /**

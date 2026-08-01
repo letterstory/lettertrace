@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { suggestCompetitors, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveKey, recordTrialUsage } from "@/lib/trial";
+import { resolveKey, recordTrialUsage, recordTrialSpend } from "@/lib/trial";
+import { spendMicros } from "@/lib/pricing";
 import { logDashboard } from "@/lib/activity";
 import type { Competitor, Topic } from "@/lib/types";
 
@@ -67,7 +68,15 @@ export async function POST(request: Request) {
       count: 6,
     });
 
-    if (key.source === "trial") await recordTrialUsage(supabase, tokens);
+    // Metered even though no free RUN is consumed: these endpoints spend the
+    // operator's key, so without this a script could call them forever.
+    if (key.source === "trial") {
+      await recordTrialUsage(supabase, tokens);
+      await recordTrialSpend(
+        supabase,
+        spendMicros({ provider: key.provider, model: key.model, tokens }),
+      );
+    }
 
     // Belt-and-braces: drop the brand itself and anything already tracked,
     // including tracked competitors' aliases (e.g. "Monday" vs "Monday.com").
