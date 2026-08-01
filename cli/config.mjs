@@ -31,9 +31,9 @@ export function saveConfig(cfg) {
 }
 
 // Base URL precedence: explicit --url, then $LETTERTRACE_URL, then the base
-// saved at login, then localhost.
+// saved at login, then the hosted default at https://lettertrace.com.
 export function resolveBase(cliUrl) {
   const stored = loadConfig().base;
-  const base = cliUrl || process.env.LETTERTRACE_URL || stored || "http://localhost:3000";
+  const base = cliUrl || process.env.LETTERTRACE_URL || stored || "https://lettertrace.com";
   return base.replace(/\/+$/, "");
 }

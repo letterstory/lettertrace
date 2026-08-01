@@ -9,7 +9,7 @@
  * to /api/mcp, exactly as an AI assistant would.
  *
  * Run `lettertrace help` for the command list. Base URL comes from --url, then
- * $LETTERTRACE_URL, then the URL saved at login, then http://localhost:3000.
+ * $LETTERTRACE_URL, then the URL saved at login, then https://lettertrace.com.
  */
 
 import { resolveBase, loadConfig } from "./config.mjs";
@@ -804,7 +804,7 @@ function printHelp() {
     "  mcp call <tool> [--arg value ...]      Call an MCP tool",
     "",
     c.dim("Tokens live in ~/.lettertrace/config.json. Base URL: --url, then"),
-    c.dim("$LETTERTRACE_URL, then the login URL, then http://localhost:3000."),
+    c.dim("$LETTERTRACE_URL, then the login URL, then https://lettertrace.com."),
   ];
   process.stdout.write(lines.join("\n") + "\n");
 }

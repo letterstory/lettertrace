@@ -1,0 +1,31 @@
+{
+  "name": "lettertrace",
+  "version": "0.1.1",
+  "description": "Command-line client for a Lettertrace deployment: monitor how your brand shows up in AI assistant answers.",
+  "license": "MIT",
+  "author": "The Letter Company",
+  "type": "module",
+  "bin": {
+    "lettertrace": "lettertrace.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "*.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "lettertrace",
+    "cli",
+    "ai",
+    "share-of-voice",
+    "brand-monitoring",
+    "mcp",
+    "llm"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0"
+  }
+}
