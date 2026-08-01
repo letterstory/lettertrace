@@ -83,6 +83,26 @@ export async function sendAdminAlert(alert: AdminAlert): Promise<AlertOutcome> {
   }
 }
 
+/**
+ * Run something after the response, without letting it delay or break the
+ * request. Uses waitUntil where the runtime provides it — a server component
+ * render is not a context where that is guaranteed — and otherwise lets the
+ * promise run detached. Either way the caller never waits and never throws.
+ */
+export function fireAndForget(work: Promise<unknown>): void {
+  const swallowed = work.catch((e) => {
+    console.error(`[notify] background work failed: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  try {
+    // Imported lazily: on a runtime without it, the require itself is the thing
+    // that fails, and the fallback below is still correct.
+    const { waitUntil } = require("@vercel/functions") as { waitUntil: (p: Promise<unknown>) => void };
+    waitUntil(swallowed);
+  } catch {
+    void swallowed;
+  }
+}
+
 /** The signup alert's wording, separated so it can be asserted without a
  *  network call and read without digging through the callback. */
 export function signupAlert(user: { email?: string | null; id: string; created_at?: string }): AdminAlert {

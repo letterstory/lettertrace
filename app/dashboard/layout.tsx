@@ -6,7 +6,9 @@ import { SignOutButton } from "@/components/dashboard/signout";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { adminAlertEmail, fireAndForget } from "@/lib/notify";
+import { alertNewSignup } from "@/lib/notify-signup";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
 import { getUnseenRun } from "@/lib/results-seen";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
@@ -30,6 +32,26 @@ export default async function DashboardLayout({
     getProject(supabase, user.id),
     getProjects(supabase, user.id),
   ]);
+
+  // Operator alert for a new account. This lives here rather than in the auth
+  // callback because email confirmation is optional: with it off, a password
+  // signup gets a session immediately and never visits /auth/callback, so a
+  // hook there would only ever see OAuth users. Every signed-in user reaches
+  // the dashboard, whatever route they took in.
+  //
+  // Costs nothing when alerting is switched off — the check short-circuits
+  // before any query — and one indexed read when it is on. The claim itself is
+  // guarded in the database, so a second tab cannot produce a second email.
+  if (adminAlertEmail()) {
+    const { data: alertState } = await supabase
+      .from("profiles")
+      .select("admin_alerted_at")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (alertState && (alertState as { admin_alerted_at: string | null }).admin_alerted_at === null) {
+      fireAndForget(alertNewSignup(createServiceClient(), user));
+    }
+  }
 
   // Trial banner state: only when a trial is offered and the user is relying on
   // shared keys. Key resolution prefers the user's own key from EITHER

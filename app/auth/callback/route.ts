@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { alertNewSignup } from "@/lib/notify-signup";
+import { createClient } from "@/lib/supabase/server";
 import { resolveRedirectBase, safePath } from "@/lib/utils";
 import { logDashboard } from "@/lib/activity";
 
@@ -53,15 +51,6 @@ export async function GET(request: Request) {
           targetType: "user",
           targetId: user.id,
         });
-        // Every signup arrives here — an email confirmation link or an OAuth
-        // return — so this is the one funnel that sees all of them. It also
-        // sees every ordinary sign-in, which is why the alert claims itself in
-        // the database rather than guessing from timestamps.
-        //
-        // waitUntil, not await: a person waiting on a redirect should not be
-        // held up by a mail provider, and the alert must not be able to fail
-        // the sign-in it is reporting.
-        waitUntil(alertNewSignup(createServiceClient(), user).catch(() => {}));
       }
       return NextResponse.redirect(new URL(next, base));
     }
