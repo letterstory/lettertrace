@@ -155,7 +155,7 @@ function renderGrid(level, grid, indent = 0) {
 
 function version() {
   try {
-    const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
+    const pkgPath = fileURLToPath(new URL("./package.json", import.meta.url));
     return JSON.parse(readFileSync(pkgPath, "utf8")).version || "";
   } catch {
     return "";

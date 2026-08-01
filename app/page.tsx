@@ -15,6 +15,7 @@ import {
 import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
+import { InstallCli } from "@/components/install-cli";
 
 const GITHUB_URL = "https://github.com/letterstory/lettertrace";
 
@@ -161,6 +162,16 @@ export default function LandingPage() {
             <a href="#open-source" className="transition hover:text-ink">Open source</a>
           </nav>
           <div className="flex items-center gap-2">
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Lettertrace on GitHub"
+              title="Lettertrace on GitHub"
+              className="inline-flex h-9 w-9 items-center justify-center rounded border border-ink/15 text-ink-soft transition hover:border-ink/35 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40"
+            >
+              <Github className="h-4 w-4" aria-hidden />
+            </a>
             <ThemeToggle />
             <Button href="/login" variant="ghost" size="sm">Sign in</Button>
             <Button href="/login" size="sm">Initialize</Button>
@@ -189,10 +200,7 @@ export default function LandingPage() {
                 Start monitoring: it&apos;s free
                 <ArrowRight className="h-4 w-4" />
               </Button>
-              <Button href={GITHUB_URL} variant="secondary" size="lg">
-                <Github className="h-4 w-4" />
-                Star on GitHub
-              </Button>
+              <InstallCli />
             </div>
             <p className="mt-4 font-mono text-xs text-ink-faint">
               works with ChatGPT, Claude &amp; Gemini · self-host in minutes
