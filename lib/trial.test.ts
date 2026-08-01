@@ -563,6 +563,13 @@ describe("the free-tier spend ceiling", () => {
     expect(runBudgetMicros(key)).toBeGreaterThanOrEqual(0);
   });
 
+  it("serves one micro-dollar under the cap and refuses at it", async () => {
+    // The boundary is exclusive: $5.00 spent of $5.00 means the $5 is gone.
+    // Verified against the live database at this exact granularity.
+    expect((await resolveKey(meters(0, 4_999_999), "u1", "anthropic")).source).toBe("trial");
+    expect((await resolveKey(meters(0, 5_000_000), "u1", "anthropic")).source).toBe("exhausted");
+  });
+
   it("treats a limit of zero as no free tier at all", async () => {
     process.env.TRIAL_SPEND_LIMIT_USD = "0";
     const key = await resolveKey(meters(0, 0), "u1", "anthropic");
