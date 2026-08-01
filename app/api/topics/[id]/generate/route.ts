@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { generateVariations, humanError } from "@/lib/llm";
 import { PROVIDERS } from "@/lib/models";
-import { resolveKey, recordTrialUsage } from "@/lib/trial";
+import { resolveKey, recordTrialUsage, recordTrialSpend } from "@/lib/trial";
+import { spendMicros } from "@/lib/pricing";
 import { logDashboard } from "@/lib/activity";
 import type { Topic } from "@/lib/types";
 
@@ -81,7 +82,13 @@ export async function POST(
     });
 
     if (key.source === "trial") {
+      // Metered even though no free RUN is consumed: these endpoints spend the
+      // operator's key, so without this a script could call them forever.
       await recordTrialUsage(supabase, tokens);
+      await recordTrialSpend(
+        supabase,
+        spendMicros({ provider: key.provider, model: key.model, tokens }),
+      );
     }
 
     if (!variations.length) {

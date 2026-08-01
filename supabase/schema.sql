@@ -57,6 +57,31 @@ as $$
     returning trial_tokens_used;
 $$;
 
+-- What the free tier has COST, in micro-dollars, priced by lib/pricing.ts.
+--
+-- Tokens above are a tally; this is the ceiling. Counting runs alone bounds how
+-- many times a user may start something, not how much that something spends —
+-- a run is prompts x replicates calls, with no cap on prompts, and the three
+-- suggest/generate endpoints spend operator money without consuming a run at
+-- all. Both holes close against this column.
+--
+-- Micro-dollars rather than a numeric so the increment is integer arithmetic:
+-- summing fractional currency across concurrent calls is how a ledger drifts.
+-- Safe to re-run.
+alter table public.profiles
+  add column if not exists trial_spend_micros bigint not null default 0;
+
+create or replace function public.increment_trial_spend(amount bigint)
+returns bigint
+language sql
+security definer set search_path = public
+as $$
+  update public.profiles
+    set trial_spend_micros = trial_spend_micros + greatest(amount, 0)
+    where id = auth.uid()
+    returning trial_spend_micros;
+$$;
+
 -- Free-trial gating is per RUN: monitoring runs executed on the operator's
 -- shared keys before the user brings their own (tokens above are still
 -- recorded so the operator can watch spend). Safe to re-run.

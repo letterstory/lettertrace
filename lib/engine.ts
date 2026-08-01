@@ -11,7 +11,8 @@ import type {
 import { runQuery, analyzeResponse, humanError, type AnalyzeEntity } from "@/lib/llm";
 import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
-import { modelLabel } from "@/lib/models";
+import { analysisModelFor, modelLabel } from "@/lib/models";
+import { spendMicros } from "@/lib/pricing";
 import { logActivity } from "@/lib/activity";
 import { selectAll } from "@/lib/paging";
 
@@ -82,6 +83,12 @@ export interface RunResult {
   status: "completed" | "failed";
   totalResponses: number;
   tokensUsed: number;
+  /** What this run cost, in micro-dollars, when it ran on an operator key.
+   *  Zero for a run on the user's own credential — that spend isn't ours. */
+  spendMicros: number;
+  /** Set when the run stopped early because the free-tier ceiling was reached:
+   *  the answers stored are real, there are just fewer of them than planned. */
+  budgetStopped?: boolean;
   error?: string;
 }
 
@@ -157,6 +164,17 @@ export interface ExecuteRunParams {
   route?: RouteInfo | null;
   /** Attribution for the activity log. Defaults to the internal system. */
   context?: RunContext;
+  /**
+   * How much operator money this run may spend, in micro-dollars. Omit (or
+   * null) for a run on the user's own key, where there is nothing for us to
+   * ration.
+   *
+   * A run has no natural size — prompts x replicates, with no cap on prompts —
+   * so a per-run allowance is the only thing standing between one free account
+   * and an arbitrary bill. Checked between answers rather than up front,
+   * because the cost of an answer isn't known until it arrives.
+   */
+  budgetMicros?: number | null;
 }
 
 /** A run row already created and logged, plus everything the job loop needs. */
@@ -265,7 +283,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
 
 /** Execute a prepared run's jobs and settle the run row. */
 export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams): Promise<RunResult> {
-  const { supabase, project, provider, model, apiKey, route } = params;
+  const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
   const { runId, jobs, competitors, attribution, startedMs } = prepared;
 
   if (jobs.length === 0) {
@@ -282,7 +300,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
       durationMs: Date.now() - startedMs,
       metadata: { provider, model, total_responses: 0, tokens_used: 0 },
     });
-    return { runId, status: "completed", totalResponses: 0, tokensUsed: 0 };
+    return { runId, status: "completed", totalResponses: 0, tokensUsed: 0, spendMicros: 0 };
   }
 
   // Mention terms derive from the PRIMARY domain only: phantom-site names
@@ -293,9 +311,25 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
   let processed = 0; // asks attempted (success or failure)
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
+  let spentMicros = 0; // what those tokens and searches cost, when we're paying
   let hardError: string | undefined;
 
+  // A ceiling only applies when the operator is footing the bill. On the user's
+  // own key there is nothing to ration, and capping their run would be us
+  // rationing their money.
+  const ceiling = typeof budgetMicros === "number" ? Math.max(0, budgetMicros) : null;
+  let budgetStopped = false;
+  const overBudget = () => ceiling !== null && spentMicros >= ceiling;
+
   await mapPool(jobs, CONCURRENCY, async (prompt) => {
+    // Checked per job rather than up front: the run is concurrent, so this is
+    // the point where in-flight answers have already reported their cost. Jobs
+    // already dispatched finish and are kept — a stored answer is real data,
+    // and throwing it away would waste money we have already spent.
+    if (overBudget()) {
+      budgetStopped = true;
+      return;
+    }
     try {
       const { text: answer, tokens: qTokens, sources } = await runQuery({
         provider,
@@ -306,6 +340,12 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
         webSearch: project.use_web_search,
       });
       tokensUsed += qTokens;
+      spentMicros += spendMicros({
+        provider,
+        model,
+        tokens: qTokens,
+        webSearch: project.use_web_search,
+      });
 
       const { data: respRow } = await supabase
         .from("responses")
@@ -408,6 +448,15 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
           entities,
         });
         tokensUsed += aTokens;
+        // Classification runs on the provider's cheap model and never searches,
+        // but it is still the operator's money and there are as many of these
+        // as there are answers.
+        spentMicros += spendMicros({
+          provider,
+          model: analysisModelFor(provider),
+          tokens: aTokens,
+          webSearch: false,
+        });
         analyzed = Object.fromEntries(
           results.map((r) => [r.key, { sentiment: r.sentiment, recommended: r.recommended }]),
         );
@@ -446,6 +495,16 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
   // A run only "completed" if at least one answer was actually stored; otherwise
   // it failed and we surface the captured error rather than reporting success.
   const status = succeeded > 0 ? "completed" : "failed";
+
+  // Stopping on the ceiling is not a failure and must not read as one: the
+  // answers that were stored are as good as any other run's. But it IS a
+  // shortfall, and a run that silently returns 40 of 200 answers would look
+  // like the prompts stopped working. Say which it was, in the run's own row.
+  const shortfall = budgetStopped ? jobs.length - processed : 0;
+  const budgetNote = budgetStopped
+    ? `Stopped after ${succeeded} of ${jobs.length} answers: this account reached its free-usage limit. ` +
+      `Add your own provider key in Settings to run the remaining ${shortfall}.`
+    : null;
   await supabase
     .from("runs")
     .update({
@@ -454,8 +513,8 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
       finished_at: finishedAt,
       error:
         status === "failed"
-          ? hardError ?? "No answers were stored, every prompt failed."
-          : null,
+          ? hardError ?? budgetNote ?? "No answers were stored, every prompt failed."
+          : budgetNote,
     })
     .eq("id", runId);
 
@@ -471,8 +530,10 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
     targetId: runId,
     summary:
       status === "completed"
-        ? `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
-        : `Run failed: ${hardError ?? "no answers were stored"}`,
+        ? budgetStopped
+          ? `Run stopped at the free-usage limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+          : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+        : `Run failed: ${hardError ?? budgetNote ?? "no answers were stored"}`,
     durationMs: Date.now() - startedMs,
     metadata: {
       provider,
@@ -480,11 +541,21 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
       total_responses: succeeded,
       prompt_count: jobs.length,
       tokens_used: tokensUsed,
+      spend_micros: spentMicros,
+      ...(budgetStopped ? { budget_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
     },
   });
 
-  return { runId, status, totalResponses: succeeded, tokensUsed, error: hardError };
+  return {
+    runId,
+    status,
+    totalResponses: succeeded,
+    tokensUsed,
+    spendMicros: spentMicros,
+    ...(budgetStopped ? { budgetStopped: true } : {}),
+    error: hardError,
+  };
 }
 
 /**

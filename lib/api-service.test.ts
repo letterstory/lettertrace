@@ -408,6 +408,7 @@ describe("triggerRunForProject", () => {
       status: "completed",
       totalResponses: 4,
       tokensUsed: 1234,
+      spendMicros: 0,
     });
 
     const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
@@ -435,6 +436,7 @@ describe("triggerRunForProject", () => {
       status: "completed",
       totalResponses: 4,
       tokensUsed: 1234,
+      spendMicros: 0,
     });
 
     const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
@@ -474,6 +476,7 @@ describe("triggerRunForProject", () => {
       status: "completed",
       totalResponses: 1,
       tokensUsed: 10,
+      spendMicros: 0,
     });
 
     await triggerRunForProject(db as never, "user-1", "proj-1", { provider: "openai" });

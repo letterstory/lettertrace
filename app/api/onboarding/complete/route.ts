@@ -7,6 +7,8 @@ import {
   resolveRunKey,
   consumeTrialRun,
   recordTrialUsage,
+  recordTrialSpend,
+  runBudgetMicros,
   pickDefaultProvider,
   engineKeyMessage,
 } from "@/lib/trial";
@@ -231,6 +233,7 @@ export async function POST(request: Request) {
       model: key.model,
       apiKey: key.apiKey,
       route: key.route,
+      budgetMicros: runBudgetMicros(key),
       context: {
         channel: "dashboard",
         actorType: "user",
@@ -240,6 +243,7 @@ export async function POST(request: Request) {
     });
     if (key.source === "trial") {
       await recordTrialUsage(supabase, result.tokensUsed);
+      await recordTrialSpend(supabase, result.spendMicros);
     }
     return NextResponse.json({
       projectId: project.id,
