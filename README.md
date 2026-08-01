@@ -192,6 +192,30 @@ While a user has free runs left and no key of their own, monitoring runs and var
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
 
+## Operator alerts (optional)
+
+Set `ADMIN_ALERT_EMAIL` and one address is emailed whenever someone creates an
+account:
+
+```bash
+ADMIN_ALERT_EMAIL=you@example.com
+ADMIN_ALERT_FROM="Lettertrace <alerts@yourdomain.com>"   # domain must be verified
+RESEND_API_KEY=re_...                                     # resend.com
+```
+
+Leave `ADMIN_ALERT_EMAIL` unset and the feature costs nothing: no mail, no
+database write, no extra work on any request.
+
+The alert fires **once per account**, claimed with a guarded write rather than
+inferred from timestamps. That distinction matters more than it looks: every
+signup and every OAuth sign-in arrive at the same callback, and confirmation
+links are routinely opened twice — once by the person, once by their mail
+client's link scanner. Stamping `profiles.admin_alerted_at` only where it is
+still null means concurrent callbacks race for the alert and exactly one wins.
+
+Sending happens after the response, so nobody waits on a mail provider while
+signing in, and a mail failure can never fail the sign-in it is reporting.
+
 ## Programmatic access (REST API + MCP)
 
 Create an API key in **Settings → API & MCP access** (shown once, stored hashed) and send it as a bearer token.
