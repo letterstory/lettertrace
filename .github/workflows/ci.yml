@@ -1,0 +1,58 @@
+# The checks that were only ever run by whoever remembered.
+#
+# The suite is worth something — it has caught real bugs — but a suite that only
+# runs locally protects the person who ran it, not the branch. This runs the
+# same four gates on every push and every pull request, in the order that fails
+# fastest: typecheck (seconds) before build (a minute), so an obvious break
+# doesn't wait on a bundle.
+#
+# Deliberately requires NO secrets. The whole pipeline was verified in a clean
+# checkout with no .env of any kind, which is why it can also run on a fork's
+# pull request. If a future change makes the build need a real key, that is
+# worth noticing here rather than working around with a secret: the build
+# reaching for a credential means it is doing something at build time that
+# belongs at request time.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+# Cancel it rather than paying for an answer nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck, test, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc is the single source of truth for the version, so CI and a
+          # developer's shell can't drift apart.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # ci, not install: build from the lockfile exactly, and fail if
+      # package.json and the lockfile disagree.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
