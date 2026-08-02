@@ -8,7 +8,6 @@ import RoutersManager from "./routers-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
 import type { ApiKeyPublic } from "@/lib/types";
-import { routerCanMeasure, routerProviders } from "@/lib/routers";
 import { trialEnabled } from "@/lib/trial";
 
 export const dynamic = "force-dynamic";
@@ -32,21 +31,14 @@ export default async function SettingsPage() {
   ]);
   const apiKeys = (apiKeysRes.data as ApiKeyPublic[] | null) ?? [];
 
-  // What the saved routers cover, split by whether their native web search was
-  // confirmed — the engine picker needs both, because the answer depends on the
-  // project's own web-search setting. Deduped: two routers can cover one engine.
-  const routedProviders = Array.from(
-    new Set(routerKeys.flatMap((k) => routerProviders(k.router))),
-  );
-  const routedGroundedProviders = Array.from(
-    new Set(
-      routerKeys.flatMap((k) =>
-        routerProviders(k.router).filter((p) =>
-          routerCanMeasure(k.router, p, { webSearch: true, verified: k.search_verified ?? [] }),
-        ),
-      ),
-    ),
-  );
+  // The saved routers as the engine picker sees them: what each gateway reaches,
+  // and what its search was confirmed for. Not reduced to a provider list here —
+  // coverage depends on the web-search toggle inside the form, which is client
+  // state, so the picker resolves it per keystroke from these credentials.
+  const routerCoverage = routerKeys.map((k) => ({
+    router: k.router,
+    searchVerified: k.search_verified ?? [],
+  }));
 
   return (
     <div className="space-y-8">
@@ -112,8 +104,7 @@ export default async function SettingsPage() {
           <ProjectForm
             project={project}
             configuredProviders={keys.map((k) => k.provider)}
-            routedProviders={routedProviders}
-            routedGroundedProviders={routedGroundedProviders}
+            routerKeys={routerCoverage}
             onTrial={trialEnabled() && keys.length === 0 && routerKeys.length === 0}
           />
         </CardBody>

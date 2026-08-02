@@ -16,6 +16,7 @@ vi.mock("@/lib/data", () => ({
   setActiveProject: vi.fn(),
   getProjects: vi.fn(async () => []),
   getConfiguredProviders: vi.fn(async () => []),
+  getRouterKeysPublic: vi.fn(async () => []),
 }));
 vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => String(e) }));
 vi.mock("@/lib/trial", () => ({

@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { Button, Input, Textarea, Select, Label } from "@/components/ui";
 import { PROVIDER_LIST, PROVIDERS } from "@/lib/models";
+import {
+  ROUTERS,
+  coveredProviders,
+  engineCoverage,
+  type RouterCoverage,
+} from "@/lib/routers";
 import { article } from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
 
@@ -25,25 +31,30 @@ function splitEngine(value: string): { provider: string; model: string } {
     : { provider: value.slice(0, sep), model: value.slice(sep + 1) };
 }
 
+/** "Claude", "Claude or GPT", "Claude, GPT or Gemini" — same phrasing the run
+ *  resolver uses when it lists the engines you could switch to. */
+function joinOr(labels: string[]): string {
+  return labels.length <= 1
+    ? labels[0] ?? ""
+    : `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
 export default function ProjectForm({
   project,
   configuredProviders = [],
-  routedProviders = [],
-  routedGroundedProviders = [],
+  routerKeys = [],
   onTrial = false,
 }: {
   project: Project | null;
-  /** Providers the user has a key for, so the picker can flag an engine that
-   *  can't run before they discover it as a failed run. */
+  /** Providers the user has a direct key for, so the picker can flag an engine
+   *  that can't run before they discover it as a failed run. */
   configuredProviders?: Provider[];
-  /** Providers a saved router credential can reach. Counts as having a key —
-   *  otherwise a user who set up one router key and no direct keys is told every
-   *  engine will fail, which is both wrong and the opposite of the point. */
-  routedProviders?: Provider[];
-  /** The subset whose live-web search the router was confirmed to carry. Split
-   *  from the above because the answer depends on the toggle in this very form:
-   *  with web search on, a router that can't ground can't serve the engine. */
-  routedGroundedProviders?: Provider[];
+  /** The saved router credentials. A router counts as having a key for every
+   *  engine it can measure — otherwise a user who set up one router key and no
+   *  direct keys is told every engine will fail, which is the opposite of the
+   *  point. Passed as credentials rather than as a provider list because what
+   *  they cover depends on the web-search toggle in this very form. */
+  routerKeys?: RouterCoverage[];
   /** Running on the operator's shared keys, which force a cheaper model. The
    *  picker promises "the assistant we query", so on the trial that promise is
    *  only true of the provider, not the model. */
@@ -75,11 +86,39 @@ export default function ProjectForm({
   // reason it reads the live web-search toggle: with grounding on, a router that
   // doesn't carry native search can't serve the engine, and that combination is
   // reachable in this form before anything is saved.
+  //
+  // Every engine in the catalog stays SELECTABLE — an engine that disappeared
+  // when a key was removed, or when web search was switched on, would leave a
+  // saved project pointing at an option its own picker no longer lists. What
+  // changes is what the form says about it, and the three states below are the
+  // three the next run can actually be in.
   const selectedProvider = splitEngine(engine).provider as Provider;
-  const covered =
-    configuredProviders.includes(selectedProvider) ||
-    (useWebSearch ? routedGroundedProviders : routedProviders).includes(selectedProvider);
-  const engineNeedsKey = Boolean(PROVIDERS[selectedProvider]) && !covered;
+  const known = Boolean(PROVIDERS[selectedProvider]);
+  const credentials = {
+    direct: configuredProviders,
+    routers: routerKeys,
+    webSearch: useWebSearch,
+  };
+  const coverage = engineCoverage(selectedProvider, credentials);
+  const providerLabel = known ? PROVIDERS[selectedProvider].label : selectedProvider;
+  const engineNeedsKey = known && coverage.kind === "none";
+  // Reachable through a saved router, but not measurably — the run resolver
+  // returns 'unroutable' for exactly this and refuses. Flagged rather than
+  // hidden, because two of the three fixes (turn web search off, re-check the
+  // key) leave this engine selected.
+  const unroutable = coverage.kind === "unroutable" ? coverage : null;
+  // Which credential will carry the run, when one can. Worth saying: a user who
+  // set up a gateway shouldn't have to infer that it covers the engine they just
+  // picked from the absence of a warning.
+  const routed = coverage.kind === "routed" ? coverage : null;
+  // For the no-coverage case: the engines these credentials DO cover, so the
+  // message names the one-click fix instead of only refusing. Same list the run
+  // resolver offers as 'mismatch'.
+  const alternatives = engineNeedsKey
+    ? coveredProviders(credentials)
+        .filter((p) => p !== selectedProvider)
+        .map((p) => PROVIDERS[p].label)
+    : [];
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -229,17 +268,34 @@ export default function ProjectForm({
         </Select>
         {engineNeedsKey ? (
           <p className="mt-1.5 text-xs text-terracotta">
-            No {PROVIDERS[selectedProvider].label} key saved, so runs on this engine
-            will fail. Add one in the section above, or pick an engine you have a key
-            for. We never answer with a different assistant than the one selected.
+            {routerKeys.length > 0
+              ? `No ${providerLabel} key saved, and no router you've added reaches ${providerLabel}, so runs on this engine will fail.`
+              : `No ${providerLabel} key saved, so runs on this engine will fail.`}{" "}
+            {alternatives.length > 0
+              ? `Add one in the section above, or switch to ${joinOr(alternatives)}, which your saved keys already cover.`
+              : "Add one in the section above, or pick an engine you have a key for."}{" "}
+            We never answer with a different assistant than the one selected.
           </p>
+        ) : unroutable ? (
+          // Selectable, but flagged in the router's own words. This is exactly
+          // the combination resolveRunKeyFor refuses as 'unroutable', so saying
+          // it here — while the toggle that causes it is on screen — is the
+          // difference between a fixable setting and a failed run.
+          <p className="mt-1.5 text-xs text-butter-ink">{unroutable.reason}</p>
         ) : (
           <div className="mt-1.5 space-y-1">
             <p className="text-xs text-ink-faint">
               Which assistant we query for this brand. You&apos;ll need a key for the
-              matching provider in the section above. Google AI Overviews and Gemini both
-              use your Google key.
+              matching provider, or a router that covers it, in the sections above.
+              Google AI Overviews and Gemini both use your Google key.
             </p>
+            {routed && (
+              <p className="text-xs text-ink-faint">
+                Covered by your {ROUTERS[routed.router].label} key. Runs are still
+                recorded under {providerLabel}, so the history stays continuous if you
+                add a direct key later.
+              </p>
+            )}
             {onTrial && (
               <p className="text-xs text-ink-faint">
                 While you&apos;re on free runs we use a faster, cheaper model from the
@@ -312,8 +368,12 @@ export default function ProjectForm({
             <Check className="h-4 w-4 text-teal-dark" />
             {engineNeedsKey ? (
               <span>
-                Saved, but runs need {article(PROVIDERS[selectedProvider].label)}{" "}
-                {PROVIDERS[selectedProvider].label} key
+                Saved, but runs need {article(providerLabel)} {providerLabel} key
+              </span>
+            ) : unroutable ? (
+              <span>
+                Saved, but {ROUTERS[unroutable.router].label} can&apos;t measure{" "}
+                {providerLabel} on these settings
               </span>
             ) : (
               "Saved"

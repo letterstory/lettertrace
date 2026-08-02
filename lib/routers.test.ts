@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
 import {
   ROUTERS,
+  coveredProviders,
+  engineCoverage,
   isRouterId,
   parseRouterId,
   routerCanMeasure,
@@ -9,6 +11,7 @@ import {
   routerRefusalMessage,
   routerSlug,
   routerSupport,
+  type RouterCoverage,
 } from "@/lib/routers";
 import type { Provider } from "@/lib/types";
 
@@ -181,5 +184,121 @@ describe("routerRefusalMessage", () => {
       verified: [],
     });
     expect(message).toContain("Re-check the key");
+  });
+});
+
+// LET-176. A user holding only router keys was told every engine would fail,
+// because the answer-engine picker asked "do you have a provider key?" while the
+// run resolver asks "can anything you hold measure this engine?". These are the
+// picker's half of that second question, and they have to agree with
+// resolveRunKeyFor's states or the two surfaces drift apart again.
+describe("engineCoverage", () => {
+  // Confirmed for both engines, which is what saving the key probes for.
+  const concentrate: RouterCoverage = {
+    router: "concentrate",
+    searchVerified: ["anthropic", "openai"],
+  };
+  const openrouter: RouterCoverage = {
+    router: "openrouter",
+    searchVerified: ["anthropic"],
+  };
+
+  it("covers an engine reachable only through a saved router", () => {
+    expect(
+      engineCoverage("anthropic", { direct: [], routers: [concentrate], webSearch: true }),
+    ).toEqual({ kind: "routed", router: "concentrate" });
+  });
+
+  it("still covers an engine held as a direct key", () => {
+    // And prefers it: the run resolver tries the direct key first, so a picker
+    // that named a router here would describe a call that won't be made.
+    expect(
+      engineCoverage("anthropic", {
+        direct: ["anthropic"],
+        routers: [concentrate],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "direct" });
+  });
+
+  it("covers a grounded engine only through a router confirmed to ground it", () => {
+    // OpenRouter reaches GPT but cannot ask it for its own web search, so a
+    // grounded project is 'unroutable' — reachable, not measurable — and the
+    // reason carries the fix rather than a bare refusal.
+    const grounded = engineCoverage("openai", {
+      direct: [],
+      routers: [openrouter],
+      webSearch: true,
+    });
+    expect(grounded.kind).toBe("unroutable");
+    expect(grounded.kind === "unroutable" && grounded.reason).toContain("Turn off web search");
+
+    // Same credentials, same engine, grounding off: nothing is being claimed
+    // about the live web, so the router serves it.
+    expect(
+      engineCoverage("openai", { direct: [], routers: [openrouter], webSearch: false }),
+    ).toEqual({ kind: "routed", router: "openrouter" });
+  });
+
+  it("prefers a router that can measure over one that merely reaches", () => {
+    expect(
+      engineCoverage("openai", {
+        direct: [],
+        routers: [openrouter, concentrate],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "routed", router: "concentrate" });
+  });
+
+  it("reports no coverage for an engine no router serves", () => {
+    // The LET-176 report itself: router keys, no Google key. Gemini's grounding
+    // doesn't survive a gateway, so no router reaches it at all — which is a
+    // different message from "reachable but not measurable".
+    expect(
+      engineCoverage("google", {
+        direct: [],
+        routers: [concentrate, openrouter],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("treats a router as no coverage when the user has saved none", () => {
+    expect(engineCoverage("anthropic", { direct: [], routers: [], webSearch: false })).toEqual({
+      kind: "none",
+    });
+  });
+});
+
+describe("coveredProviders", () => {
+  it("lists direct keys first, then what the routers add", () => {
+    const covered = coveredProviders({
+      direct: ["google"],
+      routers: [{ router: "concentrate", searchVerified: ["anthropic", "openai"] }],
+      webSearch: true,
+    });
+    expect(covered).toEqual(["google", "anthropic", "openai"]);
+  });
+
+  it("drops an engine the routers can reach but not ground", () => {
+    const routers: RouterCoverage[] = [{ router: "openrouter", searchVerified: ["anthropic"] }];
+    expect(coveredProviders({ direct: [], routers, webSearch: true })).toEqual(["anthropic"]);
+    expect(coveredProviders({ direct: [], routers, webSearch: false })).toEqual([
+      "anthropic",
+      "openai",
+    ]);
+  });
+
+  it("never invents coverage for an engine that needs a direct key", () => {
+    const covered = coveredProviders({
+      direct: [],
+      routers: [
+        { router: "concentrate", searchVerified: ["anthropic", "openai"] },
+        { router: "openrouter", searchVerified: ["anthropic"] },
+      ],
+      webSearch: false,
+    });
+    expect(covered).not.toContain("google");
+    expect(covered).not.toContain("perplexity");
   });
 });
