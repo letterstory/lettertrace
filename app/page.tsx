@@ -173,8 +173,10 @@ export default function LandingPage() {
               <Github className="h-4 w-4" aria-hidden />
             </a>
             <ThemeToggle />
-            <Button href="/login" variant="ghost" size="sm">Sign in</Button>
-            <Button href="/login" size="sm">Initialize</Button>
+            <div className="hidden items-center gap-2 sm:flex">
+              <Button href="/login" variant="ghost" size="sm">Sign in</Button>
+              <Button href="/login" size="sm">Initialize</Button>
+            </div>
           </div>
         </div>
       </header>
