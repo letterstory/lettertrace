@@ -301,11 +301,34 @@ describe("resolveRunKeyFor with a router credential", () => {
   // router user "you have no keys" and offering no switch was the failure this
   // guards: the engines their gateway does cover are exactly the useful advice.
   it("offers the router's own engines as the switch for an engine it can't serve", async () => {
+    // Perplexity is served by no router: its search is always on and
+    // inseparable from the answer, so there is no ungrounded tier to fall to.
     hasRouter("concentrate", ["anthropic"]);
-    const k = await runKeyFor(db(0), "user-1", "google", undefined, { webSearch: true });
+    const k = await runKeyFor(db(0), "user-1", "perplexity", undefined, { webSearch: true });
     expect(k.source).toBe("mismatch");
-    expect(k.available).toEqual(["anthropic", "openai"]);
-    expect(engineKeyMessage(k)).toContain("Anthropic (Claude) or OpenAI (ChatGPT)");
+    expect(k.available).toEqual(["anthropic", "openai", "google"]);
+    expect(engineKeyMessage(k)).toContain("Anthropic (Claude)");
+  });
+
+  // LET-176. A router reaches Gemini but cannot ground it, so a GROUNDED
+  // project is refused as unroutable rather than reported as "no key" — the
+  // fixes differ (turn search off, or add a direct key), and the old message
+  // named neither.
+  it("refuses grounded Gemini as unroutable, not as a missing key", async () => {
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "google", undefined, { webSearch: true });
+    expect(k.source).toBe("unroutable");
+    expect(k.refusal).toBeTruthy();
+  });
+
+  it("serves ungrounded Gemini through the router", async () => {
+    // The half of LET-176 that is genuinely fixed: no Google key, router only,
+    // web search off — this now runs instead of being unselectable.
+    hasRouter("openrouter", ["anthropic"]);
+    const k = await runKeyFor(db(0), "user-1", "google", undefined, { webSearch: false });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-openrouter");
+    expect(k.route?.router).toBe("openrouter");
   });
 
   it("takes a router key before falling back to the operator's trial", async () => {

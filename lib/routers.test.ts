@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
 import {
   ROUTERS,
+  coveredProviders,
+  engineCoverage,
   isRouterId,
   parseRouterId,
   routerCanMeasure,
@@ -9,6 +11,7 @@ import {
   routerRefusalMessage,
   routerSlug,
   routerSupport,
+  type RouterCoverage,
 } from "@/lib/routers";
 import type { Provider } from "@/lib/types";
 
@@ -32,13 +35,14 @@ describe("router registry", () => {
   });
 
   it("serves only the engines whose measurement survives a gateway", () => {
-    expect(routerProviders("concentrate")).toEqual(["anthropic", "openai"]);
-    expect(routerProviders("openrouter")).toEqual(["anthropic", "openai"]);
-    // Gemini's grounding chunks, the AI Overviews pseudo-model and Perplexity's
-    // always-on search are all provider-shaped; routed, they'd answer with a
-    // different measurement under the same label.
-    expect(routerSupport("concentrate", "google")).toBeNull();
+    expect(routerProviders("concentrate")).toEqual(["anthropic", "openai", "google"]);
+    expect(routerProviders("openrouter")).toEqual(["anthropic", "openai", "google"]);
+    // Perplexity stays out: its search is always on and inseparable from the
+    // answer, so a routed Perplexity call cannot be the ungrounded fallback the
+    // `search: "none"` tier relies on. Gemini earns its place only in that
+    // tier — reachable, never grounded (see the routed Gemini cases below).
     expect(routerSupport("concentrate", "perplexity")).toBeNull();
+    expect(routerSupport("openrouter", "perplexity")).toBeNull();
   });
 
   // Both of these are the provider's OWN wire format, which is what preserves
@@ -148,14 +152,14 @@ describe("routerCanMeasure", () => {
 
   it("never allows an engine the router doesn't serve", () => {
     expect(
-      routerCanMeasure("concentrate", "google", { webSearch: false, verified: [] }),
+      routerCanMeasure("concentrate", "perplexity", { webSearch: false, verified: [] }),
     ).toBe(false);
   });
 });
 
 describe("routerRefusalMessage", () => {
   it("names the alternative engines when the router can't serve one", () => {
-    const message = routerRefusalMessage("concentrate", "google", {
+    const message = routerRefusalMessage("concentrate", "perplexity", {
       webSearch: true,
       verified: [],
     });
@@ -181,5 +185,179 @@ describe("routerRefusalMessage", () => {
       verified: [],
     });
     expect(message).toContain("Re-check the key");
+  });
+});
+
+// LET-176. A user holding only router keys was told every engine would fail,
+// because the answer-engine picker asked "do you have a provider key?" while the
+// run resolver asks "can anything you hold measure this engine?". These are the
+// picker's half of that second question, and they have to agree with
+// resolveRunKeyFor's states or the two surfaces drift apart again.
+describe("engineCoverage", () => {
+  // Confirmed for both engines, which is what saving the key probes for.
+  const concentrate: RouterCoverage = {
+    router: "concentrate",
+    searchVerified: ["anthropic", "openai"],
+  };
+  const openrouter: RouterCoverage = {
+    router: "openrouter",
+    searchVerified: ["anthropic"],
+  };
+
+  it("covers an engine reachable only through a saved router", () => {
+    expect(
+      engineCoverage("anthropic", { direct: [], routers: [concentrate], webSearch: true }),
+    ).toEqual({ kind: "routed", router: "concentrate" });
+  });
+
+  it("still covers an engine held as a direct key", () => {
+    // And prefers it: the run resolver tries the direct key first, so a picker
+    // that named a router here would describe a call that won't be made.
+    expect(
+      engineCoverage("anthropic", {
+        direct: ["anthropic"],
+        routers: [concentrate],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "direct" });
+  });
+
+  it("covers a grounded engine only through a router confirmed to ground it", () => {
+    // OpenRouter reaches GPT but cannot ask it for its own web search, so a
+    // grounded project is 'unroutable' — reachable, not measurable — and the
+    // reason carries the fix rather than a bare refusal.
+    const grounded = engineCoverage("openai", {
+      direct: [],
+      routers: [openrouter],
+      webSearch: true,
+    });
+    expect(grounded.kind).toBe("unroutable");
+    expect(grounded.kind === "unroutable" && grounded.reason).toContain("Turn off web search");
+
+    // Same credentials, same engine, grounding off: nothing is being claimed
+    // about the live web, so the router serves it.
+    expect(
+      engineCoverage("openai", { direct: [], routers: [openrouter], webSearch: false }),
+    ).toEqual({ kind: "routed", router: "openrouter" });
+  });
+
+  it("prefers a router that can measure over one that merely reaches", () => {
+    expect(
+      engineCoverage("openai", {
+        direct: [],
+        routers: [openrouter, concentrate],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "routed", router: "concentrate" });
+  });
+
+  it("reports no coverage for an engine no router serves", () => {
+    // Perplexity is the engine no router serves at all — a different state
+    // from Gemini's "reachable but never grounded" (covered below).
+    expect(
+      engineCoverage("perplexity", {
+        direct: [],
+        routers: [concentrate, openrouter],
+        webSearch: true,
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("treats a router as no coverage when the user has saved none", () => {
+    expect(engineCoverage("anthropic", { direct: [], routers: [], webSearch: false })).toEqual({
+      kind: "none",
+    });
+  });
+});
+
+describe("coveredProviders", () => {
+  it("lists direct keys first, then what the routers add", () => {
+    const covered = coveredProviders({
+      direct: ["google"],
+      routers: [{ router: "concentrate", searchVerified: ["anthropic", "openai"] }],
+      webSearch: true,
+    });
+    expect(covered).toEqual(["google", "anthropic", "openai"]);
+  });
+
+  it("drops an engine the routers can reach but not ground", () => {
+    const routers: RouterCoverage[] = [{ router: "openrouter", searchVerified: ["anthropic"] }];
+    // Grounded: only Claude survives the gateway. GPT and Gemini are both
+    // reachable and both `search: "none"`, so both drop out.
+    expect(coveredProviders({ direct: [], routers, webSearch: true })).toEqual(["anthropic"]);
+    expect(coveredProviders({ direct: [], routers, webSearch: false })).toEqual([
+      "anthropic",
+      "openai",
+      "google",
+    ]);
+  });
+
+  it("never invents coverage for an engine that needs a direct key", () => {
+    const covered = coveredProviders({
+      direct: [],
+      routers: [
+        { router: "concentrate", searchVerified: ["anthropic", "openai"] },
+        { router: "openrouter", searchVerified: ["anthropic"] },
+      ],
+      webSearch: false,
+    });
+    // Perplexity is served by no router, so it can never appear. Gemini is not
+    // asserted here — ungrounded, it is legitimately covered.
+    expect(covered).not.toContain("perplexity");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Routed Gemini (LET-176).
+//
+// Both routers can SERVE Gemini and neither can GROUND it — probed 2026-08-02
+// against live keys. These cases pin that distinction, because the tempting
+// fix (accept OpenRouter's `:online` Exa plugin as grounding) would silently
+// swap the search engine underneath a number labelled "Gemini".
+// ---------------------------------------------------------------------------
+
+describe("routed Gemini", () => {
+  it("is reachable through both routers", () => {
+    for (const router of ["openrouter", "concentrate"] as const) {
+      expect(routerProviders(router)).toContain("google");
+    }
+  });
+
+  it("is selectable for an ungrounded project", () => {
+    const cov = engineCoverage("google", {
+      direct: [],
+      routers: [{ router: "openrouter", searchVerified: [] }],
+      webSearch: false,
+    });
+    expect(cov.kind).toBe("routed");
+  });
+
+  it("is refused for a grounded project, however the key was verified", () => {
+    // `verified` cannot rescue it: search is "none", so there is no native
+    // grounding to have verified in the first place.
+    for (const verified of [[], ["google"] as Provider[]]) {
+      const cov = engineCoverage("google", {
+        direct: [],
+        routers: [{ router: "openrouter", searchVerified: verified }],
+        webSearch: true,
+      });
+      expect(cov.kind).toBe("unroutable");
+    }
+  });
+
+  it("maps every catalog Gemini model to a real router slug", () => {
+    // Google's catalog ids are rolling aliases no router resolves, so each one
+    // needs an explicit override; the slugPrefix fallback would 404.
+    for (const model of ["gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"]) {
+      const slug = routerSlug("openrouter", "google", model);
+      expect(slug).toMatch(/^google\/gemini-2\.5-(pro|flash|flash-lite)$/);
+    }
+  });
+
+  it("never routes the AI Overviews pseudo-model", () => {
+    // It is our own construct, grounded in Google Search by definition — there
+    // is nothing on a router that could stand in for it.
+    expect(routerSlug("openrouter", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
   });
 });

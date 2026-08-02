@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getConfiguredProviders, setActiveProject } from "@/lib/data";
+import { getConfiguredProviders, getRouterKeysPublic, setActiveProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import {
@@ -13,6 +13,7 @@ import {
   engineKeyMessage,
 } from "@/lib/trial";
 import { defaultModelFor } from "@/lib/models";
+import { coveredProviders } from "@/lib/routers";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
 import type { Project } from "@/lib/types";
@@ -123,9 +124,21 @@ export async function POST(request: Request) {
   // trial config would hand a BYOK user a project whose first monitor can't
   // execute — with a perfectly good key sitting in Settings. Their own key wins
   // over the trial; the env default applies only when they have none.
+  //
+  // A router key counts here exactly as a direct key does. It used to not, so a
+  // user whose only credential was a gateway got a project pinned to the env
+  // default and a first run refused for a key they had deliberately replaced.
+  // New projects are created grounded (use_web_search defaults on in the
+  // database), so coverage is asked for the grounded case.
+  const routerKeys = await getRouterKeysPublic(supabase, user.id);
+  const runnable = coveredProviders({
+    direct: providers,
+    routers: routerKeys.map((k) => ({ router: k.router, searchVerified: k.search_verified ?? [] })),
+    webSearch: true,
+  });
   const envDefault = pickDefaultProvider();
   const provider =
-    providers.length === 0 || providers.includes(envDefault) ? envDefault : providers[0];
+    runnable.length === 0 || runnable.includes(envDefault) ? envDefault : runnable[0];
   const model = defaultModelFor(provider);
 
   const { data: projRow, error: projErr } = await supabase

@@ -38,11 +38,12 @@ vi.mock("@/lib/data", () => ({
   setActiveProject: vi.fn(),
   getProjects: vi.fn(async () => []),
   getConfiguredProviders: vi.fn(async () => []),
+  getRouterKeysPublic: vi.fn(async () => []),
 }));
 vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => String(e) }));
 vi.mock("@/lib/activity", () => ({ logDashboard: vi.fn() }));
 vi.mock("@/lib/trial", () => ({
-  pickDefaultProvider: () => "anthropic",
+  pickDefaultProvider: vi.fn(() => "anthropic"),
   // No key: the route returns before executing a run, which is all we need.
   resolveRunKey: vi.fn(async () => ({
     source: "none",
@@ -56,6 +57,8 @@ vi.mock("@/lib/trial", () => ({
 }));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 
+const { getConfiguredProviders, getRouterKeysPublic } = await import("@/lib/data");
+const { pickDefaultProvider } = await import("@/lib/trial");
 const { POST } = await import("@/app/api/onboarding/complete/route");
 
 function req(body: unknown) {
@@ -147,5 +150,42 @@ describe("POST /api/onboarding/complete — competitors", () => {
     const res = await POST(req({ ...BASE, competitors: "Asana" }));
     expect(res.status).toBe(200);
     expect(inserts.some((i) => i.table === "competitors")).toBe(false);
+  });
+});
+
+// LET-176, the same blindness one surface over: this route also PICKS an answer
+// engine, and it picked it from direct keys alone.
+describe("POST /api/onboarding/complete — the engine a new org starts on", () => {
+  const projectInsert = () =>
+    inserts.find((i) => i.table === "projects")?.values as { default_provider: string };
+
+  it("starts on an engine a saved router covers, not the env default", async () => {
+    // The reported setup: no provider keys, one gateway. Defaulting to the
+    // operator's trial provider here created an org whose first run was refused
+    // for a key the user had deliberately replaced with a router.
+    vi.mocked(pickDefaultProvider).mockReturnValueOnce("google");
+    vi.mocked(getRouterKeysPublic).mockResolvedValueOnce([
+      { router: "openrouter", search_verified: ["anthropic"] },
+    ] as never);
+
+    await POST(req(BASE));
+    expect(projectInsert().default_provider).toBe("anthropic");
+  });
+
+  it("still prefers a direct key over a router", async () => {
+    vi.mocked(pickDefaultProvider).mockReturnValueOnce("google");
+    vi.mocked(getConfiguredProviders).mockResolvedValueOnce(["openai"] as never);
+    vi.mocked(getRouterKeysPublic).mockResolvedValueOnce([
+      { router: "concentrate", search_verified: ["anthropic", "openai"] },
+    ] as never);
+
+    await POST(req(BASE));
+    expect(projectInsert().default_provider).toBe("openai");
+  });
+
+  it("falls back to the env default when nothing covers anything", async () => {
+    vi.mocked(pickDefaultProvider).mockReturnValueOnce("google");
+    await POST(req(BASE));
+    expect(projectInsert().default_provider).toBe("google");
   });
 });

@@ -163,6 +163,27 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         search: "passthrough",
         slugPrefix: "openai",
       },
+      google: {
+        // Routable, but never measurable. Probed 2026-08-02 with a live key:
+        // the call succeeds and returns a ~36-character ungrounded answer with
+        // no sources — Concentrate mirrors Google's chat surface but not its
+        // grounding, and there is no equivalent of the forced tool_choice that
+        // makes the Anthropic and OpenAI paths comparable. Ungrounded runs are
+        // served; a grounded project is refused rather than quietly measured
+        // against an answer that never searched.
+        shape: "openai-chat",
+        search: "none",
+        // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
+        // which no router resolves — every model needs an explicit slug, and
+        // the `slugPrefix` fallback would produce a 404. A Google model added
+        // to the catalog without an entry here will not route.
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
+      },
     },
   },
   openrouter: {
@@ -207,6 +228,28 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         shape: "openai-chat",
         search: "none",
         slugPrefix: "openai",
+      },
+      google: {
+        // Routable, but never measurable. Probed 2026-08-02 with a live key:
+        // a plain call returns no structured sources at all, and the only thing
+        // that grounds is OpenRouter's `:online` suffix — its own Exa-backed
+        // web plugin, not Google's native grounding. Substituting that would
+        // mean measuring a different search engine and labelling it Gemini,
+        // which is the one thing this product must not do. So `search: "none"`,
+        // exactly as for OpenRouter's GPT path: a grounded project is refused
+        // with a message naming the fixes, an ungrounded one runs fine.
+        shape: "openai-chat",
+        search: "none",
+        // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
+        // which no router resolves — every model needs an explicit slug, and
+        // the `slugPrefix` fallback would produce a 404. A Google model added
+        // to the catalog without an entry here will not route.
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
       },
     },
   },
@@ -325,4 +368,90 @@ export function routerRefusalMessage(
     `${routerLabel} hasn't been confirmed to pass ${providerLabel}'s web search through on this key. ` +
     `Re-check the key in Settings, or add a direct ${providerLabel} key.`
   );
+}
+
+/**
+ * A saved router credential as a PICKER sees it: which gateway, and which
+ * engines this key's native search has actually been confirmed for.
+ *
+ * Deliberately not the decrypted credential. Choosing an answer engine needs to
+ * know what a key can reach, never what the key is, so this shape is safe to
+ * hand a client component — it is the non-secret half of DecryptedRouterKey.
+ */
+export interface RouterCoverage {
+  router: RouterId;
+  searchVerified: Provider[];
+}
+
+/**
+ * Whether the user's saved credentials can serve an engine, and how.
+ *
+ * The states mirror the ones resolveRunKeyFor produces at run time — 'direct'
+ * and 'routed' are its 'own', 'unroutable' is its 'unroutable', 'none' is its
+ * 'mismatch'/'none' — because selection is the same question execution asks,
+ * one step earlier. Answering it two different ways is what let a user pick an
+ * engine the next run would refuse.
+ */
+export type EngineCoverage =
+  | { kind: "direct" }
+  | { kind: "routed"; router: RouterId }
+  | { kind: "unroutable"; router: RouterId; reason: string }
+  | { kind: "none" };
+
+/**
+ * Resolve coverage for one engine, in the same order the run resolver uses:
+ * a direct key, then a router that can MEASURE the engine, then a router that
+ * merely reaches it.
+ *
+ * `webSearch` is the project's grounding setting, not a preference — with it on,
+ * a router that can't carry the provider's own search can't serve the engine at
+ * all, so the same credentials cover different engines depending on the toggle.
+ */
+export function engineCoverage(
+  provider: Provider,
+  opts: { direct: Provider[]; routers: RouterCoverage[]; webSearch: boolean },
+): EngineCoverage {
+  if (opts.direct.includes(provider)) return { kind: "direct" };
+
+  const usable = opts.routers.find((rk) =>
+    routerCanMeasure(rk.router, provider, {
+      webSearch: opts.webSearch,
+      verified: rk.searchVerified,
+    }),
+  );
+  if (usable) return { kind: "routed", router: usable.router };
+
+  // Reachable, but not comparably. The run would be refused, so the refusal is
+  // composed HERE, in the same words, rather than left for the user to discover
+  // by running — and it names which of the three fixes applies.
+  const blocked = opts.routers.find((rk) => routerSupport(rk.router, provider) !== null);
+  if (blocked) {
+    return {
+      kind: "unroutable",
+      router: blocked.router,
+      reason: routerRefusalMessage(blocked.router, provider, {
+        webSearch: opts.webSearch,
+        verified: blocked.searchVerified,
+      }),
+    };
+  }
+
+  return { kind: "none" };
+}
+
+/**
+ * Every engine these credentials can actually run, direct keys first.
+ *
+ * Direct keys lead because that is the order the resolvers prefer them in, so a
+ * list offered as "engines you already have" reads in the order they'd be used.
+ */
+export function coveredProviders(opts: {
+  direct: Provider[];
+  routers: RouterCoverage[];
+  webSearch: boolean;
+}): Provider[] {
+  const routed = (Object.keys(PROVIDERS) as Provider[]).filter(
+    (p) => engineCoverage(p, opts).kind === "routed",
+  );
+  return Array.from(new Set([...opts.direct, ...routed]));
 }
