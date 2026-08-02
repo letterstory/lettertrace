@@ -163,6 +163,27 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         search: "passthrough",
         slugPrefix: "openai",
       },
+      google: {
+        // Routable, but never measurable. Probed 2026-08-02 with a live key:
+        // the call succeeds and returns a ~36-character ungrounded answer with
+        // no sources — Concentrate mirrors Google's chat surface but not its
+        // grounding, and there is no equivalent of the forced tool_choice that
+        // makes the Anthropic and OpenAI paths comparable. Ungrounded runs are
+        // served; a grounded project is refused rather than quietly measured
+        // against an answer that never searched.
+        shape: "openai-chat",
+        search: "none",
+        // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
+        // which no router resolves — every model needs an explicit slug, and
+        // the `slugPrefix` fallback would produce a 404. A Google model added
+        // to the catalog without an entry here will not route.
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
+      },
     },
   },
   openrouter: {
@@ -207,6 +228,28 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         shape: "openai-chat",
         search: "none",
         slugPrefix: "openai",
+      },
+      google: {
+        // Routable, but never measurable. Probed 2026-08-02 with a live key:
+        // a plain call returns no structured sources at all, and the only thing
+        // that grounds is OpenRouter's `:online` suffix — its own Exa-backed
+        // web plugin, not Google's native grounding. Substituting that would
+        // mean measuring a different search engine and labelling it Gemini,
+        // which is the one thing this product must not do. So `search: "none"`,
+        // exactly as for OpenRouter's GPT path: a grounded project is refused
+        // with a message naming the fixes, an ungrounded one runs fine.
+        shape: "openai-chat",
+        search: "none",
+        // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
+        // which no router resolves — every model needs an explicit slug, and
+        // the `slugPrefix` fallback would produce a 404. A Google model added
+        // to the catalog without an entry here will not route.
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
       },
     },
   },
