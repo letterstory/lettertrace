@@ -33,7 +33,7 @@ export function Logo({
     const src = variant === "light" ? "/images/logo_white.png" : "/images/logo_black.png";
     return (
       <span className={cn("inline-flex w-fit shrink-0", className)}>
-        <Image src={src} alt="Lettertrace" width={2827} height={572} className="h-7 w-auto" />
+        <Image src={src} alt="Lettertrace" width={2863} height={572} className="h-7 w-auto" />
       </span>
     );
   }
@@ -44,14 +44,14 @@ export function Logo({
       <Image
         src="/images/logo_black.png"
         alt="Lettertrace"
-        width={2827}
+        width={2863}
         height={572}
         className="logo-for-light h-7 w-auto"
       />
       <Image
         src="/images/logo_white.png"
         alt="Lettertrace"
-        width={2827}
+        width={2863}
         height={572}
         className="logo-for-dark h-7 w-auto"
       />
