@@ -1,6 +1,6 @@
 {
   "name": "lettertrace",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Command-line client for a Lettertrace deployment: monitor how your brand shows up in AI assistant answers.",
   "license": "MIT",
   "author": "The Letter Company",
