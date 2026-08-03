@@ -13,6 +13,7 @@
  */
 
 import { resolveBase, loadConfig } from "./config.mjs";
+import { parseArgs } from "./args.mjs";
 import { login, logout, getAccessToken, revoke, NeedsLogin } from "./oauth.mjs";
 import { rest, ApiError } from "./http.mjs";
 import { listTools, callTool, renderToolResult } from "./mcp.mjs";
@@ -25,29 +26,6 @@ import { banner, withSpinner } from "./brand.mjs";
 // following word as its value, so `--json competitors <id>` set json to
 // "competitors" and then failed with "Unknown command: <id>" — the documented
 // "every command takes --json" only worked if you put it last.
-const BOOLEAN_FLAGS = new Set(["json", "on", "off", "mcp", "both", "ipv6", "help"]);
-
-function parseArgs(argv) {
-  const positionals = [];
-  const flags = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positionals.push(a);
-    }
-  }
-  return { positionals, flags };
-}
-
 const { positionals, flags } = parseArgs(process.argv.slice(2));
 const [command, ...rest_] = positionals;
 const JSON_OUT = Boolean(flags.json);
@@ -92,6 +70,33 @@ function dynamicTable(rows) {
   table(rows, keys.map((k) => ({ key: k })));
 }
 
+/**
+ * Can we actually complete a browser login here?
+ *
+ * The OAuth flow opens a browser and then blocks on a loopback callback. With
+ * no terminal attached — CI, a cron, an AI agent driving the CLI — nobody can
+ * complete it, so blocking means hanging forever with no output. That is the
+ * worst failure shape available: not an error, just silence.
+ *
+ * So a non-interactive run refuses up front and says what to do instead.
+ */
+function canLoginInteractively() {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+function refuseHeadlessLogin(resource) {
+  // Thrown, not printed: `fail` only writes to stderr, so printing and falling
+  // through would show the explanation and then hang anyway — the exact
+  // behaviour this guards against, now with a misleading message above it.
+  // UsageError lands in the top-level handler, which exits non-zero.
+  throw new UsageError(
+    `Not authenticated for "${resource}", and this isn't an interactive terminal.\n` +
+      `  Browser login can't complete without a TTY, so it would hang rather than fail.\n` +
+      `  Run \`lettertrace login\` once from a terminal — the stored credential is then\n` +
+      `  picked up by scripts, cron jobs and agents on this machine.`,
+  );
+}
+
 // Run a data command, auto-launching the OAuth login for the exact audience it
 // needs if there is no usable credential yet, then retrying once.
 async function withAutoLogin(fn) {
@@ -99,6 +104,7 @@ async function withAutoLogin(fn) {
     return await fn();
   } catch (e) {
     if (e instanceof NeedsLogin) {
+      if (!canLoginInteractively()) refuseHeadlessLogin(e.resource);
       info(c.yellow(`${e.detail ?? `Not authenticated for "${e.resource}".`} Launching login...`));
       await login(base, e.resource, { ipv6: IPV6 });
       return await fn();
@@ -741,6 +747,7 @@ async function withAutoLoginMcp(fn) {
     return await fn();
   } catch (e) {
     if (e instanceof NeedsLogin) {
+      if (!canLoginInteractively()) refuseHeadlessLogin("mcp");
       info(c.yellow(`Not authenticated for "mcp". Launching login...`));
       await login(base, "mcp", { ipv6: IPV6 });
       return await fn();
