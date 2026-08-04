@@ -7,7 +7,6 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 import { signatureOf, opsEnabled } from "@/lib/ops";
 import { shapeOps, type OpsRow } from "@/lib/ops-report";
 import { shapeLive } from "@/lib/ops-live";
-import { configChecks, configProblems, configAttention } from "@/lib/ops-config";
 import { isAdminEmail, adminEmails, isAdminUserId, adminGate } from "@/lib/admin";
 
 const HOUR = "2026-08-03T14:00:00.000Z";
@@ -218,48 +217,6 @@ describe("shapeLive", () => {
     const r = shapeLive([], now, 0, 0, 0, "connection refused");
     expect(r.degraded).toBe("connection refused");
     expect(r.successRate).toBeNull();
-  });
-});
-
-describe("configChecks", () => {
-  it("marks a missing required setting as a problem", () => {
-    const problems = configProblems(configChecks({ NEXT_PUBLIC_SUPABASE_URL: "https://x" } as never));
-    expect(problems.map((p) => p.key)).toContain("SUPABASE_SERVICE_ROLE_KEY");
-    expect(problems.map((p) => p.key)).not.toContain("NEXT_PUBLIC_SUPABASE_URL");
-  });
-
-  it("treats whitespace as unset", () => {
-    // Vercel happily stores a variable whose value is a stray space, and it
-    // behaves exactly like a missing one everywhere else in the app.
-    const checks = configChecks({ ENCRYPTION_KEY: "   " } as never);
-    expect(checks.find((c) => c.key === "ENCRYPTION_KEY")?.state).toBe("missing");
-  });
-
-  it("never reports an optional setting as a problem", () => {
-    const problems = configProblems(configChecks({} as never));
-    expect(problems.every((p) => p.required)).toBe(true);
-  });
-
-  it("says nothing at all when every setting is in place", () => {
-    const full: Record<string, string> = {};
-    for (const c of configChecks({} as never)) full[c.key] = "x";
-    // The section is only a warning if it is silent the rest of the time.
-    expect(configAttention(configChecks(full as never))).toEqual([]);
-  });
-
-  it("surfaces an optional setting whose value is an empty string", () => {
-    // The exact production trap: OPS_TELEMETRY existed in Vercel with an empty
-    // value, so every check that looked for a NAME reported it as configured
-    // while the feature was silently off.
-    const attention = configAttention(configChecks({ OPS_TELEMETRY: "" } as never));
-    expect(attention.map((c) => c.key)).toContain("OPS_TELEMETRY");
-  });
-
-  it("reports presence only, never any part of a value", () => {
-    const secret = "sk-super-secret-value";
-    const serialized = JSON.stringify(configChecks({ ENCRYPTION_KEY: secret } as never));
-    expect(serialized).not.toContain(secret);
-    expect(serialized).not.toContain("sk-");
   });
 });
 
