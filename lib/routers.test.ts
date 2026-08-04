@@ -77,13 +77,12 @@ describe("router registry", () => {
     expect(routerSupport("openrouter", "openai")?.search).toBe("none");
     expect(routerSupport("concentrate", "anthropic")?.search).toBe("passthrough");
     expect(routerSupport("concentrate", "openai")?.search).toBe("passthrough");
-    // Merge, probed 2026-08-03: Claude's forced search survived the gateway
-    // (9 sources). GPT is held at 'none' not because the surface is missing —
-    // a Responses route exists — but because Merge's OpenAI vendor was
-    // circuit-broken throughout the probe, and grounding must be OBSERVED
-    // before it is claimed. See the registry entry for the promotion recipe.
+    // Merge, probed 2026-08-03 (Claude: 9 sources) and 2026-08-04 (GPT: forced
+    // web_search_preview executed with url_citation annotations, once Merge
+    // fixed the Responses tool passthrough that had been returning bare 502s).
     expect(routerSupport("merge", "anthropic")?.search).toBe("passthrough");
-    expect(routerSupport("merge", "openai")?.search).toBe("none");
+    expect(routerSupport("merge", "openai")?.search).toBe("passthrough");
+    expect(routerSupport("merge", "openai")?.shape).toBe("openai-responses");
   });
 
   it("still serves ungrounded work on the engine it cannot ground", () => {

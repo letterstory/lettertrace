@@ -286,17 +286,14 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         slugPrefix: "anthropic",
       },
       openai: {
-        // Held at ungrounded-only, but for a different reason than OpenRouter.
-        // Probed 2026-08-03: a Responses route EXISTS at <openaiBaseUrl>/responses
-        // and parses a forced `web_search_preview` — but Merge's OpenAI vendor
-        // was circuit-broken the whole session (503 "model_vendor_unhealthy" on
-        // gpt-4o-mini, bare 502s on gpt-4o), so grounding was never OBSERVED,
-        // and observation is the bar. When their OpenAI path is healthy, re-run
-        //   npx tsx scripts/probe-router.ts merge --provider openai
-        // with this entry set to 'openai-responses' + 'passthrough'; if sources
-        // come back, that promotion is correct and should land with the date.
-        shape: "openai-chat",
-        search: "none",
+        // Probed 2026-08-04 after Merge fixed their Responses tool passthrough
+        // (any web-search tool drew a bare 502 the day before): the forced
+        // `web_search_preview` now executes — the reply carries a completed
+        // `web_search_call` and `url_citation` annotations on a question
+        // answerable from memory. Same Responses shape as a direct OpenAI key,
+        // so the citation parsers read it unchanged.
+        shape: "openai-responses",
+        search: "passthrough",
         slugPrefix: "openai",
       },
       google: {
