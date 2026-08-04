@@ -13,6 +13,7 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
 import { analysisModelFor, modelLabel } from "@/lib/models";
 import { spendMicros } from "@/lib/pricing";
+import { recordOps, recordOpsError } from "@/lib/ops";
 import { logActivity } from "@/lib/activity";
 import { selectAll } from "@/lib/paging";
 
@@ -144,7 +145,12 @@ export async function settleAbandonedRun(
     .eq("id", runId)
     .eq("status", "running")
     .select("id");
-  return (data ?? []).length > 0;
+  const settled = (data ?? []).length > 0;
+  // An abandoned run means an invocation died mid-flight — the single most
+  // useful thing to know about a deployment's health, and previously visible
+  // only as a row quietly changing state.
+  if (settled) recordOps("run.abandoned", { level: "error", signature: "run.abandoned" });
+  return settled;
 }
 
 /** What an interrupted run says for itself. Shared so the sweeper, the status
@@ -482,6 +488,10 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
     } catch (err) {
       // A single failed ask shouldn't kill the whole run.
       if (!hardError) hardError = humanError(err);
+      // ...but every one of them is recorded. Only the FIRST becomes the run's
+      // error message, so without this a run that lost 90 of 100 answers to a
+      // rate limit looks identical to one that lost a single answer.
+      recordOpsError("engine.answer", err, { provider, model, route: route?.router ?? "direct" });
     } finally {
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
@@ -544,6 +554,23 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
       spend_micros: spentMicros,
       ...(budgetStopped ? { budget_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
+    },
+  });
+
+  recordOps(status === "completed" ? "run.completed" : "run.failed", {
+    level: status === "completed" ? "info" : "error",
+    // Signed by engine and outcome, not by run id: the useful question is
+    // "which engine is failing", and a per-run signature could never answer it.
+    signature: `run.${status}:${provider}/${model}`,
+    sample: {
+      provider,
+      model,
+      route: route?.router ?? "direct",
+      planned: jobs.length,
+      stored: succeeded,
+      failed: jobs.length - succeeded,
+      duration_ms: Date.now() - startedMs,
+      budget_stopped: Boolean(budgetStopped),
     },
   });
 
