@@ -1,6 +1,14 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { AlertTriangle, Activity, CheckCircle2, CircleSlash, Clock, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  Activity,
+  CheckCircle2,
+  CircleSlash,
+  Clock,
+  ShieldAlert,
+  XCircle,
+} from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { liveHealth, inFlightCount } from "@/lib/ops-live";
 import { opsReport } from "@/lib/ops-report";
@@ -32,8 +40,32 @@ export default async function AdminPage() {
     <div className="space-y-8">
       <SectionHeading
         title="Operations"
-        description={`Deployment health for the last 24 hours. Visible only to addresses in ADMIN_EMAILS — signed in as ${admin.email}.`}
+        description={`Deployment health for the last 24 hours. Signed in as ${admin.email}.`}
       />
+
+      {/* Gating on email is usable but conditional: it holds only while every
+          allowlisted address already has an account, because signup issues a
+          session immediately and an address with no account can simply be
+          registered. A user id cannot be claimed that way. */}
+      {admin.gate === "email" && (
+        <Card className="border-butter/50 bg-butter-tint/40">
+          <CardBody className="flex items-start gap-3">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-butter-ink" />
+            <div className="space-y-1 text-sm">
+              <p className="font-semibold text-ink">Access is gated on email addresses</p>
+              <p className="text-ink-soft">
+                That is safe only while every address in{" "}
+                <code className="font-mono text-xs">ADMIN_EMAILS</code> already has an account —
+                signup issues a session immediately, so an allowlisted address that nobody has
+                registered can be claimed by anyone who guesses it. Set{" "}
+                <code className="font-mono text-xs">ADMIN_USER_IDS</code> instead: a user id is
+                assigned by the auth server and cannot be registered into. When it is set, the
+                email list is ignored.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* The single sentence someone should be able to read from a phone. */}
       <Card

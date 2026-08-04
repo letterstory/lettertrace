@@ -65,6 +65,12 @@ export function configChecks(env: NodeJS.ProcessEnv = process.env): ConfigCheck[
     check("RESEND_API_KEY", "Resend key", "Signup alerts are not sent", false),
     check("ADMIN_ALERT_EMAIL", "Alert recipient", "Signup alerts have nowhere to go", false),
     check("CRON_SECRET", "Cron secret", "Scheduled runs are unauthenticated or off", false),
+    check(
+      "ADMIN_USER_IDS",
+      "Operator ids",
+      "Falls back to ADMIN_EMAILS, which is claimable if an address has no account",
+      false,
+    ),
     check("ADMIN_EMAILS", "Operator allowlist", "This dashboard is unreachable", false),
     check("OPS_TELEMETRY", "Telemetry", "Errors outside runs are not recorded", false),
   ];
