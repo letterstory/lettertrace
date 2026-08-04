@@ -12,6 +12,8 @@ import {
 import { requireAdmin } from "@/lib/admin";
 import { liveHealth, inFlightCount } from "@/lib/ops-live";
 import { opsReport } from "@/lib/ops-report";
+import { operatorRoster } from "@/lib/ops-operators";
+import { Operators } from "./operators";
 import { Badge, Card, CardBody, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
 
@@ -24,7 +26,12 @@ export default async function AdminPage() {
   // see for a route that does not exist, which is the honest answer to them.
   if (!admin) notFound();
 
-  const [live, ops, inFlight] = await Promise.all([liveHealth(24), opsReport(24), inFlightCount()]);
+  const [live, ops, inFlight, roster] = await Promise.all([
+    liveHealth(24),
+    opsReport(24),
+    inFlightCount(),
+    operatorRoster(),
+  ]);
   const failing =
     live.stuck.length > 0 ||
     live.failures.length > 0 ||
@@ -270,6 +277,8 @@ export default async function AdminPage() {
           </Card>
         )}
       </section>
+
+      <Operators roster={roster} />
 
       <p className="text-xs text-ink-faint">
         Last run {timeAgo(live.lastRunAt)}. Nothing on this page records or displays customer content —
