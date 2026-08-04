@@ -144,6 +144,9 @@ export function shapeLive(
       (a, b) => b.count - a.count || b.lastSeen.localeCompare(a.lastSeen),
     ),
     engines: [...engines.entries()]
+      // Only engines that have actually settled something. A row of zeroes says
+      // nothing about health and pushes the real rows down.
+      .filter(([, v]) => v.completed + v.failed > 0)
       .map(([engine, v]) => ({
         engine,
         ...v,

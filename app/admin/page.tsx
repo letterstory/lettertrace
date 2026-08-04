@@ -13,9 +13,10 @@ import { requireAdmin } from "@/lib/admin";
 import { liveHealth, inFlightCount } from "@/lib/ops-live";
 import { opsReport } from "@/lib/ops-report";
 import { operatorRoster } from "@/lib/ops-operators";
-import { Operators } from "./operators";
+import { OperatorsMenu } from "./operators";
 import { Badge, Card, CardBody, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
+import { maskEmail } from "@/lib/mask";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -41,7 +42,8 @@ export default async function AdminPage() {
     <div className="space-y-8">
       <SectionHeading
         title="Operations"
-        description={`Deployment health for the last 24 hours. Signed in as ${admin.email}.`}
+        description={`Deployment health for the last 24 hours. Signed in as ${maskEmail(admin.email)}.`}
+        action={<OperatorsMenu roster={roster} />}
       />
 
       {/* Gating on email is usable but conditional: it holds only while every
@@ -277,8 +279,6 @@ export default async function AdminPage() {
           </Card>
         )}
       </section>
-
-      <Operators roster={roster} />
 
       <p className="text-xs text-ink-faint">
         Last run {timeAgo(live.lastRunAt)}. Nothing on this page records or displays customer content —
