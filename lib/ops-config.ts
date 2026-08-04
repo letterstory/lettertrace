@@ -74,3 +74,20 @@ export function configChecks(env: NodeJS.ProcessEnv = process.env): ConfigCheck[
 export function configProblems(checks: ConfigCheck[]): ConfigCheck[] {
   return checks.filter((c) => c.required && c.state === "missing");
 }
+
+/**
+ * Everything worth saying out loud, and nothing else.
+ *
+ * The dashboard used to render all of these as a list, which on a correctly
+ * configured deployment is a screen of green rows confirming that things are
+ * the way they are supposed to be — noise that trains you to skip the section,
+ * which is precisely when it stops working as a warning.
+ *
+ * So: silent when everything is set, and only the unset ones otherwise. That
+ * keeps the diagnostic that matters. `OPS_TELEMETRY` set to an empty string
+ * read as "not set" here, which is exactly why the section earns its place —
+ * the variable existed, so every check that looks for a NAME called it fine.
+ */
+export function configAttention(checks: ConfigCheck[]): ConfigCheck[] {
+  return checks.filter((c) => c.state !== "ok");
+}
