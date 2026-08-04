@@ -13,7 +13,7 @@
  * theirs and spot the id they just pasted.
  */
 
-/** casey@letterbrace.com -> ca•••@letterbrace.com */
+/** avery@example.com -> av•••y@example.com */
 export function maskEmail(email: string | null | undefined): string {
   const value = email?.trim();
   if (!value) return "—";

@@ -269,19 +269,19 @@ describe("isAdminEmail", () => {
   });
 
   it("matches case-insensitively and ignores surrounding space", () => {
-    process.env.ADMIN_EMAILS = " Casey@Letterstory.com , mathew@letterstory.com";
-    expect(isAdminEmail("casey@letterstory.com")).toBe(true);
-    expect(isAdminEmail("  MATHEW@letterstory.com ")).toBe(true);
+    process.env.ADMIN_EMAILS = " Avery@Example.com , blake@example.com";
+    expect(isAdminEmail("avery@example.com")).toBe(true);
+    expect(isAdminEmail("  BLAKE@example.com ")).toBe(true);
   });
 
   it("does not match on substrings", () => {
-    process.env.ADMIN_EMAILS = "casey@letterstory.com";
-    expect(isAdminEmail("casey@letterstory.com.attacker.test")).toBe(false);
-    expect(isAdminEmail("notcasey@letterstory.com")).toBe(false);
+    process.env.ADMIN_EMAILS = "avery@example.com";
+    expect(isAdminEmail("avery@example.com.attacker.test")).toBe(false);
+    expect(isAdminEmail("notavery@example.com")).toBe(false);
   });
 
   it("rejects null and undefined", () => {
-    process.env.ADMIN_EMAILS = "casey@letterstory.com";
+    process.env.ADMIN_EMAILS = "avery@example.com";
     expect(isAdminEmail(null)).toBe(false);
     expect(isAdminEmail(undefined)).toBe(false);
   });
@@ -305,7 +305,7 @@ describe("adminGate", () => {
     // A union would keep exactly the weakness ids exist to remove: the email
     // half would still admit anyone who registered an unclaimed address.
     process.env.ADMIN_USER_IDS = "11111111-1111-1111-1111-111111111111";
-    process.env.ADMIN_EMAILS = "casey@letterstory.com";
+    process.env.ADMIN_EMAILS = "avery@example.com";
     expect(adminGate()).toBe("user-id");
     expect(isAdminUserId("11111111-1111-1111-1111-111111111111")).toBe(true);
     expect(isAdminUserId("22222222-2222-2222-2222-222222222222")).toBe(false);
@@ -313,7 +313,7 @@ describe("adminGate", () => {
 
   it("falls back to email only when no ids are set", () => {
     delete process.env.ADMIN_USER_IDS;
-    process.env.ADMIN_EMAILS = "casey@letterstory.com";
+    process.env.ADMIN_EMAILS = "avery@example.com";
     expect(adminGate()).toBe("email");
   });
 
@@ -332,13 +332,13 @@ describe("adminGate", () => {
 
 describe("masking", () => {
   it("keeps the domain but hides the person", () => {
-    expect(maskEmail("casey@letterbrace.com")).toBe("ca•••y@letterbrace.com");
+    expect(maskEmail("avery@example.com")).toBe("av•••y@example.com");
     // Enough survives to tell two operators apart, which is the whole job of
     // the list. These two share their first two characters, so a head-only
     // mask collapsed them into the same row — the reason a tail is kept.
-    expect(maskEmail("mahir@letterstory.com")).toBe("ma•••r@letterstory.com");
-    expect(maskEmail("mathew@letterstory.com")).toBe("ma•••w@letterstory.com");
-    expect(maskEmail("mahir@letterstory.com")).not.toBe(maskEmail("mathew@letterstory.com"));
+    expect(maskEmail("marlon@example.com")).toBe("ma•••n@example.com");
+    expect(maskEmail("marley@example.com")).toBe("ma•••y@example.com");
+    expect(maskEmail("marlon@example.com")).not.toBe(maskEmail("marley@example.com"));
   });
 
   it("keeps both ends of a uuid so a pasted id is still recognisable", () => {
