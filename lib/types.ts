@@ -6,7 +6,7 @@ export type Provider = "anthropic" | "openai" | "google" | "perplexity";
 // LLM routers are credentials, not providers, so they get their own union and
 // stay out of `Provider` — which is what keeps `runs.provider` meaning "whose
 // answer was this" rather than "who billed us". See lib/routers.ts.
-export type RouterId = "concentrate" | "openrouter";
+export type RouterId = "concentrate" | "openrouter" | "merge";
 
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 

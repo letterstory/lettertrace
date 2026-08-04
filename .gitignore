@@ -20,10 +20,18 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
-.env
-.env.local
-.env*.local
+# env files: every variant is a leak risk except the documented example
+.env*
+!.env.example
+
+# editor and tool state
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# test/debug output
+coverage/
+*.log
 
 # vercel
 .vercel

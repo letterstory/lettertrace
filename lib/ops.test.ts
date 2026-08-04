@@ -1,0 +1,386 @@
+import { describe, it, expect, afterEach, vi } from "vitest";
+
+// admin.ts reads the signed-in user through the cookie client, which calls
+// React's cache() at module load — unavailable in the node test env. Only the
+// pure allowlist helpers are under test here.
+vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+import { signatureOf, opsEnabled } from "@/lib/ops";
+import { shapeOps, type OpsRow } from "@/lib/ops-report";
+import { shapeLive } from "@/lib/ops-live";
+import { maskEmail, maskUuid } from "@/lib/mask";
+import { isAdminEmail, adminEmails, isAdminUserId, adminGate } from "@/lib/admin";
+
+const HOUR = "2026-08-03T14:00:00.000Z";
+
+function opsRow(over: Partial<OpsRow> = {}): OpsRow {
+  return {
+    kind: "run.completed",
+    level: "info",
+    signature: "run.completed:anthropic/claude-opus-5",
+    hour: HOUR,
+    occurrences: 1,
+    sample: {},
+    last_seen_at: HOUR,
+    ...over,
+  };
+}
+
+describe("signatureOf", () => {
+  it("collapses occurrences of the same problem into one signature", () => {
+    const a = signatureOf("run 4f3c9a21-1111-2222-3333-444455556666 failed after 12.5s");
+    const b = signatureOf("run 9999aaaa-bbbb-cccc-dddd-eeeeffff0000 failed after 3s");
+    // The whole bucketing design rests on this: if ids or durations survived,
+    // every occurrence would open its own row and the count would always be 1.
+    expect(a).toBe(b);
+  });
+
+  it("keeps genuinely different problems apart", () => {
+    expect(signatureOf("rate limit exceeded")).not.toBe(signatureOf("invalid api key"));
+  });
+
+  it("strips quoted values, which are usually the varying part", () => {
+    expect(signatureOf(`model "gpt-4" not found`)).toBe(signatureOf(`model "gemini-pro" not found`));
+  });
+
+  it("bounds the length so a stack trace cannot become a signature", () => {
+    expect(signatureOf("x".repeat(5000)).length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe("opsEnabled", () => {
+  const original = process.env.OPS_TELEMETRY;
+  afterEach(() => {
+    if (original === undefined) delete process.env.OPS_TELEMETRY;
+    else process.env.OPS_TELEMETRY = original;
+  });
+
+  it("is off unless explicitly switched on", () => {
+    delete process.env.OPS_TELEMETRY;
+    expect(opsEnabled()).toBe(false);
+    // A self-hosted deployment must not start recording because someone set the
+    // variable to something falsy-looking but non-empty.
+    process.env.OPS_TELEMETRY = "0";
+    expect(opsEnabled()).toBe(false);
+    process.env.OPS_TELEMETRY = "false";
+    expect(opsEnabled()).toBe(false);
+    process.env.OPS_TELEMETRY = "1";
+    expect(opsEnabled()).toBe(true);
+  });
+});
+
+describe("shapeOps", () => {
+  it("reports no success rate when nothing ran, rather than 100%", () => {
+    const r = shapeOps([], 24, true);
+    // The dangerous alternative: 0/0 rendered as a perfect score on a
+    // deployment that is doing nothing at all.
+    expect(r.runs.successRate).toBeNull();
+  });
+
+  it("sums occurrences across hourly buckets for the same problem", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "error", level: "error", signature: "boom", occurrences: 30, hour: HOUR }),
+        opsRow({
+          kind: "error",
+          level: "error",
+          signature: "boom",
+          occurrences: 12,
+          hour: "2026-08-03T15:00:00.000Z",
+          last_seen_at: "2026-08-03T15:30:00.000Z",
+        }),
+      ],
+      24,
+      true,
+    );
+    expect(r.problems).toHaveLength(1);
+    expect(r.problems[0].occurrences).toBe(42);
+    expect(r.problems[0].lastSeen).toBe("2026-08-03T15:30:00.000Z");
+  });
+
+  it("ranks the loudest problem first", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "error", level: "error", signature: "quiet", occurrences: 2 }),
+        opsRow({ kind: "error", level: "error", signature: "loud", occurrences: 200 }),
+      ],
+      24,
+      true,
+    );
+    expect(r.problems.map((p) => p.signature)).toEqual(["loud", "quiet"]);
+  });
+
+  it("ignores info rows, which are volume rather than problems", () => {
+    const r = shapeOps([opsRow({ level: "info", occurrences: 5 })], 24, true);
+    expect(r.problems).toHaveLength(0);
+    expect(r.errors).toBe(0);
+  });
+
+  it("surfaces warnings as problems but does not count them as errors", () => {
+    // A warn is something the code deliberately chose to report. Dropping it
+    // would mean it could never be seen anywhere, which makes recording it
+    // pointless — but the headline "errors" figure must stay strictly errors.
+    const r = shapeOps(
+      [opsRow({ kind: "warn", level: "warn", signature: "slow provider", occurrences: 3 })],
+      24,
+      true,
+    );
+    expect(r.problems).toHaveLength(1);
+    expect(r.problems[0].level).toBe("warn");
+    expect(r.errors).toBe(0);
+  });
+
+  it("ranks any error above any warning, however loud the warning", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "warn", level: "warn", signature: "noisy warn", occurrences: 900 }),
+        opsRow({ kind: "error", level: "error", signature: "one error", occurrences: 1 }),
+      ],
+      24,
+      true,
+    );
+    expect(r.problems.map((p) => p.signature)).toEqual(["one error", "noisy warn"]);
+  });
+
+  it("survives a malformed sample without throwing", () => {
+    const r = shapeOps([opsRow({ sample: null as never })], 24, true);
+    expect(r.engines[0].engine).toBe("?/?");
+  });
+});
+
+describe("shapeLive", () => {
+  const now = new Date("2026-08-03T16:00:00.000Z").getTime();
+  const run = (over: Record<string, unknown> = {}) => ({
+    id: "aaaaaaaa-0000-0000-0000-000000000000",
+    status: "completed",
+    provider: "anthropic",
+    model: "claude-opus-5",
+    error: null,
+    prompt_count: 10,
+    completed_count: 10,
+    started_at: "2026-08-03T15:50:00.000Z",
+    created_at: "2026-08-03T15:50:00.000Z",
+    ...over,
+  });
+
+  it("flags a run still running long past any plausible duration", () => {
+    const r = shapeLive(
+      [run({ status: "running", started_at: "2026-08-03T14:00:00.000Z", completed_count: 3 })],
+      now,
+      0,
+      0,
+      0,
+    );
+    expect(r.stuck).toHaveLength(1);
+    expect(r.stuck[0].minutes).toBe(120);
+  });
+
+  it("does not flag a run that is merely slow", () => {
+    const r = shapeLive([run({ status: "running", started_at: "2026-08-03T15:45:00.000Z" })], now, 0, 0, 0);
+    expect(r.stuck).toHaveLength(0);
+  });
+
+  it("falls back to created_at when a pending run never started", () => {
+    // A run that never got picked up has no started_at at all; using it
+    // directly would produce NaN minutes and silently drop the row.
+    const r = shapeLive(
+      [run({ status: "pending", started_at: null, created_at: "2026-08-03T13:00:00.000Z" })],
+      now,
+      0,
+      0,
+      0,
+    );
+    expect(r.stuck).toHaveLength(1);
+    expect(r.stuck[0].minutes).toBe(180);
+  });
+
+  it("groups failures by message shape and lists the engines involved", () => {
+    const r = shapeLive(
+      [
+        run({ status: "failed", error: "rate limit exceeded, retry in 30s" }),
+        run({ status: "failed", error: "rate limit exceeded, retry in 5s", model: "claude-sonnet-5" }),
+        run({ status: "failed", error: "invalid api key" }),
+      ],
+      now,
+      0,
+      0,
+      0,
+    );
+    expect(r.failures).toHaveLength(2);
+    expect(r.failures[0].count).toBe(2);
+    expect(r.failures[0].engines).toEqual(["anthropic/claude-opus-5", "anthropic/claude-sonnet-5"]);
+  });
+
+  it("computes success rate from settled runs only", () => {
+    const r = shapeLive(
+      [run(), run(), run({ status: "failed", error: "x" }), run({ status: "running" })],
+      now,
+      0,
+      0,
+      0,
+    );
+    // 2 of 3 settled; the in-flight run is not evidence either way.
+    expect(r.successRate).toBe(67);
+    expect(r.runs24h.running).toBe(1);
+  });
+
+  it("separates per-engine health so a single bad provider is visible", () => {
+    const r = shapeLive(
+      [
+        run({ provider: "openai", model: "gpt-5", status: "failed", error: "boom" }),
+        run({ provider: "openai", model: "gpt-5", status: "failed", error: "boom" }),
+        run(),
+      ],
+      now,
+      0,
+      0,
+      0,
+    );
+    const openai = r.engines.find((e) => e.engine === "openai/gpt-5");
+    expect(openai?.rate).toBe(0);
+    expect(r.engines.find((e) => e.engine === "anthropic/claude-opus-5")?.rate).toBe(100);
+  });
+
+  it("carries a degraded reason so the page can say unknown instead of zero", () => {
+    const r = shapeLive([], now, 0, 0, 0, "connection refused");
+    expect(r.degraded).toBe("connection refused");
+    expect(r.successRate).toBeNull();
+  });
+});
+
+describe("isAdminEmail", () => {
+  const original = process.env.ADMIN_EMAILS;
+  afterEach(() => {
+    if (original === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = original;
+  });
+
+  it("admits nobody when the allowlist is unset", () => {
+    delete process.env.ADMIN_EMAILS;
+    expect(adminEmails()).toEqual([]);
+    expect(isAdminEmail("anyone@example.com")).toBe(false);
+  });
+
+  it("admits nobody when the allowlist is empty or only separators", () => {
+    process.env.ADMIN_EMAILS = " , , ";
+    expect(isAdminEmail("anyone@example.com")).toBe(false);
+    // The dangerous bug this guards: an empty split producing [""] and then
+    // matching an empty-ish address.
+    expect(isAdminEmail("")).toBe(false);
+  });
+
+  it("matches case-insensitively and ignores surrounding space", () => {
+    process.env.ADMIN_EMAILS = " Avery@Example.com , blake@example.com";
+    expect(isAdminEmail("avery@example.com")).toBe(true);
+    expect(isAdminEmail("  BLAKE@example.com ")).toBe(true);
+  });
+
+  it("does not match on substrings", () => {
+    process.env.ADMIN_EMAILS = "avery@example.com";
+    expect(isAdminEmail("avery@example.com.attacker.test")).toBe(false);
+    expect(isAdminEmail("notavery@example.com")).toBe(false);
+  });
+
+  it("rejects null and undefined", () => {
+    process.env.ADMIN_EMAILS = "avery@example.com";
+    expect(isAdminEmail(null)).toBe(false);
+    expect(isAdminEmail(undefined)).toBe(false);
+  });
+});
+
+describe("adminGate", () => {
+  const ids = process.env.ADMIN_USER_IDS;
+  const emails = process.env.ADMIN_EMAILS;
+  afterEach(() => {
+    ids === undefined ? delete process.env.ADMIN_USER_IDS : (process.env.ADMIN_USER_IDS = ids);
+    emails === undefined ? delete process.env.ADMIN_EMAILS : (process.env.ADMIN_EMAILS = emails);
+  });
+
+  it("is closed when neither list is set", () => {
+    delete process.env.ADMIN_USER_IDS;
+    delete process.env.ADMIN_EMAILS;
+    expect(adminGate()).toBe("none");
+  });
+
+  it("prefers ids over emails, and does not union them", () => {
+    // A union would keep exactly the weakness ids exist to remove: the email
+    // half would still admit anyone who registered an unclaimed address.
+    process.env.ADMIN_USER_IDS = "11111111-1111-1111-1111-111111111111";
+    process.env.ADMIN_EMAILS = "avery@example.com";
+    expect(adminGate()).toBe("user-id");
+    expect(isAdminUserId("11111111-1111-1111-1111-111111111111")).toBe(true);
+    expect(isAdminUserId("22222222-2222-2222-2222-222222222222")).toBe(false);
+  });
+
+  it("falls back to email only when no ids are set", () => {
+    delete process.env.ADMIN_USER_IDS;
+    process.env.ADMIN_EMAILS = "avery@example.com";
+    expect(adminGate()).toBe("email");
+  });
+
+  it("treats an empty id list as closed rather than open", () => {
+    process.env.ADMIN_USER_IDS = " , ";
+    delete process.env.ADMIN_EMAILS;
+    expect(adminGate()).toBe("none");
+    expect(isAdminUserId("11111111-1111-1111-1111-111111111111")).toBe(false);
+  });
+
+  it("matches ids case-insensitively, since uuid casing varies by client", () => {
+    process.env.ADMIN_USER_IDS = "AAAAAAAA-1111-2222-3333-444444444444";
+    expect(isAdminUserId("aaaaaaaa-1111-2222-3333-444444444444")).toBe(true);
+  });
+});
+
+describe("masking", () => {
+  it("keeps the domain but hides the person", () => {
+    expect(maskEmail("avery@example.com")).toBe("av•••y@example.com");
+    // Enough survives to tell two operators apart, which is the whole job of
+    // the list. These two share their first two characters, so a head-only
+    // mask collapsed them into the same row — the reason a tail is kept.
+    expect(maskEmail("marlon@example.com")).toBe("ma•••n@example.com");
+    expect(maskEmail("marley@example.com")).toBe("ma•••y@example.com");
+    expect(maskEmail("marlon@example.com")).not.toBe(maskEmail("marley@example.com"));
+  });
+
+  it("keeps both ends of a uuid so a pasted id is still recognisable", () => {
+    expect(maskUuid("295ba806-a99a-4bc1-903b-2584a2e103b0")).toBe("295ba806…03b0");
+    expect(maskUuid("295ba806-a99a-4bc1-903b-2584a2e103b0")).not.toBe(
+      maskUuid("fcf55041-33f9-475b-a40c-e9c1b72fc3e0"),
+    );
+  });
+
+  it("does not fall over on absent or malformed values", () => {
+    expect(maskEmail(null)).toBe("—");
+    expect(maskEmail("")).toBe("—");
+    expect(maskUuid(undefined)).toBe("—");
+    expect(maskEmail("not-an-email")).toBe("no•••il");
+    expect(maskEmail("a@b.com")).toBe("a•••@b.com");
+    expect(maskEmail("ab@b.com")).toBe("a•••@b.com");
+  });
+});
+
+describe("shapeLive engine rows", () => {
+  const now = new Date("2026-08-03T16:00:00.000Z").getTime();
+  const base = {
+    id: "aaaaaaaa-0000-0000-0000-000000000000",
+    provider: "anthropic", model: "claude-sonnet-4-6", error: null,
+    prompt_count: 2, completed_count: 0,
+    started_at: "2026-08-03T13:00:00.000Z", created_at: "2026-08-03T13:00:00.000Z",
+  };
+
+  it("omits an engine that has settled nothing", () => {
+    // A run still in flight created the row; "0 ok, 0 failed" answers no
+    // question and pushes real rows down the page.
+    const r = shapeLive([{ ...base, status: "running" }], now, 0, 0, 0);
+    expect(r.engines).toEqual([]);
+    expect(r.stuck).toHaveLength(1);
+  });
+
+  it("still lists an engine once something settles", () => {
+    const r = shapeLive(
+      [{ ...base, status: "running" }, { ...base, status: "completed" }],
+      now, 0, 0, 0,
+    );
+    expect(r.engines).toHaveLength(1);
+    expect(r.engines[0].rate).toBe(100);
+  });
+});

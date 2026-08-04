@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { recordOpsError } from "@/lib/ops";
 import type {
   Competitor,
   Mention,
@@ -1199,6 +1200,7 @@ export async function triggerRunForProject(
         // a poller that would never see a terminal state. Settle it here
         // instead. Only a killed invocation can still strand a row, which is
         // what the cron sweeper is for.
+        recordOpsError("api-service.background-run", err, { run_id: prepared.runId });
         await settleAbandonedRun(
           supabase,
           prepared.runId,

@@ -150,7 +150,7 @@ alter table public.provider_keys
 create table if not exists public.router_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  router text not null check (router in ('concentrate', 'openrouter')),
+  router text not null check (router in ('concentrate', 'openrouter', 'merge')),
   label text,
   -- Only for a self-hosted deployment of a router; null uses the registry's URL.
   base_url text,
@@ -165,7 +165,7 @@ create table if not exists public.router_keys (
 -- no-op once the table exists). Safe to re-run.
 alter table public.router_keys drop constraint if exists router_keys_router_check;
 alter table public.router_keys
-  add constraint router_keys_router_check check (router in ('concentrate', 'openrouter'));
+  add constraint router_keys_router_check check (router in ('concentrate', 'openrouter', 'merge'));
 
 -- ---------- projects -------------------------------------------------
 create table if not exists public.projects (
@@ -962,3 +962,86 @@ create policy "activity_logs_owner_read" on public.activity_logs
   for select using (user_id = auth.uid());
 
 revoke insert, update, delete on table public.activity_logs from anon, authenticated;
+
+-- ---------- ops_events (operational telemetry, staff-only) ----------------
+--
+-- What is happening in this deployment and what is failing. Runs, provider
+-- calls, errors — recorded so an operator can answer "is it working, and if
+-- not, where" without reading function logs.
+--
+-- BUCKETED BY THE HOUR, not one row per event. A failing provider throws on
+-- every prompt of every run; per-event rows would turn one bad afternoon into
+-- tens of thousands of them, and the interesting number is "this failed 400
+-- times", not four hundred timestamps. Each row is (kind, signature, hour) with
+-- a count, so volume is bounded by the number of DISTINCT problems rather than
+-- by how badly they are going.
+--
+-- RLS ON WITH NO POLICIES. This is the same default-deny the oauth_* tables
+-- use: `authenticated` can never read it, whatever the schema says, because
+-- this file is public and the rows are not. Reads go through a staff-gated
+-- server route using the service role.
+--
+-- Nothing here records customer content. Provider and model, yes; prompt text,
+-- brand names, answers and domains never — the same line the phantom access
+-- telemetry draws.
+create table if not exists public.ops_events (
+  id uuid default gen_random_uuid() primary key,
+
+  -- 'run.completed', 'run.failed', 'provider.error', 'api.error', …
+  kind text not null,
+  level text not null default 'info' check (level in ('info', 'warn', 'error')),
+
+  -- What makes two occurrences "the same problem": for an error, the message
+  -- shape plus where it was raised. Stable across occurrences, so the count is
+  -- meaningful and a storm collapses into one row.
+  signature text not null,
+  -- The hour this falls in (UTC), truncated. The bucket.
+  hour timestamp with time zone not null,
+
+  occurrences integer not null default 0,
+  -- One representative example. Enough to debug from; not a log.
+  sample jsonb not null default '{}'::jsonb,
+
+  first_seen_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  last_seen_at timestamp with time zone default timezone('utc'::text, now()) not null,
+
+  unique (kind, signature, hour)
+);
+
+alter table public.ops_events enable row level security;
+
+create index if not exists idx_ops_events_hour on public.ops_events(hour desc);
+create index if not exists idx_ops_events_level_hour on public.ops_events(level, hour desc)
+  where level = 'error';
+
+-- Atomic bucket increment. Events arrive concurrently from every request, so
+-- read-then-write would lose counts exactly when volume matters most.
+create or replace function public.record_ops_event(
+  p_kind text,
+  p_level text,
+  p_signature text,
+  p_sample jsonb
+)
+returns void
+language sql
+security definer set search_path = public
+as $$
+  insert into public.ops_events as e (kind, level, signature, hour, occurrences, sample)
+  values (
+    p_kind,
+    coalesce(nullif(p_level, ''), 'info'),
+    p_signature,
+    date_trunc('hour', timezone('utc'::text, now())),
+    1,
+    coalesce(p_sample, '{}'::jsonb)
+  )
+  on conflict (kind, signature, hour)
+  do update set
+    occurrences = e.occurrences + 1,
+    -- Keep the FIRST sample, not the latest: the earliest occurrence is the one
+    -- closest to the cause, before retries and knock-on failures muddy it.
+    last_seen_at = timezone('utc'::text, now());
+$$;
+
+revoke all on function public.record_ops_event(text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.record_ops_event(text, text, text, jsonb) to service_role;

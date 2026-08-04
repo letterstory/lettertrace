@@ -195,8 +195,11 @@ async function loginFlow() {
   });
 
   saveCredentials(tokens);
+  // Truncated, matching the refresh path: the full token lives only in the
+  // credentials file. Printing it whole puts a live bearer token in terminal
+  // scrollback and any log that captures this run.
   console.log(`\nAccess token (expires in ${tokens.expires_in}s, scope "${tokens.scope}"):`);
-  console.log(`  ${tokens.access_token}`);
+  console.log(`  ${tokens.access_token.slice(0, 18)}…`);
   if (tokens.refresh_token) console.log("Refresh token stored for silent re-auth.");
 
   // 4. Prove it works against the surface it was bound to.
@@ -210,9 +213,13 @@ async function loginFlow() {
         (Array.isArray(body.projects) ? ` (${body.projects.length} organization(s))` : ""),
     );
   } else {
+    // The command is shown with a shell substitution rather than the literal
+    // token, so pasting it never lands the credential in shell history.
     console.log("\nToken is bound to MCP. Add it to an MCP client with:");
     console.log(`  claude mcp add --transport http lettertrace ${BASE}/api/mcp/mcp \\`);
-    console.log(`    -H "Authorization: Bearer ${tokens.access_token}"`);
+    console.log(
+      `    -H "Authorization: Bearer $(node -p 'JSON.parse(require("fs").readFileSync("${CRED_FILE}","utf8")).access_token')"`,
+    );
   }
 }
 
