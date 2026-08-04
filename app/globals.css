@@ -163,12 +163,12 @@
   display: none;
 }
 
-/* Provider-chip plates that flip with the theme (see settings/keys-manager).
-   In dark mode Gemini's rainbow mark gets a barely-off-white plate (the ink
-   token) so its colors read on the dark canvas, and OpenAI's knot sits on
-   plain near-black rather than a green tint. Light mode keeps each card's
-   tinted chip utility. */
-:root:not([data-theme="light"]) .chip-gemini {
+/* Provider-chip plates (see settings/keys-manager). Gemini's rainbow mark
+   sits on the same barely-off-white plate in both themes — on light paper the
+   plate is near-invisible without its hairline border, which the chip class
+   carries. OpenAI's knot sits on plain near-black in dark mode rather than a
+   green tint; light mode keeps its tinted chip utility. */
+.chip-gemini {
   background: rgb(244 243 239);
 }
 :root:not([data-theme="light"]) .chip-openai {

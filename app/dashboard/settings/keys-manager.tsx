@@ -42,7 +42,7 @@ const PROVIDER_STYLE: Record<
   google: {
     title: "Gemini",
     subtitle: "Google AI key · also powers AI Overviews",
-    chipClass: "bg-butter-tint chip-gemini",
+    chipClass: "chip-gemini border border-ink/10",
     logo: "/providers/google.png",
   },
   perplexity: {
