@@ -1,10 +1,17 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { AlertTriangle, Activity, CheckCircle2, CircleSlash, Clock, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  Activity,
+  CheckCircle2,
+  CircleSlash,
+  Clock,
+  ShieldAlert,
+  XCircle,
+} from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { liveHealth, inFlightCount } from "@/lib/ops-live";
 import { opsReport } from "@/lib/ops-report";
-import { configChecks, configProblems, configAttention } from "@/lib/ops-config";
 import { Badge, Card, CardBody, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
 
@@ -18,12 +25,7 @@ export default async function AdminPage() {
   if (!admin) notFound();
 
   const [live, ops, inFlight] = await Promise.all([liveHealth(24), opsReport(24), inFlightCount()]);
-  const checks = configChecks();
-  const problems = configProblems(checks);
-  const attention = configAttention(checks);
-
   const failing =
-    problems.length > 0 ||
     live.stuck.length > 0 ||
     live.failures.length > 0 ||
     (live.successRate !== null && live.successRate < 90);
@@ -32,8 +34,32 @@ export default async function AdminPage() {
     <div className="space-y-8">
       <SectionHeading
         title="Operations"
-        description={`Deployment health for the last 24 hours. Visible only to addresses in ADMIN_EMAILS — signed in as ${admin.email}.`}
+        description={`Deployment health for the last 24 hours. Signed in as ${admin.email}.`}
       />
+
+      {/* Gating on email is usable but conditional: it holds only while every
+          allowlisted address already has an account, because signup issues a
+          session immediately and an address with no account can simply be
+          registered. A user id cannot be claimed that way. */}
+      {admin.gate === "email" && (
+        <Card className="border-butter/50 bg-butter-tint/40">
+          <CardBody className="flex items-start gap-3">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-butter-ink" />
+            <div className="space-y-1 text-sm">
+              <p className="font-semibold text-ink">Access is gated on email addresses</p>
+              <p className="text-ink-soft">
+                That is safe only while every address in{" "}
+                <code className="font-mono text-xs">ADMIN_EMAILS</code> already has an account —
+                signup issues a session immediately, so an allowlisted address that nobody has
+                registered can be claimed by anyone who guesses it. Set{" "}
+                <code className="font-mono text-xs">ADMIN_USER_IDS</code> instead: a user id is
+                assigned by the auth server and cannot be registered into. When it is set, the
+                email list is ignored.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* The single sentence someone should be able to read from a phone. */}
       <Card
@@ -52,8 +78,6 @@ export default async function AdminPage() {
               {failing ? "Something needs attention" : "Everything looks operational"}
             </p>
             <p className="text-sm text-ink-soft">
-              {problems.length > 0 &&
-                `${problems.length} required setting${problems.length === 1 ? " is" : "s are"} missing. `}
               {live.stuck.length > 0 && `${live.stuck.length} run(s) stuck in flight. `}
               {live.failures.length > 0 &&
                 `${live.failures.length} distinct run failure${live.failures.length === 1 ? "" : "s"}. `}
@@ -102,35 +126,6 @@ export default async function AdminPage() {
           accent={live.apiErrors24h > 0 ? "terracotta" : "sand"}
         />
       </div>
-
-      {/* ---- Settings, but only when one of them is wrong --------------------
-           No list of green rows confirming that things are as they should be:
-           a section you learn to skip has stopped being a warning. Renders
-           nothing at all on a correctly configured deployment. */}
-      {attention.length > 0 && (
-        <section className="space-y-3">
-          <h3 className="text-lg font-semibold text-ink">Settings not in effect</h3>
-          <Card>
-            <CardBody className="divide-y divide-ink/5 p-0">
-              {attention.map((c) => (
-                <div key={c.key} className="flex items-start justify-between gap-4 px-6 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-mono text-sm text-ink">{c.key}</p>
-                    <p className="text-xs text-ink-faint">{c.impact}</p>
-                  </div>
-                  <Badge tone={c.required ? "terracotta" : "neutral"}>
-                    {c.required ? "missing" : "not set"}
-                  </Badge>
-                </div>
-              ))}
-            </CardBody>
-          </Card>
-          <p className="text-xs text-ink-faint">
-            Presence only — no value, prefix or length is ever read. A variable set to an empty
-            string counts as not set, because that is how it behaves everywhere else.
-          </p>
-        </section>
-      )}
 
       {/* ---- Stuck runs: the failure nothing else reports ------------------- */}
       {live.stuck.length > 0 && (

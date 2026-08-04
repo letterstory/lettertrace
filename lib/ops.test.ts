@@ -7,8 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 import { signatureOf, opsEnabled } from "@/lib/ops";
 import { shapeOps, type OpsRow } from "@/lib/ops-report";
 import { shapeLive } from "@/lib/ops-live";
-import { configChecks, configProblems, configAttention } from "@/lib/ops-config";
-import { isAdminEmail, adminEmails } from "@/lib/admin";
+import { isAdminEmail, adminEmails, isAdminUserId, adminGate } from "@/lib/admin";
 
 const HOUR = "2026-08-03T14:00:00.000Z";
 
@@ -221,48 +220,6 @@ describe("shapeLive", () => {
   });
 });
 
-describe("configChecks", () => {
-  it("marks a missing required setting as a problem", () => {
-    const problems = configProblems(configChecks({ NEXT_PUBLIC_SUPABASE_URL: "https://x" } as never));
-    expect(problems.map((p) => p.key)).toContain("SUPABASE_SERVICE_ROLE_KEY");
-    expect(problems.map((p) => p.key)).not.toContain("NEXT_PUBLIC_SUPABASE_URL");
-  });
-
-  it("treats whitespace as unset", () => {
-    // Vercel happily stores a variable whose value is a stray space, and it
-    // behaves exactly like a missing one everywhere else in the app.
-    const checks = configChecks({ ENCRYPTION_KEY: "   " } as never);
-    expect(checks.find((c) => c.key === "ENCRYPTION_KEY")?.state).toBe("missing");
-  });
-
-  it("never reports an optional setting as a problem", () => {
-    const problems = configProblems(configChecks({} as never));
-    expect(problems.every((p) => p.required)).toBe(true);
-  });
-
-  it("says nothing at all when every setting is in place", () => {
-    const full: Record<string, string> = {};
-    for (const c of configChecks({} as never)) full[c.key] = "x";
-    // The section is only a warning if it is silent the rest of the time.
-    expect(configAttention(configChecks(full as never))).toEqual([]);
-  });
-
-  it("surfaces an optional setting whose value is an empty string", () => {
-    // The exact production trap: OPS_TELEMETRY existed in Vercel with an empty
-    // value, so every check that looked for a NAME reported it as configured
-    // while the feature was silently off.
-    const attention = configAttention(configChecks({ OPS_TELEMETRY: "" } as never));
-    expect(attention.map((c) => c.key)).toContain("OPS_TELEMETRY");
-  });
-
-  it("reports presence only, never any part of a value", () => {
-    const secret = "sk-super-secret-value";
-    const serialized = JSON.stringify(configChecks({ ENCRYPTION_KEY: secret } as never));
-    expect(serialized).not.toContain(secret);
-    expect(serialized).not.toContain("sk-");
-  });
-});
-
 describe("isAdminEmail", () => {
   const original = process.env.ADMIN_EMAILS;
   afterEach(() => {
@@ -300,5 +257,48 @@ describe("isAdminEmail", () => {
     process.env.ADMIN_EMAILS = "casey@letterstory.com";
     expect(isAdminEmail(null)).toBe(false);
     expect(isAdminEmail(undefined)).toBe(false);
+  });
+});
+
+describe("adminGate", () => {
+  const ids = process.env.ADMIN_USER_IDS;
+  const emails = process.env.ADMIN_EMAILS;
+  afterEach(() => {
+    ids === undefined ? delete process.env.ADMIN_USER_IDS : (process.env.ADMIN_USER_IDS = ids);
+    emails === undefined ? delete process.env.ADMIN_EMAILS : (process.env.ADMIN_EMAILS = emails);
+  });
+
+  it("is closed when neither list is set", () => {
+    delete process.env.ADMIN_USER_IDS;
+    delete process.env.ADMIN_EMAILS;
+    expect(adminGate()).toBe("none");
+  });
+
+  it("prefers ids over emails, and does not union them", () => {
+    // A union would keep exactly the weakness ids exist to remove: the email
+    // half would still admit anyone who registered an unclaimed address.
+    process.env.ADMIN_USER_IDS = "11111111-1111-1111-1111-111111111111";
+    process.env.ADMIN_EMAILS = "casey@letterstory.com";
+    expect(adminGate()).toBe("user-id");
+    expect(isAdminUserId("11111111-1111-1111-1111-111111111111")).toBe(true);
+    expect(isAdminUserId("22222222-2222-2222-2222-222222222222")).toBe(false);
+  });
+
+  it("falls back to email only when no ids are set", () => {
+    delete process.env.ADMIN_USER_IDS;
+    process.env.ADMIN_EMAILS = "casey@letterstory.com";
+    expect(adminGate()).toBe("email");
+  });
+
+  it("treats an empty id list as closed rather than open", () => {
+    process.env.ADMIN_USER_IDS = " , ";
+    delete process.env.ADMIN_EMAILS;
+    expect(adminGate()).toBe("none");
+    expect(isAdminUserId("11111111-1111-1111-1111-111111111111")).toBe(false);
+  });
+
+  it("matches ids case-insensitively, since uuid casing varies by client", () => {
+    process.env.ADMIN_USER_IDS = "AAAAAAAA-1111-2222-3333-444444444444";
+    expect(isAdminUserId("aaaaaaaa-1111-2222-3333-444444444444")).toBe(true);
   });
 });
