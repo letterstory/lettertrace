@@ -4,7 +4,7 @@ import { AlertTriangle, Activity, CheckCircle2, CircleSlash, Clock, XCircle } fr
 import { requireAdmin } from "@/lib/admin";
 import { liveHealth, inFlightCount } from "@/lib/ops-live";
 import { opsReport } from "@/lib/ops-report";
-import { configChecks, configProblems } from "@/lib/ops-config";
+import { configChecks, configProblems, configAttention } from "@/lib/ops-config";
 import { Badge, Card, CardBody, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
 
@@ -20,6 +20,7 @@ export default async function AdminPage() {
   const [live, ops, inFlight] = await Promise.all([liveHealth(24), opsReport(24), inFlightCount()]);
   const checks = configChecks();
   const problems = configProblems(checks);
+  const attention = configAttention(checks);
 
   const failing =
     problems.length > 0 ||
@@ -102,37 +103,34 @@ export default async function AdminPage() {
         />
       </div>
 
-      {/* ---- Configuration, first, because it explains most other failures --- */}
-      <section className="space-y-3">
-        <h3 className="text-lg font-semibold text-ink">Configuration</h3>
-        <p className="text-sm text-ink-faint">
-          Whether each setting is present. Values are never shown or checked, only presence.
-        </p>
-        <Card>
-          <CardBody className="divide-y divide-ink/5 p-0">
-            {checks.map((c) => (
-              <div key={c.key} className="flex items-center justify-between gap-4 px-6 py-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-ink">{c.label}</p>
-                  <p className="truncate font-mono text-xs text-ink-faint">{c.key}</p>
+      {/* ---- Settings, but only when one of them is wrong --------------------
+           No list of green rows confirming that things are as they should be:
+           a section you learn to skip has stopped being a warning. Renders
+           nothing at all on a correctly configured deployment. */}
+      {attention.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-lg font-semibold text-ink">Settings not in effect</h3>
+          <Card>
+            <CardBody className="divide-y divide-ink/5 p-0">
+              {attention.map((c) => (
+                <div key={c.key} className="flex items-start justify-between gap-4 px-6 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm text-ink">{c.key}</p>
+                    <p className="text-xs text-ink-faint">{c.impact}</p>
+                  </div>
+                  <Badge tone={c.required ? "terracotta" : "neutral"}>
+                    {c.required ? "missing" : "not set"}
+                  </Badge>
                 </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  {c.state !== "ok" && (
-                    <span className="hidden text-xs text-ink-faint sm:inline">{c.impact}</span>
-                  )}
-                  {c.state === "ok" ? (
-                    <Badge tone="mint">set</Badge>
-                  ) : c.required ? (
-                    <Badge tone="terracotta">missing</Badge>
-                  ) : (
-                    <Badge tone="neutral">not set</Badge>
-                  )}
-                </div>
-              </div>
-            ))}
-          </CardBody>
-        </Card>
-      </section>
+              ))}
+            </CardBody>
+          </Card>
+          <p className="text-xs text-ink-faint">
+            Presence only — no value, prefix or length is ever read. A variable set to an empty
+            string counts as not set, because that is how it behaves everywhere else.
+          </p>
+        </section>
+      )}
 
       {/* ---- Stuck runs: the failure nothing else reports ------------------- */}
       {live.stuck.length > 0 && (
@@ -243,9 +241,12 @@ export default async function AdminPage() {
               <CircleSlash className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 Telemetry is off, so errors outside the run lifecycle — API routes, background jobs,
-                individual provider calls — are not being recorded. Set{" "}
-                <code className="font-mono text-xs">OPS_TELEMETRY=1</code> to collect them. The
-                figures above do not depend on this.
+                and individual provider calls within a run — are not being recorded. Set{" "}
+                <code className="font-mono text-xs">OPS_TELEMETRY=1</code> and redeploy to collect
+                them. It must literally be <code className="font-mono text-xs">1</code> or{" "}
+                <code className="font-mono text-xs">true</code>: the variable existing but holding an
+                empty string reads as off, which looks identical to never having set it. Everything
+                above is read from run history and does not depend on this.
               </span>
             </CardBody>
           </Card>
