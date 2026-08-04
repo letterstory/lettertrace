@@ -253,6 +253,73 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       },
     },
   },
+  // NOT YET PROBED (2026-08-03). Every entry below rests on Merge's docs
+  // (docs.merge.dev/merge-gateway/get-started), which is exactly the footing
+  // this registry exists to distrust. Before this router serves anyone, run
+  //   npx tsx scripts/probe-router.ts merge
+  // with a live key and correct what it disagrees with. The three facts most
+  // likely to be wrong, in order: the auth header on the Anthropic surface,
+  // whether the Anthropic-Messages skin lives at <base>/v1/messages, and
+  // whether a Responses endpoint exists that honours a forcing `tool_choice`
+  // (if it does, the openai entry below should be raised to match). Until a
+  // credential's save-time probe has SEEN sources come back, monitored
+  // web-search runs stay closed regardless of what this table claims.
+  merge: {
+    id: "merge",
+    label: "Merge Gateway",
+    blurb: "Every major provider behind one endpoint, with routing and spend controls.",
+    keyUrl: "https://gateway.merge.dev/",
+    docsUrl: "https://docs.merge.dev/merge-gateway/get-started",
+    // Merge's docs show keys only through SDK `apiKey` params, no prefix shown.
+    keyPrefix: "",
+    // Per-provider surfaces under one host: the docs name /v1/openai,
+    // /v1/anthropic, /v1/ai-sdk. The OpenAI SDK appends /chat/completions.
+    openaiBaseUrl: "https://api-gateway.merge.dev/v1/openai",
+    // The Anthropic SDK appends /v1/messages, so the skin must answer at
+    // /v1/anthropic/v1/messages. The docs demonstrate the surface only through
+    // SDKs and never show the raw path — unverified until probed.
+    anthropicBaseUrl: "https://api-gateway.merge.dev/v1/anthropic",
+    // Undocumented. x-api-key is what the Anthropic SDK sends unprompted, so it
+    // is the guess with fewer moving parts; a 401 at save time says otherwise.
+    anthropicAuth: "x-api-key",
+    providers: {
+      anthropic: {
+        // Native-shape skin per the docs. 'passthrough' here means expressible,
+        // not proven: no monitored web-search run happens until a saved key's
+        // probe returns real sources through this path.
+        shape: "anthropic",
+        search: "passthrough",
+        slugPrefix: "anthropic",
+      },
+      openai: {
+        // The docs document chat-completions only; their native SDK mentions a
+        // responses.create() with no raw endpoint given. Without a Responses
+        // surface that honours a forcing `tool_choice` — the thing that makes a
+        // routed GPT answer comparable to a direct one (see Concentrate above) —
+        // GPT through Merge serves ungrounded projects and utility work only.
+        // If the probe finds a working Responses endpoint, raise this to
+        // 'openai-responses' + 'passthrough' with the probe date.
+        shape: "openai-chat",
+        search: "none",
+        slugPrefix: "openai",
+      },
+      google: {
+        // Same stance as both routers above: routable for ungrounded runs,
+        // refused for grounded ones — no router has shown us Google's native
+        // grounding intact. Slugs assume Merge resolves the same
+        // `google/gemini-2.5-*` names the others do; a wrong guess fails the
+        // save-time probe for this provider only, it cannot corrupt a run.
+        shape: "openai-chat",
+        search: "none",
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
+      },
+    },
+  },
 };
 
 /** OpenRouter's upstream-provider names, for the pinning above. */
@@ -266,7 +333,7 @@ const OPENROUTER_UPSTREAM: Record<Provider, string> = {
 export const ROUTER_LIST: RouterInfo[] = Object.values(ROUTERS);
 
 export function isRouterId(value: string): value is RouterId {
-  return value === "concentrate" || value === "openrouter";
+  return value === "concentrate" || value === "openrouter" || value === "merge";
 }
 
 /** Narrow an untrusted router value, or null. */

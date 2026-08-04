@@ -19,6 +19,7 @@ describe("router registry", () => {
   it("narrows only known routers", () => {
     expect(isRouterId("concentrate")).toBe(true);
     expect(isRouterId("openrouter")).toBe(true);
+    expect(isRouterId("merge")).toBe(true);
     expect(isRouterId("litellm")).toBe(false);
     expect(parseRouterId(42)).toBeNull();
     expect(parseRouterId("concentrate")).toBe("concentrate");
@@ -37,12 +38,14 @@ describe("router registry", () => {
   it("serves only the engines whose measurement survives a gateway", () => {
     expect(routerProviders("concentrate")).toEqual(["anthropic", "openai", "google"]);
     expect(routerProviders("openrouter")).toEqual(["anthropic", "openai", "google"]);
+    expect(routerProviders("merge")).toEqual(["anthropic", "openai", "google"]);
     // Perplexity stays out: its search is always on and inseparable from the
     // answer, so a routed Perplexity call cannot be the ungrounded fallback the
     // `search: "none"` tier relies on. Gemini earns its place only in that
     // tier — reachable, never grounded (see the routed Gemini cases below).
     expect(routerSupport("concentrate", "perplexity")).toBeNull();
     expect(routerSupport("openrouter", "perplexity")).toBeNull();
+    expect(routerSupport("merge", "perplexity")).toBeNull();
   });
 
   // Both of these are the provider's OWN wire format, which is what preserves
@@ -60,6 +63,10 @@ describe("router registry", () => {
   it("records the auth header for each Anthropic surface", () => {
     expect(ROUTERS.concentrate.anthropicAuth).toBe("bearer");
     expect(ROUTERS.openrouter.anthropicAuth).toBe("x-api-key");
+    // Merge is a docs-based guess, not a probe — see the NOT YET PROBED note in
+    // lib/routers.ts. This pin exists so a probe that finds bearer changes the
+    // registry and the test together, on purpose.
+    expect(ROUTERS.merge.anthropicAuth).toBe("x-api-key");
   });
 
   // Probed 2026-07-31 against a live key. OpenRouter carries Claude's forced
@@ -72,6 +79,12 @@ describe("router registry", () => {
     expect(routerSupport("openrouter", "openai")?.search).toBe("none");
     expect(routerSupport("concentrate", "anthropic")?.search).toBe("passthrough");
     expect(routerSupport("concentrate", "openai")?.search).toBe("passthrough");
+    // Merge is unprobed (2026-08-03): its docs show no Responses surface, so
+    // GPT stays ungrounded-only until a live probe proves a forcing
+    // `tool_choice` works. Claude is 'passthrough' in the expressible sense —
+    // no monitored run happens until a saved key's probe returns sources.
+    expect(routerSupport("merge", "anthropic")?.search).toBe("passthrough");
+    expect(routerSupport("merge", "openai")?.search).toBe("none");
   });
 
   it("still serves ungrounded work on the engine it cannot ground", () => {
@@ -317,8 +330,8 @@ describe("coveredProviders", () => {
 // ---------------------------------------------------------------------------
 
 describe("routed Gemini", () => {
-  it("is reachable through both routers", () => {
-    for (const router of ["openrouter", "concentrate"] as const) {
+  it("is reachable through every router", () => {
+    for (const router of ["openrouter", "concentrate", "merge"] as const) {
       expect(routerProviders(router)).toContain("google");
     }
   });
@@ -359,5 +372,6 @@ describe("routed Gemini", () => {
     // is nothing on a router that could stand in for it.
     expect(routerSlug("openrouter", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
     expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+    expect(routerSlug("merge", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
   });
 });
