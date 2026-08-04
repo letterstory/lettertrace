@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
 import {
   ROUTERS,
+  ROUTER_LIST,
   coveredProviders,
   engineCoverage,
   isRouterId,
@@ -23,6 +24,13 @@ describe("router registry", () => {
     expect(isRouterId("litellm")).toBe(false);
     expect(parseRouterId(42)).toBeNull();
     expect(parseRouterId("concentrate")).toBe("concentrate");
+  });
+
+  it("lists every registered router, Merge first", () => {
+    // ROUTER_LIST is hand-ordered for display, which means a new registry
+    // entry can be silently forgotten from it — this catches that.
+    expect(ROUTER_LIST.map((r) => r.id)).toEqual(["merge", "concentrate", "openrouter"]);
+    expect(new Set(ROUTER_LIST.map((r) => r.id))).toEqual(new Set(Object.keys(ROUTERS)));
   });
 
   // The whole design rests on a router never becoming a Provider. If one ever

@@ -322,7 +322,8 @@ const OPENROUTER_UPSTREAM: Record<Provider, string> = {
   perplexity: "perplexity",
 };
 
-export const ROUTER_LIST: RouterInfo[] = Object.values(ROUTERS);
+/** Display order for the settings cards and CLI listing: Merge leads. */
+export const ROUTER_LIST: RouterInfo[] = [ROUTERS.merge, ROUTERS.concentrate, ROUTERS.openrouter];
 
 export function isRouterId(value: string): value is RouterId {
   return value === "concentrate" || value === "openrouter" || value === "merge";
