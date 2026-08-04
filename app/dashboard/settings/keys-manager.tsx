@@ -35,21 +35,22 @@ const PROVIDER_STYLE: Record<
   openai: {
     title: "ChatGPT",
     subtitle: "OpenAI API key",
-    chipClass: "bg-teal/15",
+    chipClass: "bg-teal/15 chip-openai",
     logo: "/providers/openai-black.png",
     darkLogo: "/providers/openai-white.png",
   },
   google: {
     title: "Gemini",
     subtitle: "Google AI key · also powers AI Overviews",
-    chipClass: "bg-butter-tint",
+    chipClass: "bg-butter-tint chip-gemini",
     logo: "/providers/google.png",
   },
   perplexity: {
     title: "Perplexity",
     subtitle: "Sonar API key · answers are always search-grounded",
     chipClass: "bg-mint-tint",
-    logo: "/providers/perplexity.png",
+    logo: "/providers/perplexity-black.png",
+    darkLogo: "/providers/perplexity-teal.png",
   },
 };
 
