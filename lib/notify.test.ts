@@ -27,7 +27,7 @@ describe("sendAdminAlert", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     expect(await sendAdminAlert({ subject: "s", body: "b" })).toBe("not-configured");
 
-    process.env.ADMIN_ALERT_EMAIL = "mathew@letterstory.com";
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com";
     expect(await sendAdminAlert({ subject: "s", body: "b" })).toBe("not-configured");
 
     delete process.env.ADMIN_ALERT_EMAIL;
@@ -37,9 +37,9 @@ describe("sendAdminAlert", () => {
   });
 
   it("posts the alert to the configured address", async () => {
-    process.env.ADMIN_ALERT_EMAIL = "mathew@letterstory.com";
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com";
     process.env.RESEND_API_KEY = "re_x";
-    process.env.ADMIN_ALERT_FROM = "Lettertrace <alerts@letterstory.com>";
+    process.env.ADMIN_ALERT_FROM = "Lettertrace <alerts@example.com>";
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("{}", { status: 200 }));
@@ -49,8 +49,8 @@ describe("sendAdminAlert", () => {
     expect(String(url)).toContain("api.resend.com");
     const sent = JSON.parse(String((init as RequestInit).body));
     expect(sent).toMatchObject({
-      to: ["mathew@letterstory.com"],
-      from: "Lettertrace <alerts@letterstory.com>",
+      to: ["ops@example.com"],
+      from: "Lettertrace <alerts@example.com>",
       subject: "New signup",
       text: "hello",
     });
@@ -79,8 +79,8 @@ describe("sendAdminAlert", () => {
 
   it("reads the address from the environment", () => {
     expect(adminAlertEmail()).toBeNull();
-    process.env.ADMIN_ALERT_EMAIL = "  mathew@letterstory.com  ";
-    expect(adminAlertEmail()).toBe("mathew@letterstory.com");
+    process.env.ADMIN_ALERT_EMAIL = "  ops@example.com  ";
+    expect(adminAlertEmail()).toBe("ops@example.com");
   });
 });
 
@@ -135,7 +135,7 @@ describe("alertNewSignup", () => {
   });
 
   it("claims the alert with a guarded write, then sends", async () => {
-    process.env.ADMIN_ALERT_EMAIL = "mathew@letterstory.com";
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com";
     process.env.RESEND_API_KEY = "re_x";
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -156,7 +156,7 @@ describe("alertNewSignup", () => {
   // older schema has no admin_alerted_at column, every claim errors, and reading
   // that as "already claimed" would mean alerts silently never fire again.
   it("reports a failed claim rather than mistaking it for a duplicate", async () => {
-    process.env.ADMIN_ALERT_EMAIL = "mathew@letterstory.com";
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com";
     process.env.RESEND_API_KEY = "re_x";
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -167,7 +167,7 @@ describe("alertNewSignup", () => {
   });
 
   it("sends nothing when another request already claimed it", async () => {
-    process.env.ADMIN_ALERT_EMAIL = "mathew@letterstory.com";
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com";
     process.env.RESEND_API_KEY = "re_x";
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { db } = fakeDb(true);
