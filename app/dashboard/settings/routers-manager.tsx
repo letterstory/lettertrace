@@ -23,10 +23,14 @@ import type { Provider, RouterId, RouterKeyPublic } from "@/lib/types";
 // router key that can measure, so the card reports per-engine what this
 // credential was actually observed to do rather than a bare "Connected".
 
-const ROUTER_MARK: Record<RouterId, { mark: string; markClass: string }> = {
-  concentrate: { mark: "◎", markClass: "bg-teal/15 text-teal-dark" },
-  openrouter: { mark: "⇄", markClass: "bg-butter-tint text-butter-ink" },
-  merge: { mark: "⌥", markClass: "bg-mint-tint text-mint-ink" },
+// Each tile's background is the exact color baked into its PNG (sampled from
+// the corner pixel), so the object-contain letterboxing is invisible. Merge's
+// art is dark-on-white, hence the light tile with a hairline border to keep it
+// from dissolving into a light page.
+const ROUTER_LOGO: Record<RouterId, { src: string; tileClass: string }> = {
+  concentrate: { src: "/routers/concentrate.png", tileClass: "bg-[#0d0e10]" },
+  openrouter: { src: "/routers/openrouter.png", tileClass: "bg-[#04080a]" },
+  merge: { src: "/routers/merge.png", tileClass: "border border-ink/10 bg-white" },
 };
 
 /** One engine's verdict on a saved credential, as returned by the save call. */
@@ -60,7 +64,7 @@ function RouterCard({
   existing: RouterKeyPublic | null;
 }) {
   const router = useRouter();
-  const style = ROUTER_MARK[info.id];
+  const logo = ROUTER_LOGO[info.id];
 
   const [editing, setEditing] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -129,13 +133,10 @@ function RouterCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span
-            className={cn(
-              "grid h-11 w-11 shrink-0 place-items-center rounded font-serif text-lg font-semibold",
-              style.markClass,
-            )}
+            className={cn("h-11 w-11 shrink-0 overflow-hidden rounded", logo.tileClass)}
             aria-hidden
           >
-            {style.mark}
+            <img src={logo.src} alt="" className="h-full w-full object-contain p-1" />
           </span>
           <div>
             <p className="font-serif text-lg font-semibold leading-tight text-ink">
