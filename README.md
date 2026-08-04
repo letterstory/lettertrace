@@ -107,6 +107,13 @@ openssl rand -base64 32   # -> ENCRYPTION_KEY
 openssl rand -hex 32      # -> CRON_SECRET
 ```
 
+> **No third-party tracking by default.** The hosted lettertrace.com runs the
+> [RB2B](https://rb2b.com) business-visitor identification pixel on its **public
+> marketing pages only** (`/`, `/privacy`, `/terms`), gated on
+> `NEXT_PUBLIC_RB2B_KEY`. Leave that unset — as `.env.example` does — and a
+> self-hosted deployment ships **zero** third-party tracking. It never runs on
+> the authenticated app (`/dashboard`, `/login`, …).
+
 ### 4. Install & run
 
 Use **Node 22 LTS** (see [`.nvmrc`](./.nvmrc)). Node 23+ has an `undici`
