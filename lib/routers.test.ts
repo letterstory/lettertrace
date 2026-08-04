@@ -63,9 +63,7 @@ describe("router registry", () => {
   it("records the auth header for each Anthropic surface", () => {
     expect(ROUTERS.concentrate.anthropicAuth).toBe("bearer");
     expect(ROUTERS.openrouter.anthropicAuth).toBe("x-api-key");
-    // Merge is a docs-based guess, not a probe — see the NOT YET PROBED note in
-    // lib/routers.ts. This pin exists so a probe that finds bearer changes the
-    // registry and the test together, on purpose.
+    // Probed 2026-08-03: x-api-key authenticated a grounded Claude call.
     expect(ROUTERS.merge.anthropicAuth).toBe("x-api-key");
   });
 
@@ -79,10 +77,11 @@ describe("router registry", () => {
     expect(routerSupport("openrouter", "openai")?.search).toBe("none");
     expect(routerSupport("concentrate", "anthropic")?.search).toBe("passthrough");
     expect(routerSupport("concentrate", "openai")?.search).toBe("passthrough");
-    // Merge is unprobed (2026-08-03): its docs show no Responses surface, so
-    // GPT stays ungrounded-only until a live probe proves a forcing
-    // `tool_choice` works. Claude is 'passthrough' in the expressible sense —
-    // no monitored run happens until a saved key's probe returns sources.
+    // Merge, probed 2026-08-03: Claude's forced search survived the gateway
+    // (9 sources). GPT is held at 'none' not because the surface is missing —
+    // a Responses route exists — but because Merge's OpenAI vendor was
+    // circuit-broken throughout the probe, and grounding must be OBSERVED
+    // before it is claimed. See the registry entry for the promotion recipe.
     expect(routerSupport("merge", "anthropic")?.search).toBe("passthrough");
     expect(routerSupport("merge", "openai")?.search).toBe("none");
   });

@@ -253,17 +253,12 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       },
     },
   },
-  // NOT YET PROBED (2026-08-03). Every entry below rests on Merge's docs
-  // (docs.merge.dev/merge-gateway/get-started), which is exactly the footing
-  // this registry exists to distrust. Before this router serves anyone, run
-  //   npx tsx scripts/probe-router.ts merge
-  // with a live key and correct what it disagrees with. The three facts most
-  // likely to be wrong, in order: the auth header on the Anthropic surface,
-  // whether the Anthropic-Messages skin lives at <base>/v1/messages, and
-  // whether a Responses endpoint exists that honours a forcing `tool_choice`
-  // (if it does, the openai entry below should be raised to match). Until a
-  // credential's save-time probe has SEEN sources come back, monitored
-  // web-search runs stay closed regardless of what this table claims.
+  // Probed 2026-08-03 with a live key. The Anthropic skin is confirmed
+  // end-to-end: forced web_search returned 9 cited sources on a question
+  // answerable from memory, through the base URL and auth header recorded
+  // below. Gemini's slug resolves on the chat surface (utility-tier only, as
+  // everywhere). The one open question is GPT grounding — see the openai
+  // entry for what was observed and what would raise it.
   merge: {
     id: "merge",
     label: "Merge Gateway",
@@ -275,30 +270,31 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
     // Per-provider surfaces under one host: the docs name /v1/openai,
     // /v1/anthropic, /v1/ai-sdk. The OpenAI SDK appends /chat/completions.
     openaiBaseUrl: "https://api-gateway.merge.dev/v1/openai",
-    // The Anthropic SDK appends /v1/messages, so the skin must answer at
-    // /v1/anthropic/v1/messages. The docs demonstrate the surface only through
-    // SDKs and never show the raw path — unverified until probed.
+    // The Anthropic SDK appends /v1/messages itself. Probed 2026-08-03: this
+    // base plus that suffix answered a forced-search request with real sources.
     anthropicBaseUrl: "https://api-gateway.merge.dev/v1/anthropic",
-    // Undocumented. x-api-key is what the Anthropic SDK sends unprompted, so it
-    // is the guess with fewer moving parts; a 401 at save time says otherwise.
+    // Undocumented but probed: x-api-key (the Anthropic SDK's default)
+    // authenticated the grounded probe above.
     anthropicAuth: "x-api-key",
     providers: {
       anthropic: {
-        // Native-shape skin per the docs. 'passthrough' here means expressible,
-        // not proven: no monitored web-search run happens until a saved key's
-        // probe returns real sources through this path.
+        // Native-shape skin, probed 2026-08-03: the forced web_search tool
+        // survived the gateway and returned 9 cited sources. As always,
+        // 'passthrough' still gates per credential at save time.
         shape: "anthropic",
         search: "passthrough",
         slugPrefix: "anthropic",
       },
       openai: {
-        // The docs document chat-completions only; their native SDK mentions a
-        // responses.create() with no raw endpoint given. Without a Responses
-        // surface that honours a forcing `tool_choice` — the thing that makes a
-        // routed GPT answer comparable to a direct one (see Concentrate above) —
-        // GPT through Merge serves ungrounded projects and utility work only.
-        // If the probe finds a working Responses endpoint, raise this to
-        // 'openai-responses' + 'passthrough' with the probe date.
+        // Held at ungrounded-only, but for a different reason than OpenRouter.
+        // Probed 2026-08-03: a Responses route EXISTS at <openaiBaseUrl>/responses
+        // and parses a forced `web_search_preview` — but Merge's OpenAI vendor
+        // was circuit-broken the whole session (503 "model_vendor_unhealthy" on
+        // gpt-4o-mini, bare 502s on gpt-4o), so grounding was never OBSERVED,
+        // and observation is the bar. When their OpenAI path is healthy, re-run
+        //   npx tsx scripts/probe-router.ts merge --provider openai
+        // with this entry set to 'openai-responses' + 'passthrough'; if sources
+        // come back, that promotion is correct and should land with the date.
         shape: "openai-chat",
         search: "none",
         slugPrefix: "openai",
@@ -306,9 +302,8 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       google: {
         // Same stance as both routers above: routable for ungrounded runs,
         // refused for grounded ones — no router has shown us Google's native
-        // grounding intact. Slugs assume Merge resolves the same
-        // `google/gemini-2.5-*` names the others do; a wrong guess fails the
-        // save-time probe for this provider only, it cannot corrupt a run.
+        // grounding intact. Probed 2026-08-03: `google/gemini-2.5-flash`
+        // resolves on the chat surface (HTTP 200), so the slug scheme holds.
         shape: "openai-chat",
         search: "none",
         slugPrefix: "google",
