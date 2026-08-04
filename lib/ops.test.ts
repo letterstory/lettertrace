@@ -109,10 +109,36 @@ describe("shapeOps", () => {
     expect(r.problems.map((p) => p.signature)).toEqual(["loud", "quiet"]);
   });
 
-  it("counts only error rows as problems", () => {
+  it("ignores info rows, which are volume rather than problems", () => {
     const r = shapeOps([opsRow({ level: "info", occurrences: 5 })], 24, true);
     expect(r.problems).toHaveLength(0);
     expect(r.errors).toBe(0);
+  });
+
+  it("surfaces warnings as problems but does not count them as errors", () => {
+    // A warn is something the code deliberately chose to report. Dropping it
+    // would mean it could never be seen anywhere, which makes recording it
+    // pointless — but the headline "errors" figure must stay strictly errors.
+    const r = shapeOps(
+      [opsRow({ kind: "warn", level: "warn", signature: "slow provider", occurrences: 3 })],
+      24,
+      true,
+    );
+    expect(r.problems).toHaveLength(1);
+    expect(r.problems[0].level).toBe("warn");
+    expect(r.errors).toBe(0);
+  });
+
+  it("ranks any error above any warning, however loud the warning", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "warn", level: "warn", signature: "noisy warn", occurrences: 900 }),
+        opsRow({ kind: "error", level: "error", signature: "one error", occurrences: 1 }),
+      ],
+      24,
+      true,
+    );
+    expect(r.problems.map((p) => p.signature)).toEqual(["one error", "noisy warn"]);
   });
 
   it("survives a malformed sample without throwing", () => {

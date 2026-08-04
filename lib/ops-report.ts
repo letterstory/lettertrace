@@ -25,6 +25,8 @@ export interface OpsRow {
 export interface Problem {
   signature: string;
   kind: string;
+  /** Carried through so the view can separate "broken" from "worth knowing". */
+  level: "warn" | "error";
   occurrences: number;
   lastSeen: string;
   source: string;
@@ -67,8 +69,12 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
     else if (r.kind === "run.failed") failed += n;
     else if (r.kind === "run.abandoned") abandoned += n;
 
-    if (r.level === "error") {
-      errors += n;
+    // Warnings are included, not just errors. A warn is something the code
+    // deliberately chose to report; dropping it here would mean it could never
+    // be seen anywhere, which makes recording it pointless. Only `errors`
+    // counts strictly errors, since that is what the headline figure means.
+    if (r.level === "error" || r.level === "warn") {
+      if (r.level === "error") errors += n;
       const existing = problems.get(r.signature);
       const sample = asRecord(r.sample);
       const source = String(sample.source ?? r.kind);
@@ -79,6 +85,7 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
         problems.set(r.signature, {
           signature: r.signature,
           kind: r.kind,
+          level: r.level === "error" ? "error" : "warn",
           occurrences: n,
           lastSeen: r.last_seen_at,
           source,
@@ -112,7 +119,10 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
     },
     errors,
     problems: [...problems.values()].sort(
-      (a, b) => b.occurrences - a.occurrences || b.lastSeen.localeCompare(a.lastSeen),
+      (a, b) =>
+        Number(b.level === "error") - Number(a.level === "error") ||
+        b.occurrences - a.occurrences ||
+        b.lastSeen.localeCompare(a.lastSeen),
     ),
     engines: [...engines.entries()]
       .map(([engine, v]) => ({ engine, ...v }))
