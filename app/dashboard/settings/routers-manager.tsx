@@ -26,6 +26,7 @@ import type { Provider, RouterId, RouterKeyPublic } from "@/lib/types";
 const ROUTER_MARK: Record<RouterId, { mark: string; markClass: string }> = {
   concentrate: { mark: "◎", markClass: "bg-teal/15 text-teal-dark" },
   openrouter: { mark: "⇄", markClass: "bg-butter-tint text-butter-ink" },
+  merge: { mark: "⌥", markClass: "bg-mint-tint text-mint-ink" },
 };
 
 /** One engine's verdict on a saved credential, as returned by the save call. */

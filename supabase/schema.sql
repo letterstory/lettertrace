@@ -150,7 +150,7 @@ alter table public.provider_keys
 create table if not exists public.router_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  router text not null check (router in ('concentrate', 'openrouter')),
+  router text not null check (router in ('concentrate', 'openrouter', 'merge')),
   label text,
   -- Only for a self-hosted deployment of a router; null uses the registry's URL.
   base_url text,
@@ -165,7 +165,7 @@ create table if not exists public.router_keys (
 -- no-op once the table exists). Safe to re-run.
 alter table public.router_keys drop constraint if exists router_keys_router_check;
 alter table public.router_keys
-  add constraint router_keys_router_check check (router in ('concentrate', 'openrouter'));
+  add constraint router_keys_router_check check (router in ('concentrate', 'openrouter', 'merge'));
 
 -- ---------- projects -------------------------------------------------
 create table if not exists public.projects (

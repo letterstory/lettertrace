@@ -253,6 +253,68 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
       },
     },
   },
+  // Probed 2026-08-03 with a live key. The Anthropic skin is confirmed
+  // end-to-end: forced web_search returned 9 cited sources on a question
+  // answerable from memory, through the base URL and auth header recorded
+  // below. Gemini's slug resolves on the chat surface (utility-tier only, as
+  // everywhere). The one open question is GPT grounding — see the openai
+  // entry for what was observed and what would raise it.
+  merge: {
+    id: "merge",
+    label: "Merge Gateway",
+    blurb: "Every major provider behind one endpoint, with routing and spend controls.",
+    keyUrl: "https://gateway.merge.dev/",
+    docsUrl: "https://docs.merge.dev/merge-gateway/get-started",
+    // Merge's docs show keys only through SDK `apiKey` params, no prefix shown.
+    keyPrefix: "",
+    // Per-provider surfaces under one host: the docs name /v1/openai,
+    // /v1/anthropic, /v1/ai-sdk. The OpenAI SDK appends /chat/completions.
+    openaiBaseUrl: "https://api-gateway.merge.dev/v1/openai",
+    // The Anthropic SDK appends /v1/messages itself. Probed 2026-08-03: this
+    // base plus that suffix answered a forced-search request with real sources.
+    anthropicBaseUrl: "https://api-gateway.merge.dev/v1/anthropic",
+    // Undocumented but probed: x-api-key (the Anthropic SDK's default)
+    // authenticated the grounded probe above.
+    anthropicAuth: "x-api-key",
+    providers: {
+      anthropic: {
+        // Native-shape skin, probed 2026-08-03: the forced web_search tool
+        // survived the gateway and returned 9 cited sources. As always,
+        // 'passthrough' still gates per credential at save time.
+        shape: "anthropic",
+        search: "passthrough",
+        slugPrefix: "anthropic",
+      },
+      openai: {
+        // Held at ungrounded-only, but for a different reason than OpenRouter.
+        // Probed 2026-08-03: a Responses route EXISTS at <openaiBaseUrl>/responses
+        // and parses a forced `web_search_preview` — but Merge's OpenAI vendor
+        // was circuit-broken the whole session (503 "model_vendor_unhealthy" on
+        // gpt-4o-mini, bare 502s on gpt-4o), so grounding was never OBSERVED,
+        // and observation is the bar. When their OpenAI path is healthy, re-run
+        //   npx tsx scripts/probe-router.ts merge --provider openai
+        // with this entry set to 'openai-responses' + 'passthrough'; if sources
+        // come back, that promotion is correct and should land with the date.
+        shape: "openai-chat",
+        search: "none",
+        slugPrefix: "openai",
+      },
+      google: {
+        // Same stance as both routers above: routable for ungrounded runs,
+        // refused for grounded ones — no router has shown us Google's native
+        // grounding intact. Probed 2026-08-03: `google/gemini-2.5-flash`
+        // resolves on the chat surface (HTTP 200), so the slug scheme holds.
+        shape: "openai-chat",
+        search: "none",
+        slugPrefix: "google",
+        slugOverrides: {
+          "gemini-pro-latest": "google/gemini-2.5-pro",
+          "gemini-flash-latest": "google/gemini-2.5-flash",
+          "gemini-flash-lite-latest": "google/gemini-2.5-flash-lite",
+        },
+      },
+    },
+  },
 };
 
 /** OpenRouter's upstream-provider names, for the pinning above. */
@@ -266,7 +328,7 @@ const OPENROUTER_UPSTREAM: Record<Provider, string> = {
 export const ROUTER_LIST: RouterInfo[] = Object.values(ROUTERS);
 
 export function isRouterId(value: string): value is RouterId {
-  return value === "concentrate" || value === "openrouter";
+  return value === "concentrate" || value === "openrouter" || value === "merge";
 }
 
 /** Narrow an untrusted router value, or null. */
