@@ -19,33 +19,37 @@ import type { Provider, ProviderKeyPublic } from "@/lib/types";
 // generic list + dropdown form. Each card is either connected (masked hint,
 // replace/remove) or an inline save form that verifies the key before storing.
 
+// Brand glyphs (transparent PNGs in /public/providers) on the cards' tinted
+// chips. OpenAI's mark is monochrome, so it carries a per-theme pair swapped by
+// the .logo-for-* rules in globals.css; the others read on both themes as-is.
 const PROVIDER_STYLE: Record<
   Provider,
-  { title: string; subtitle: string; mark: string; markClass: string }
+  { title: string; subtitle: string; chipClass: string; logo: string; darkLogo?: string }
 > = {
   anthropic: {
     title: "Claude",
     subtitle: "Anthropic API key",
-    mark: "C",
-    markClass: "bg-terracotta/10 text-terracotta-dark",
+    chipClass: "bg-terracotta/10",
+    logo: "/providers/anthropic.png",
   },
   openai: {
     title: "ChatGPT",
     subtitle: "OpenAI API key",
-    mark: "G",
-    markClass: "bg-teal/15 text-teal-dark",
+    chipClass: "bg-teal/15",
+    logo: "/providers/openai-black.png",
+    darkLogo: "/providers/openai-white.png",
   },
   google: {
     title: "Gemini",
     subtitle: "Google AI key · also powers AI Overviews",
-    mark: "✦",
-    markClass: "bg-butter-tint text-butter-ink",
+    chipClass: "bg-butter-tint",
+    logo: "/providers/google.png",
   },
   perplexity: {
     title: "Perplexity",
     subtitle: "Sonar API key · answers are always search-grounded",
-    mark: "P",
-    markClass: "bg-mint-tint text-mint-ink",
+    chipClass: "bg-mint-tint",
+    logo: "/providers/perplexity.png",
   },
 };
 
@@ -144,12 +148,19 @@ function ProviderCard({
         <div className="flex items-center gap-3">
           <span
             className={cn(
-              "grid h-11 w-11 shrink-0 place-items-center rounded font-serif text-lg font-semibold",
-              style.markClass,
+              "grid h-11 w-11 shrink-0 place-items-center rounded",
+              style.chipClass,
             )}
             aria-hidden
           >
-            {style.mark}
+            {style.darkLogo ? (
+              <>
+                <img src={style.logo} alt="" className="logo-for-light h-6 w-6 object-contain" />
+                <img src={style.darkLogo} alt="" className="logo-for-dark h-6 w-6 object-contain" />
+              </>
+            ) : (
+              <img src={style.logo} alt="" className="h-6 w-6 object-contain" />
+            )}
           </span>
           <div>
             <p className="font-serif text-lg font-semibold leading-tight text-ink">
