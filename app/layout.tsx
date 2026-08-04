@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans, DM_Mono, Ibarra_Real_Nova } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme";
+import { RB2BPixel } from "@/components/rb2b-pixel";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -73,6 +74,7 @@ export default function RootLayout({
       </head>
       <body>
         <ThemeProvider>{children}</ThemeProvider>
+        <RB2BPixel />
       </body>
     </html>
   );
