@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 import { signatureOf, opsEnabled } from "@/lib/ops";
 import { shapeOps, type OpsRow } from "@/lib/ops-report";
 import { shapeLive } from "@/lib/ops-live";
+import { maskEmail, maskUuid } from "@/lib/mask";
 import { isAdminEmail, adminEmails, isAdminUserId, adminGate } from "@/lib/admin";
 
 const HOUR = "2026-08-03T14:00:00.000Z";
@@ -300,5 +301,60 @@ describe("adminGate", () => {
   it("matches ids case-insensitively, since uuid casing varies by client", () => {
     process.env.ADMIN_USER_IDS = "AAAAAAAA-1111-2222-3333-444444444444";
     expect(isAdminUserId("aaaaaaaa-1111-2222-3333-444444444444")).toBe(true);
+  });
+});
+
+describe("masking", () => {
+  it("keeps the domain but hides the person", () => {
+    expect(maskEmail("casey@letterbrace.com")).toBe("ca•••y@letterbrace.com");
+    // Enough survives to tell two operators apart, which is the whole job of
+    // the list. These two share their first two characters, so a head-only
+    // mask collapsed them into the same row — the reason a tail is kept.
+    expect(maskEmail("mahir@letterstory.com")).toBe("ma•••r@letterstory.com");
+    expect(maskEmail("mathew@letterstory.com")).toBe("ma•••w@letterstory.com");
+    expect(maskEmail("mahir@letterstory.com")).not.toBe(maskEmail("mathew@letterstory.com"));
+  });
+
+  it("keeps both ends of a uuid so a pasted id is still recognisable", () => {
+    expect(maskUuid("295ba806-a99a-4bc1-903b-2584a2e103b0")).toBe("295ba806…03b0");
+    expect(maskUuid("295ba806-a99a-4bc1-903b-2584a2e103b0")).not.toBe(
+      maskUuid("fcf55041-33f9-475b-a40c-e9c1b72fc3e0"),
+    );
+  });
+
+  it("does not fall over on absent or malformed values", () => {
+    expect(maskEmail(null)).toBe("—");
+    expect(maskEmail("")).toBe("—");
+    expect(maskUuid(undefined)).toBe("—");
+    expect(maskEmail("not-an-email")).toBe("no•••il");
+    expect(maskEmail("a@b.com")).toBe("a•••@b.com");
+    expect(maskEmail("ab@b.com")).toBe("a•••@b.com");
+  });
+});
+
+describe("shapeLive engine rows", () => {
+  const now = new Date("2026-08-03T16:00:00.000Z").getTime();
+  const base = {
+    id: "aaaaaaaa-0000-0000-0000-000000000000",
+    provider: "anthropic", model: "claude-sonnet-4-6", error: null,
+    prompt_count: 2, completed_count: 0,
+    started_at: "2026-08-03T13:00:00.000Z", created_at: "2026-08-03T13:00:00.000Z",
+  };
+
+  it("omits an engine that has settled nothing", () => {
+    // A run still in flight created the row; "0 ok, 0 failed" answers no
+    // question and pushes real rows down the page.
+    const r = shapeLive([{ ...base, status: "running" }], now, 0, 0, 0);
+    expect(r.engines).toEqual([]);
+    expect(r.stuck).toHaveLength(1);
+  });
+
+  it("still lists an engine once something settles", () => {
+    const r = shapeLive(
+      [{ ...base, status: "running" }, { ...base, status: "completed" }],
+      now, 0, 0, 0,
+    );
+    expect(r.engines).toHaveLength(1);
+    expect(r.engines[0].rate).toBe(100);
   });
 });
