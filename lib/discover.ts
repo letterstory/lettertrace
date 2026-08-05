@@ -59,6 +59,41 @@ const GENERIC = new Set(
   ].map((s) => s.toLowerCase()),
 );
 
+// The vocabulary of SECTION HEADINGS. A how-to answer structures itself with
+// bold/`##` phrases like "Policy Enforcement Architecture", "Foundational
+// Framework", "Multi-Layer Enforcement", "Key Implementation Steps" — every word
+// abstract, none a name. The extractor treats those as candidate companies
+// because they're Title Case, and no per-word rule catches them: each individual
+// word is fine ("Policy", "Framework"), it's the ABSENCE of a distinctive token
+// that gives them away. This set powers that "all words are generic" test below.
+// Deliberately excludes anything that doubles as a real vendor's word (no
+// "cloud", "identity" beyond GENERIC, no finance terms) — one distinctive token
+// keeps a phrase, so "Ping Identity" and "Value Line" survive.
+const ABSTRACT_TERMS = new Set(
+  [
+    "policy", "policies", "enforcement", "architecture", "architectural",
+    "framework", "frameworks", "foundational", "foundation", "multi", "layer",
+    "layered", "key", "implementation", "implementing", "approach", "approaches",
+    "strategy", "strategies", "principle", "principles", "component", "mechanism",
+    "phase", "consideration", "requirement", "capability", "feature", "benefit",
+    "overview", "summary", "introduction", "conclusion", "recommendation",
+    "decision", "defined", "authority", "runtime", "shared", "core", "essential",
+    "essentials", "fundamentals", "advanced", "modern", "unified", "centralized",
+    "distributed", "automated", "continuous", "comprehensive", "holistic",
+    "robust", "scalable", "integrated", "structured", "general", "common",
+    "standard", "guidelines", "guide", "process", "workflow", "lifecycle",
+    "roadmap", "blueprint", "pillar", "section", "module", "stage", "level",
+    "aspect", "dimension", "factor", "element", "scope", "context", "objective",
+    "goal", "outcome", "plan", "design", "setup", "configuration", "deployment",
+    "integration", "orchestration", "alignment", "adoption", "transformation",
+    "optimization", "automation", "protection", "prevention", "detection",
+    "response", "remediation", "mitigation", "isolation", "segmentation",
+    "verification", "validation", "provisioning", "onboarding", "permission",
+    "permissions", "role", "roles", "attribute", "attributes", "credential",
+    "credentials", "rotation", "tracing", "telemetry", "reporting", "alerting",
+  ].map((s) => s.toLowerCase()),
+);
+
 // Single bolded words are as often a defined term or a reporting verb as a
 // company. Observed against a finance brand's answers, which bolded "Alpha",
 // "Beta", "Measures" and "Reflects" while genuinely naming Bloomberg Terminal
@@ -129,6 +164,18 @@ export function looksLikeCompanyName(value: string): boolean {
     return false;
   }
   if (words.length === 1 && COMMON_SINGLE_WORDS.has(name.toLowerCase())) return false;
+  // A phrase whose EVERY token is an abstract/generic term is a section heading
+  // or concept, not a company: "Policy Enforcement Architecture", "Foundational
+  // Framework", "Multi-Layer Enforcement". Tokens split on spaces and hyphens; a
+  // single distinctive word — which a real name almost always has ("Ping" in
+  // "Ping Identity", "Bloomberg" in "Bloomberg Terminal") — keeps the phrase.
+  const tokens = name.toLowerCase().split(/[\s-]+/).filter(Boolean);
+  if (
+    tokens.length > 0 &&
+    tokens.every((t) => ABSTRACT_TERMS.has(t) || GENERIC.has(t) || CATEGORY_TAILS.has(t))
+  ) {
+    return false;
+  }
   return true;
 }
 
