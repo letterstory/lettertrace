@@ -155,6 +155,25 @@ export function namesInAnswer(text: string): string[] {
 }
 
 /**
+ * Candidate names in one answer that AREN'T the brand, a tracked competitor, or
+ * a product line of one — the untracked companies a single answer named. This
+ * is what lets the run view say "these companies showed up and you don't track
+ * them" instead of a flat "named nobody". `tracked` should carry the brand, its
+ * aliases, and every tracked competitor's name and aliases.
+ */
+export function untrackedNamesInAnswer(text: string, tracked: string[]): string[] {
+  const known = new Set(tracked.map((t) => t.trim().toLowerCase()).filter(Boolean));
+  // A candidate that merely EXTENDS a tracked name is that company's own product
+  // line, not a rival: "Cloudflare Workers" is Cloudflare.
+  const extendsTracked = (key: string) =>
+    [...known].some((t) => key.startsWith(`${t} `) || key.startsWith(`${t}(`));
+  return namesInAnswer(text).filter((n) => {
+    const key = n.toLowerCase();
+    return !known.has(key) && !extendsTracked(key);
+  });
+}
+
+/**
  * Companies named across these answers that aren't already accounted for.
  *
  * `tracked` should include the brand, its aliases, and every tracked
@@ -170,19 +189,14 @@ export function discoverCompanies(
   tracked: string[],
   options: { limit?: number } = {},
 ): DiscoveredCompany[] {
-  const known = [...new Set(tracked.map((t) => t.trim().toLowerCase()).filter(Boolean))];
-  const knownSet = new Set(known);
-  // A candidate that merely EXTENDS a tracked name is that company's own
-  // product line, not a rival: "Cloudflare Workers" and "Cloudflare (1.1.1.1)"
-  // are Cloudflare. Offering them as competitors would be nonsense.
-  const extendsTracked = (key: string) =>
-    known.some((t) => key.startsWith(`${t} `) || key.startsWith(`${t}(`));
   const counts = new Map<string, { name: string; answers: number }>();
 
   for (const answer of answers) {
-    for (const name of namesInAnswer(answer || "")) {
+    // untrackedNamesInAnswer drops the brand, tracked competitors, and their
+    // product lines — the shared filter both this rollup and the per-answer view
+    // read from, so they can't disagree about what "untracked" means.
+    for (const name of untrackedNamesInAnswer(answer || "", tracked)) {
       const key = name.toLowerCase();
-      if (knownSet.has(key) || extendsTracked(key)) continue;
       const row = counts.get(key) ?? { name, answers: 0 };
       row.answers++;
       counts.set(key, row);

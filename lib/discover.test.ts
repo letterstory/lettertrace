@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { discoverCompanies, looksLikeCompanyName, namesInAnswer } from "@/lib/discover";
+import {
+  discoverCompanies,
+  looksLikeCompanyName,
+  namesInAnswer,
+  untrackedNamesInAnswer,
+} from "@/lib/discover";
 
 describe("looksLikeCompanyName", () => {
   it("accepts the shapes real vendor names take", () => {
@@ -144,5 +149,31 @@ describe("discoverCompanies", () => {
 
   it("returns nothing for answers that named no company", () => {
     expect(discoverCompanies(["**Why this matters**", ""], [])).toEqual([]);
+  });
+});
+
+describe("untrackedNamesInAnswer", () => {
+  const answer = "The leaders are **Galileo** and **Fiddler**, alongside **Runlayer**.";
+
+  it("returns named companies minus the brand and tracked competitors", () => {
+    // Runlayer is the brand, Fiddler is tracked → only Galileo is left.
+    const out = untrackedNamesInAnswer(answer, ["Runlayer", "Fiddler"]);
+    expect(out).toEqual(["Galileo"]);
+  });
+
+  it("drops a tracked company's own product line (extends a tracked name)", () => {
+    const text = "**Cloudflare** ships **Cloudflare Workers** for edge compute.";
+    const out = untrackedNamesInAnswer(text, ["Cloudflare"]);
+    expect(out).toEqual([]);
+  });
+
+  it("matches tracked terms case-insensitively", () => {
+    expect(untrackedNamesInAnswer(answer, ["runlayer", "GALILEO", "fiddler"])).toEqual([]);
+  });
+
+  it("is the same filter discoverCompanies aggregates over", () => {
+    // Two answers each naming Galileo once → discoverCompanies counts 2 answers.
+    const rollup = discoverCompanies([answer, answer], ["Runlayer", "Fiddler"]);
+    expect(rollup).toEqual([{ name: "Galileo", answers: 2 }]);
   });
 });
