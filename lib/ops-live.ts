@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { signatureOf } from "@/lib/ops";
+import { sweepAbandonedRuns } from "@/lib/engine";
 
 /**
  * The half of the operations picture that does not need telemetry.
@@ -165,6 +166,13 @@ export async function liveHealth(hours = 24): Promise<LiveHealth> {
   const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   try {
     const admin = createServiceClient();
+    // Settle provably-dead runs before reading. The cron tick does the same,
+    // but it fires once a day — an operator looking at this page right now
+    // should see a dead run as the failure it is, not as "running" for up to
+    // 24 hours. Guarded and idempotent, so racing the cron (or another admin
+    // tab) is harmless. Failure to sweep must not cost the page: the numbers
+    // are the product here, the sweep is a courtesy.
+    await sweepAbandonedRuns(admin).catch(() => {});
     const [runsRes, signupRes, usersRes, apiErrRes] = await Promise.all([
       admin
         .from("runs")

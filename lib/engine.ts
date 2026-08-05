@@ -29,8 +29,17 @@ export interface RunContext {
   actorLabel?: string | null;
 }
 
-// Run at most this many queries at once to stay under provider rate limits.
-const CONCURRENCY = 4;
+// Run at most this many queries at once. Low enough to stay under provider
+// rate limits, high enough that a full-size run finishes inside the 300s
+// invocation ceiling: 60 answers with web search on a slow engine run ~20s
+// each, and at 4-wide that exact workload was killed at the cap three times,
+// seconds short of done. 8-wide it clears the ceiling with half left over.
+const CONCURRENCY = 8;
+
+// Flush the progress counter every few answers rather than every answer — the
+// row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
+// wider pool doesn't make completed_count staler for whoever reads it mid-run.
+const PROGRESS_EVERY = 4;
 
 // The brand's registrable web host, e.g. "notion.so" from a messy domain entry.
 export function hostOf(domain: string | null): string {
@@ -157,6 +166,32 @@ export async function settleAbandonedRun(
  *  endpoint and the background catch can't describe it three different ways. */
 export const INTERRUPTED_RUN_ERROR =
   "The run was interrupted before it finished — the server stopped executing it. Answers stored before that point were kept. Run it again to collect the rest.";
+
+/**
+ * Settle every run that nothing is executing any more.
+ *
+ * A run row is written "running" up front and settled by the code that executes
+ * it — so if that process dies mid-flight, nothing ever settles it. This is the
+ * batch form of settleAbandonedRun, shared by the cron tick and the admin page:
+ * cron because it needs no one watching, the admin page because an operator
+ * looking at deployment health shouldn't wait a day for the next tick to be
+ * shown a failure as a failure. Returns what it settled so callers can report
+ * it rather than have it inferred from a client complaint.
+ */
+export async function sweepAbandonedRuns(supabase: SupabaseClient): Promise<string[]> {
+  const cutoff = new Date(Date.now() - ABANDONED_RUN_MS).toISOString();
+  const { data } = await supabase
+    .from("runs")
+    .select("id")
+    .eq("status", "running")
+    .lt("started_at", cutoff);
+
+  const settled: string[] = [];
+  for (const row of (data ?? []) as { id: string }[]) {
+    if (await settleAbandonedRun(supabase, row.id, INTERRUPTED_RUN_ERROR)) settled.push(row.id);
+  }
+  return settled;
+}
 
 export interface ExecuteRunParams {
   supabase: SupabaseClient;
@@ -495,7 +530,7 @@ export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams)
     } finally {
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
-      if (processed % CONCURRENCY === 0 || processed === jobs.length) {
+      if (processed % PROGRESS_EVERY === 0 || processed === jobs.length) {
         await supabase.from("runs").update({ completed_count: succeeded }).eq("id", runId);
       }
     }
