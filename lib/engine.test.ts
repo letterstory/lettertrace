@@ -87,9 +87,10 @@ describe("isAbandoned", () => {
   });
 
   // The threshold has to sit above the platform ceiling every run route caps
-  // at (maxDuration = 300s), or the sweeper starts killing live runs.
+  // at (maxDuration = 800s), or the sweeper starts killing live runs that are
+  // simply using their full budget.
   it("is comfortably above the longest an invocation can last", () => {
-    expect(ABANDONED_RUN_MS).toBeGreaterThan(300_000);
+    expect(ABANDONED_RUN_MS).toBeGreaterThan(800_000);
   });
 });
 

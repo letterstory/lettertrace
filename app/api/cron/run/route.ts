@@ -5,7 +5,7 @@ import { executeRun, sweepAbandonedRuns } from "@/lib/engine";
 import { resolveRunKey } from "@/lib/trial";
 import type { Project } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 24 * 60 * 60 * 1000;

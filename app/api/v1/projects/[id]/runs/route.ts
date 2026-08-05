@@ -6,7 +6,7 @@ import { isProvider, PROVIDERS } from "@/lib/models";
 import { humanError } from "@/lib/llm";
 import type { Provider } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 // GET /api/v1/projects/:id/runs — recent runs for a project (?limit=20).
