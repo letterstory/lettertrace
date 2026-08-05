@@ -4,8 +4,22 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { modelLabel } from "@/lib/models";
 import { pct, timeAgo } from "@/lib/utils";
-import { computeEntityStats, SENTIMENT_COLORS } from "@/lib/metrics";
-import type { Mention, Prompt, Response, Run, RunStatus, Sentiment, Source } from "@/lib/types";
+import {
+  computeEntityStats,
+  computePromptEntityStats,
+  computeCompetitorCitations,
+  SENTIMENT_COLORS,
+} from "@/lib/metrics";
+import type {
+  Competitor,
+  Mention,
+  Prompt,
+  Response,
+  Run,
+  RunStatus,
+  Sentiment,
+  Source,
+} from "@/lib/types";
 import {
   Card,
   CardBody,
@@ -88,6 +102,12 @@ export default async function RunDetailPage({ params }: { params: { id: string }
   const prompts = (promptRows ?? []) as Prompt[];
   const promptText = new Map(prompts.map((p) => [p.id, p.text]));
 
+  const { data: competitorRows } = await supabase
+    .from("competitors")
+    .select("id, name, domain")
+    .eq("project_id", project.id);
+  const competitors = (competitorRows ?? []) as Pick<Competitor, "id" | "name" | "domain">[];
+
   const mentionsByResponse = new Map<string, Mention[]>();
   for (const m of mentions) {
     const list = mentionsByResponse.get(m.response_id) ?? [];
@@ -105,6 +125,70 @@ export default async function RunDetailPage({ params }: { params: { id: string }
   const stats = computeEntityStats(mentions, responses.length, project.brand_name);
   const brand = stats.find((s) => s.type === "brand");
   const topCompetitor = stats.find((s) => s.type === "competitor");
+
+  // Competitors per QUESTION, aggregated across replicates — the view the
+  // per-answer list below can't give: for each question, who gets named (and
+  // whose site gets cited), and where the brand is missing entirely. The two
+  // signals are separate events: named in the prose vs. cited as a source.
+  const citedRateByPrompt = new Map<string, Map<string, number>>();
+  for (const pc of computeCompetitorCitations(sources, competitors, responses, prompts)) {
+    citedRateByPrompt.set(
+      pc.promptId,
+      new Map(pc.competitors.map((c) => [c.name.toLowerCase(), c.citedRate])),
+    );
+  }
+  const competitorName = new Map(competitors.map((c) => [c.name.toLowerCase(), c.name]));
+  const competitionByPrompt = computePromptEntityStats(
+    mentions,
+    responses,
+    prompts,
+    project.brand_name,
+  )
+    .map((ps) => {
+      const cited = citedRateByPrompt.get(ps.promptId);
+      const brandRow = ps.entities.find((e) => e.type === "brand");
+      const rivals = ps.entities
+        .filter((e) => e.type === "competitor")
+        .map((e) => ({
+          name: e.name,
+          mentionRate: e.mentionRate,
+          citedRate: cited?.get(e.name.toLowerCase()) ?? 0,
+        }));
+      // Rivals cited but never named must still show — being read is a real signal.
+      if (cited) {
+        for (const [nameLower, citedRate] of cited) {
+          if (!rivals.some((r) => r.name.toLowerCase() === nameLower)) {
+            rivals.push({
+              name: competitorName.get(nameLower) ?? nameLower,
+              mentionRate: 0,
+              citedRate,
+            });
+          }
+        }
+      }
+      rivals.sort(
+        (a, b) => Math.max(b.mentionRate, b.citedRate) - Math.max(a.mentionRate, a.citedRate),
+      );
+      return {
+        promptId: ps.promptId,
+        promptText: ps.promptText,
+        totalResponses: ps.totalResponses,
+        brandMentionRate: brandRow?.mentionRate ?? 0,
+        rivals,
+        // The brand is absent while a rival shows up strongly — the ground to build.
+        gap:
+          (brandRow?.mentionRate ?? 0) === 0 &&
+          rivals.some((r) => Math.max(r.mentionRate, r.citedRate) >= 0.3),
+      };
+    })
+    .filter((p) => p.rivals.length > 0)
+    // Gaps first, then the questions rivals win hardest.
+    .sort((a, b) => {
+      if (a.gap !== b.gap) return a.gap ? -1 : 1;
+      const at = Math.max(0, ...a.rivals.map((r) => Math.max(r.mentionRate, r.citedRate)));
+      const bt = Math.max(0, ...b.rivals.map((r) => Math.max(r.mentionRate, r.citedRate)));
+      return bt - at;
+    });
 
   // Was the brand's own site cited? A leading indicator independent of mentions.
   const ownedResponseIds = new Set(sources.filter((s) => s.is_owned).map((s) => s.response_id));
@@ -174,6 +258,53 @@ export default async function RunDetailPage({ params }: { params: { id: string }
               pulled across {responses.length} answers.
             </p>
           )}
+        </div>
+      )}
+
+      {competitionByPrompt.length > 0 && (
+        <div className="space-y-3">
+          <SectionHeading
+            title="Competitors by question"
+            description="Across all replicates: who gets named — and whose site gets cited — for each question. “You’re missing” flags where a competitor shows up and your brand doesn’t."
+          />
+          <div className="space-y-3">
+            {competitionByPrompt.map((p) => (
+              <Card key={p.promptId}>
+                <CardBody className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-serif text-base text-ink">{p.promptText ?? "(prompt removed)"}</p>
+                    {p.gap && <Badge tone="terracotta">You&apos;re missing</Badge>}
+                  </div>
+                  <p className="text-xs text-ink-faint">
+                    You:{" "}
+                    <span className={p.brandMentionRate > 0 ? "text-terracotta-dark" : "text-ink"}>
+                      named {pct(p.brandMentionRate)}
+                    </span>{" "}
+                    of {p.totalResponses} answers
+                  </p>
+                  <ul className="space-y-1.5">
+                    {p.rivals.map((r) => (
+                      <li key={r.name} className="flex items-center gap-3 text-sm">
+                        <span className="w-40 shrink-0 truncate font-medium text-ink">{r.name}</span>
+                        <div className="h-1.5 flex-1 overflow-hidden rounded bg-paper-shade">
+                          <div
+                            className="h-full rounded bg-teal"
+                            style={{ width: `${Math.round(r.mentionRate * 100)}%` }}
+                          />
+                        </div>
+                        <span className="w-40 shrink-0 text-right text-xs tabular-nums text-ink-faint">
+                          named {pct(r.mentionRate)}
+                          {r.citedRate > 0 && (
+                            <span className="text-teal-dark"> · cited {pct(r.citedRate)}</span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
 

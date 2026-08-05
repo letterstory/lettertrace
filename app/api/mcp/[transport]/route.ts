@@ -178,7 +178,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "get_share_of_voice_report",
-      "Share-of-voice report for a monitoring run: how often the brand and each competitor are mentioned in AI assistant answers, with share of voice, prominence, sentiment, and recommendation rate. Pass run_id, or just project_id for the latest completed run.",
+      "Share-of-voice report for a monitoring run: how often the brand and each competitor are mentioned in AI assistant answers, with share of voice, prominence, sentiment, and recommendation rate. Also breaks this down per prompt (promptEntities: who gets named for each question) and reports which competitor domains the answers cited per prompt (competitorCitations) — use these to find questions rivals win that you don't. Pass run_id, or just project_id for the latest completed run.",
       {
         run_id: z
           .string()

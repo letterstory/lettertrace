@@ -18,12 +18,16 @@ import {
   computeTopicStats,
   measurementVerdict,
   computePageStats,
+  computePromptEntityStats,
+  computeCompetitorCitations,
   pageKey,
   type CitationStat,
   type EntityStat,
   type MeasurementQuality,
   type MeasurementVerdict,
   type PageStat,
+  type PromptEntityStats,
+  type PromptCompetitorCitations,
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
@@ -852,6 +856,15 @@ export interface RunReport {
   /** Per-topic brand visibility. Content is usually planned by topic, so this is the
    *  join between "we published about X" and "are we surfacing for X". */
   topics: (TopicStat & { topic: string | null })[];
+  /** Per-prompt entity breakdown — who gets NAMED for each question, brand and
+   *  competitors, scoped to that question's answers. The run's entities[] says
+   *  who owns the category; this says which specific questions competitors win
+   *  and we don't — the build-for-it queue. */
+  promptEntities: PromptEntityStats[];
+  /** Per-prompt competitor CITATIONS — whose domain the answers actually cited
+   *  for each question. The other half of "showing up": named vs. read. Only
+   *  competitors with a resolvable domain appear. */
+  competitorCitations: PromptCompetitorCitations[];
 }
 
 /** The most recent completed run for a project, if any. */
@@ -903,21 +916,39 @@ export async function getRunReport(
       (f, t) => supabase.from("responses").select("id, topic_id, prompt_id").eq("run_id", runId).range(f, t),
     ),
     topics: supabase.from("topics").select("id, name").eq("project_id", run.project_id),
-    promptTargets: selectAll<{ id: string; target_url: string | null }>((f, t) =>
-      supabase.from("prompts").select("id, target_url").eq("project_id", run.project_id).range(f, t),
+    prompts: selectAll<{ id: string; target_url: string | null; text: string | null }>((f, t) =>
+      supabase
+        .from("prompts")
+        .select("id, target_url, text")
+        .eq("project_id", run.project_id)
+        .range(f, t),
     ),
-    competitors: supabase
-      .from("competitors")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", run.project_id),
+    // Loaded as rows (not just a head count) so their domains can attribute
+    // cited sources; competitorCount below is derived from the same list.
+    competitors: selectAll<{ id: string; name: string; domain: string | null }>((f, t) =>
+      supabase
+        .from("competitors")
+        .select("id, name, domain")
+        .eq("project_id", run.project_id)
+        .range(f, t),
+    ),
   });
   const { count } = results.responseCount;
   const mentionRows = results.mentions;
   const sourceRows = results.sources;
   const responseTopicRows = results.responseTopics;
   const { data: topicRows } = results.topics;
-  const promptTargetRows = results.promptTargets;
-  const { count: competitorCount } = results.competitors;
+  const promptRows = (results.prompts ?? []) as {
+    id: string;
+    target_url: string | null;
+    text: string | null;
+  }[];
+  const competitorRows = (results.competitors ?? []) as {
+    id: string;
+    name: string;
+    domain: string | null;
+  }[];
+  const competitorCount = competitorRows.length;
 
   const mentions = (mentionRows ?? []) as Mention[];
   const sources = (sourceRows ?? []) as Pick<Source, "response_id" | "url" | "is_owned">[];
@@ -949,9 +980,7 @@ export async function getRunReport(
   // (summary/entities/citations keep the full run — only naming quality has a
   // reduced basis, and quality.totalResponses reports that basis.)
   const pagePromptIds = new Set(
-    ((promptTargetRows ?? []) as { id: string; target_url: string | null }[])
-      .filter((p) => p.target_url)
-      .map((p) => p.id),
+    promptRows.filter((p) => p.target_url).map((p) => p.id),
   );
   const pageResponseIds = new Set(
     responseRows.filter((r) => r.prompt_id && pagePromptIds.has(r.prompt_id)).map((r) => r.id),
@@ -975,15 +1004,23 @@ export async function getRunReport(
       totalResponses,
       informativeRate: quality.informativeRate,
       brandMentioned: summary.brandResponsesMentioned > 0,
-      competitorsTracked: competitorCount ?? 0,
+      competitorsTracked: competitorCount,
       informativeBasis: quality.totalResponses,
     }),
-    pages: computePageStats(
-      (promptTargetRows ?? []) as { id: string; target_url: string | null }[],
-      responseRows,
-      sources,
-    ),
+    pages: computePageStats(promptRows, responseRows, sources),
     topics: topicStats,
+    promptEntities: computePromptEntityStats(
+      mentions,
+      responseRows,
+      promptRows,
+      project.brand_name,
+    ),
+    competitorCitations: computeCompetitorCitations(
+      sources,
+      competitorRows,
+      responseRows,
+      promptRows,
+    ),
   };
 }
 
