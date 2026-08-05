@@ -28,7 +28,9 @@ import {
   StatCard,
   EmptyState,
 } from "@/components/ui";
+import { discoverCompanies, untrackedNamesInAnswer } from "@/lib/discover";
 import { MarkResultsSeen } from "./mark-seen";
+import { TrackUntrackedCompanies } from "./track-companies";
 
 export const dynamic = "force-dynamic";
 
@@ -104,9 +106,27 @@ export default async function RunDetailPage({ params }: { params: { id: string }
 
   const { data: competitorRows } = await supabase
     .from("competitors")
-    .select("id, name, domain")
+    .select("id, name, domain, aliases")
     .eq("project_id", project.id);
-  const competitors = (competitorRows ?? []) as Pick<Competitor, "id" | "name" | "domain">[];
+  const competitors = (competitorRows ?? []) as Pick<
+    Competitor,
+    "id" | "name" | "domain" | "aliases"
+  >[];
+
+  // Everything already accounted for — the brand, its aliases, and every tracked
+  // competitor's name and aliases. discoverCompanies / untrackedNamesInAnswer
+  // subtract this, so what's left is genuinely untracked.
+  const trackedTerms = [
+    project.brand_name,
+    ...(project.brand_aliases ?? []),
+    ...competitors.flatMap((c) => [c.name, ...(c.aliases ?? [])]),
+  ];
+  // Companies THIS run named that aren't tracked, most-named first (candidates).
+  const untrackedInRun = discoverCompanies(
+    responses.map((r) => r.response_text),
+    trackedTerms,
+    { limit: 12 },
+  );
 
   const mentionsByResponse = new Map<string, Mention[]>();
   for (const m of mentions) {
@@ -261,6 +281,10 @@ export default async function RunDetailPage({ params }: { params: { id: string }
         </div>
       )}
 
+      {/* The field the tracked numbers can't see — companies the answers named
+          that aren't on the competitor list. One click adds them. */}
+      <TrackUntrackedCompanies companies={untrackedInRun} />
+
       {competitionByPrompt.length > 0 && (
         <div className="space-y-3">
           <SectionHeading
@@ -320,6 +344,9 @@ export default async function RunDetailPage({ params }: { params: { id: string }
             const question = promptText.get(response.prompt_id) ?? "(prompt removed)";
             const rMentions = mentionsByResponse.get(response.id) ?? [];
             const rSources = sourcesByResponse.get(response.id) ?? [];
+            // Companies this answer named that aren't tracked — so an answer full
+            // of untracked rivals reads as that, not as "named nobody".
+            const rUntracked = untrackedNamesInAnswer(response.response_text, trackedTerms);
             return (
               <Card key={response.id}>
                 <CardBody className="space-y-4">
@@ -339,12 +366,8 @@ export default async function RunDetailPage({ params }: { params: { id: string }
                     </div>
                   </div>
 
-                  <div>
-                    {rMentions.length === 0 ? (
-                      <p className="text-sm text-ink-faint">
-                        No brand or competitor mentioned.
-                      </p>
-                    ) : (
+                  <div className="space-y-2">
+                    {rMentions.length > 0 && (
                       <div className="flex flex-wrap items-center gap-2">
                         {rMentions.map((m) => (
                           <div key={m.id} className="flex items-center gap-1.5">
@@ -357,6 +380,16 @@ export default async function RunDetailPage({ params }: { params: { id: string }
                           </div>
                         ))}
                       </div>
+                    )}
+                    {rUntracked.length > 0 ? (
+                      <p className="text-xs text-ink-faint">
+                        {rMentions.length > 0 ? "Also named" : "Named, but not tracked"}:{" "}
+                        <span className="text-ink-soft">{rUntracked.join(", ")}</span>
+                      </p>
+                    ) : (
+                      rMentions.length === 0 && (
+                        <p className="text-sm text-ink-faint">No companies named.</p>
+                      )
                     )}
                   </div>
 
