@@ -58,6 +58,31 @@ describe("looksLikeCompanyName", () => {
     expect(looksLikeCompanyName("Value Line")).toBe(true);
   });
 
+  // The section-heading class: every word abstract, no distinctive token. These
+  // are the exact false positives that showed up as "trackable competitors".
+  it("rejects all-abstract section headings, not just category-tail ones", () => {
+    for (const junk of [
+      "Policy Enforcement Architecture",
+      "Foundational Framework",
+      "Multi-Layer Enforcement",
+      "Key Implementation Steps",
+      "Continuous Monitoring",
+      "Runtime Governance",
+      "Shared Authorization",
+      "Defined Authority",
+    ]) {
+      expect(looksLikeCompanyName(junk), junk).toBe(false);
+    }
+  });
+
+  it("keeps a Title-Case name that carries one distinctive (non-abstract) token", () => {
+    // One real word is enough — the rule must not swallow real vendors whose
+    // other word is generic.
+    for (const name of ["Ping Identity", "Palo Alto Networks", "Bloomberg Terminal", "Value Line"]) {
+      expect(looksLikeCompanyName(name), name).toBe(true);
+    }
+  });
+
   it("rejects bare category acronyms that name no company", () => {
     for (const term of ["API", "MCP", "CDN", "IAM", "POSIX", "Kubernetes"]) {
       expect(looksLikeCompanyName(term), term).toBe(false);
