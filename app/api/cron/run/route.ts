@@ -1,13 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  executeRun,
-  settleAbandonedRun,
-  ABANDONED_RUN_MS,
-  INTERRUPTED_RUN_ERROR,
-} from "@/lib/engine";
+import { executeRun, sweepAbandonedRuns } from "@/lib/engine";
 import { resolveRunKey } from "@/lib/trial";
 import type { Project } from "@/lib/types";
 
@@ -31,36 +25,6 @@ interface ProjectResult {
   reason?: string;
   runId?: string;
   totalResponses?: number;
-}
-
-/**
- * Settle runs that nothing is executing any more.
- *
- * A run row is written "running" up front and settled by the code that executes
- * it — so if that process dies mid-flight, nothing ever settles it. Background
- * runs made this reachable in normal operation: they outlive the response but
- * not the invocation, so a portfolio large enough to exceed maxDuration leaves
- * the row "running" permanently, and GET /v1/runs/:id/status reports that to a
- * poller forever.
- *
- * This is the only place that can fix a row whose executor is already gone, so
- * it runs on every tick regardless of whether any project is due. Returns what
- * it settled so an operator can see it in the response rather than inferring it
- * from a client complaint.
- */
-async function sweepAbandonedRuns(supabase: SupabaseClient): Promise<string[]> {
-  const cutoff = new Date(Date.now() - ABANDONED_RUN_MS).toISOString();
-  const { data } = await supabase
-    .from("runs")
-    .select("id")
-    .eq("status", "running")
-    .lt("started_at", cutoff);
-
-  const settled: string[] = [];
-  for (const row of (data ?? []) as { id: string }[]) {
-    if (await settleAbandonedRun(supabase, row.id, INTERRUPTED_RUN_ERROR)) settled.push(row.id);
-  }
-  return settled;
 }
 
 // Scheduler entrypoint. Runs every due project. Supports POST (manual curl)

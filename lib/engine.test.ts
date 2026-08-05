@@ -4,6 +4,7 @@ import {
   isOwnedDomain,
   isAbandoned,
   settleAbandonedRun,
+  sweepAbandonedRuns,
   ABANDONED_RUN_MS,
 } from "@/lib/engine";
 
@@ -141,5 +142,67 @@ describe("settleAbandonedRun", () => {
     const { db, updated } = fakeDb([{ id: "run-1" }]);
     await settleAbandonedRun(db, "run-1", "interrupted");
     expect(Object.keys(updated() ?? {})).not.toContain("completed_count");
+  });
+});
+
+describe("sweepAbandonedRuns", () => {
+  /** Serves one read of stale running rows; records which of them the
+   *  per-row settle actually won (rows outside `settleable` lost the race). */
+  function fakeDb(staleRows: { id: string }[], settleable = staleRows) {
+    const cutoffs: string[] = [];
+    const db = {
+      from: () => ({
+        select: () => {
+          const chain = {
+            eq: () => chain,
+            lt: (_col: string, val: string) => {
+              cutoffs.push(val);
+              return Promise.resolve({ data: staleRows });
+            },
+          };
+          return chain;
+        },
+        update: () => {
+          let id: unknown;
+          const chain = {
+            eq: (col: string, val: unknown) => {
+              if (col === "id") id = val;
+              return chain;
+            },
+            select: async () => ({
+              data: settleable.some((r) => r.id === id) ? [{ id }] : [],
+            }),
+          };
+          return chain;
+        },
+      }),
+    };
+    return { db: db as never, cutoffs };
+  }
+
+  it("settles every stale row and reports which", async () => {
+    const { db } = fakeDb([{ id: "run-1" }, { id: "run-2" }]);
+    expect(await sweepAbandonedRuns(db)).toEqual(["run-1", "run-2"]);
+  });
+
+  it("asks only for rows older than the abandonment threshold", async () => {
+    const { db, cutoffs } = fakeDb([]);
+    const before = Date.now();
+    await sweepAbandonedRuns(db);
+    const cutoff = new Date(cutoffs[0]).getTime();
+    expect(cutoff).toBeGreaterThanOrEqual(before - ABANDONED_RUN_MS - 1000);
+    expect(cutoff).toBeLessThanOrEqual(Date.now() - ABANDONED_RUN_MS);
+  });
+
+  it("does not report a row that settled itself between read and write", async () => {
+    // The guard inside settleAbandonedRun is what actually protects the row;
+    // the sweep must simply not count the ones the guard turned away.
+    const { db } = fakeDb([{ id: "run-1" }, { id: "run-2" }], [{ id: "run-2" }]);
+    expect(await sweepAbandonedRuns(db)).toEqual(["run-2"]);
+  });
+
+  it("settles nothing on a quiet table", async () => {
+    const { db } = fakeDb([]);
+    expect(await sweepAbandonedRuns(db)).toEqual([]);
   });
 });
