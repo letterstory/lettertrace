@@ -5,6 +5,7 @@ import { resolveRunKey, engineKeyMessage, nextRunMessage } from "@/lib/trial";
 import { PROVIDERS, modelLabel } from "@/lib/models";
 import { ROUTERS } from "@/lib/routers";
 import { timeAgo } from "@/lib/utils";
+import { isAbandoned, settleAbandonedRun, INTERRUPTED_RUN_ERROR } from "@/lib/engine";
 import type { Run, RunStatus } from "@/lib/types";
 import {
   Button,
@@ -70,6 +71,24 @@ export default async function RunsPage() {
     .eq("project_id", project.id)
     .order("created_at", { ascending: false });
   const runs = (runRows ?? []) as Run[];
+
+  // Settle provably-dead runs on the way past — the same self-heal GET
+  // /v1/runs/:id/status does. A run row is written "running" up front and settled
+  // by whatever executes it; if that process dies (a 60-answer run can outlive the
+  // 300s function cap), nothing settles it until the daily cron. This list is the
+  // first place an operator looks, so it shouldn't show a phantom "running" for a
+  // run nothing is executing. The write is guarded + idempotent — safe against the
+  // cron and concurrent viewers.
+  await Promise.all(
+    runs.map(async (run) => {
+      if (!isAbandoned(run)) return;
+      if (await settleAbandonedRun(supabase, run.id, INTERRUPTED_RUN_ERROR)) {
+        run.status = "failed";
+        run.error = INTERRUPTED_RUN_ERROR;
+        run.finished_at = new Date().toISOString();
+      }
+    }),
+  );
 
   return (
     <div className="space-y-8">

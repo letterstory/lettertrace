@@ -29,6 +29,7 @@ import {
   EmptyState,
 } from "@/components/ui";
 import { discoverCompanies, untrackedNamesInAnswer } from "@/lib/discover";
+import { isAbandoned, settleAbandonedRun, INTERRUPTED_RUN_ERROR } from "@/lib/engine";
 import { MarkResultsSeen } from "./mark-seen";
 import { TrackUntrackedCompanies } from "./track-companies";
 
@@ -77,6 +78,15 @@ export default async function RunDetailPage({ params }: { params: { id: string }
     .maybeSingle();
   if (!runRow) notFound();
   const run = runRow as Run;
+
+  // Self-heal a provably-dead run on read, like the runs list and the status
+  // endpoint — so opening a stuck run shows "failed" with its partial answers,
+  // not a phantom "running".
+  if (isAbandoned(run) && (await settleAbandonedRun(supabase, run.id, INTERRUPTED_RUN_ERROR))) {
+    run.status = "failed";
+    run.error = INTERRUPTED_RUN_ERROR;
+    run.finished_at = new Date().toISOString();
+  }
 
   const { data: responseRows } = await supabase
     .from("responses")
