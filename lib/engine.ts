@@ -97,12 +97,12 @@ export interface RunResult {
  * How long a run may sit in "running" before it is treated as abandoned.
  *
  * A run cannot outlive the invocation executing it, and every route that starts
- * one caps at maxDuration = 300s. So anything still "running" well past that is
- * not slow, it is gone: the process was killed mid-flight and the code that
- * settles the row never got to run. Three times the ceiling leaves room for a
- * platform that is more generous than ours without ever racing a live run.
+ * one caps at maxDuration = 800s (≈13.3m). So anything still "running" well past
+ * that is not slow, it is gone: the process was killed mid-flight and the code
+ * that settles the row never got to run. The threshold sits comfortably above
+ * the ceiling so it never races a live run that is simply using its full budget.
  */
-export const ABANDONED_RUN_MS = 15 * 60 * 1000;
+export const ABANDONED_RUN_MS = 20 * 60 * 1000;
 
 /** True when a "running" row has outlived any invocation that could still be
  *  working on it. Exported for tests and for callers that only want to report. */

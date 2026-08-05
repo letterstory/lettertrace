@@ -13,7 +13,7 @@ import {
   engineKeyMessage,
 } from "@/lib/trial";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 // POST /api/runs, execute a monitoring run now for the signed-in user's project.
