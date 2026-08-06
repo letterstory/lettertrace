@@ -551,8 +551,6 @@ describe("GET /api/v1/runs/:id", () => {
       verdict: "healthy",
       pages: [],
       topics: [],
-      promptEntities: [],
-      competitorCitations: [],
     });
     const res = await getReportRoute(req("/api/v1/runs/r1"), { params: { id: "r1" } });
     expect(res.status).toBe(200);
