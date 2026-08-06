@@ -314,9 +314,15 @@ describe("getRunReport", () => {
         ],
       }),
       prompts: () => ({
-        data: [{ id: "prompt-1", target_url: "https://blog.example.com/posts/guide" }],
+        data: [{ id: "prompt-1", target_url: "https://blog.example.com/posts/guide", text: "guide?" }],
       }),
-      competitors: () => ({ count: 3 }),
+      competitors: () => ({
+        data: [
+          { id: "comp-1", name: "Rival", domain: "rival.com" },
+          { id: "comp-2", name: "Foil", domain: "foil.com" },
+          { id: "comp-3", name: "Nemesis", domain: "nemesis.com" },
+        ],
+      }),
     });
 
     const report = await getRunReport(db as never, "user-1", "run-1");
