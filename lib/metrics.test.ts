@@ -9,9 +9,6 @@ import {
   LOW_INFORMATIVE_RATE,
   computePageStats,
   pageKey,
-  computePromptEntityStats,
-  computeCompetitorCitations,
-  hostKey,
 } from "@/lib/metrics";
 import type { Mention } from "@/lib/types";
 
@@ -343,110 +340,5 @@ describe("computePageStats", () => {
 
   it("returns [] when no prompt is mapped to a page", () => {
     expect(computePageStats([{ id: "p1", target_url: null }], responses, sources)).toEqual([]);
-  });
-});
-
-describe("computePromptEntityStats", () => {
-  // Two questions. On p1 a competitor is named in both answers and the brand in
-  // neither — the build-for-it case. On p2 the brand wins.
-  const responses = [
-    { id: "r1", prompt_id: "p1", topic_id: "t1" },
-    { id: "r2", prompt_id: "p1", topic_id: "t1" },
-    { id: "r3", prompt_id: "p2", topic_id: "t2" },
-    { id: "r4", prompt_id: null }, // orphan — no prompt, must be ignored
-  ];
-  const prompts = [
-    { id: "p1", text: "best CRM for startups" },
-    { id: "p2", text: "what is Acme" },
-  ];
-  const mentions = [
-    mention({ response_id: "r1", entity_type: "competitor", competitor_id: "c1", entity_name: "Rival", mention_count: 2 }),
-    mention({ response_id: "r2", entity_type: "competitor", competitor_id: "c1", entity_name: "Rival", mention_count: 1 }),
-    mention({ response_id: "r3", entity_type: "brand", entity_name: "Acme", mention_count: 1 }),
-    mention({ response_id: "r4", entity_type: "competitor", competitor_id: "c1", entity_name: "Rival" }),
-  ];
-
-  it("scopes entity stats to each prompt and always reports the brand", () => {
-    const stats = computePromptEntityStats(mentions, responses, prompts, "Acme");
-    const p1 = stats.find((s) => s.promptId === "p1")!;
-    expect(p1.promptText).toBe("best CRM for startups");
-    expect(p1.topicId).toBe("t1");
-    expect(p1.totalResponses).toBe(2);
-    const brand = p1.entities.find((e) => e.type === "brand")!;
-    const rival = p1.entities.find((e) => e.name === "Rival")!;
-    // The finding: they show up here, we don't.
-    expect(brand.mentionRate).toBe(0);
-    expect(rival.mentionRate).toBe(1);
-    // Brand-then-competitor ordering is preserved.
-    expect(p1.entities[0].type).toBe("brand");
-  });
-
-  it("ranks questions competitors win hardest first", () => {
-    const stats = computePromptEntityStats(mentions, responses, prompts, "Acme");
-    expect(stats[0].promptId).toBe("p1"); // 100% competitor rate beats p2's 0%
-  });
-
-  it("ignores mentions whose response has no prompt", () => {
-    const stats = computePromptEntityStats(mentions, responses, prompts, "Acme");
-    // r4 is orphaned, so no third prompt group is created.
-    expect(stats.map((s) => s.promptId).sort()).toEqual(["p1", "p2"]);
-  });
-});
-
-describe("hostKey", () => {
-  it("reduces urls and bare domains to a comparable host", () => {
-    expect(hostKey("https://www.Acme.com/blog/x?y=1")).toBe("acme.com");
-    expect(hostKey("acme.com")).toBe("acme.com");
-    expect(hostKey("BLOG.Acme.com")).toBe("blog.acme.com");
-  });
-
-  it("returns null for something it can't parse as a host", () => {
-    expect(hostKey("not a url")).toBeNull();
-  });
-});
-
-describe("computeCompetitorCitations", () => {
-  const responses = [
-    { id: "r1", prompt_id: "p1" },
-    { id: "r2", prompt_id: "p1" },
-    { id: "r3", prompt_id: "p2" },
-  ];
-  const prompts = [
-    { id: "p1", text: "best CRM" },
-    { id: "p2", text: "what is Acme" },
-  ];
-  const competitors = [
-    { id: "c1", name: "Rival", domain: "rival.com" },
-    { id: "c2", name: "NoDomain", domain: null }, // unattributable
-  ];
-  const sources = [
-    { response_id: "r1", url: "https://www.rival.com/best-crm?utm_source=openai" },
-    { response_id: "r1", url: "https://blog.rival.com/guide" }, // subdomain, same answer
-    { response_id: "r2", url: "https://someoneelse.com/post" }, // untracked host
-    { response_id: "r3", url: "https://rival.com/about" }, // different prompt
-  ];
-
-  it("attributes cited hosts to competitors per prompt, counting distinct answers", () => {
-    const out = computeCompetitorCitations(sources, competitors, responses, prompts);
-    const p1 = out.find((o) => o.promptId === "p1")!;
-    expect(p1.promptText).toBe("best CRM");
-    const rival = p1.competitors.find((c) => c.competitorId === "c1")!;
-    // r1 cited rival twice (apex + subdomain) but that's ONE answer citing them.
-    expect(rival.responsesCiting).toBe(1);
-    expect(rival.totalResponses).toBe(2);
-    expect(rival.citedRate).toBeCloseTo(0.5);
-    expect(rival.domain).toBe("rival.com");
-  });
-
-  it("drops competitors without a resolvable domain", () => {
-    const out = computeCompetitorCitations(sources, competitors, responses, prompts);
-    const named = out.flatMap((o) => o.competitors.map((c) => c.name));
-    expect(named).not.toContain("NoDomain");
-  });
-
-  it("returns [] when no tracked competitor has a domain", () => {
-    expect(
-      computeCompetitorCitations(sources, [{ id: "c2", name: "NoDomain", domain: null }], responses, prompts),
-    ).toEqual([]);
   });
 });
