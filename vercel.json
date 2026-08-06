@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/run",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/web-mentions",
+      "schedule": "0 9 * * *"
     }
   ]
 }
