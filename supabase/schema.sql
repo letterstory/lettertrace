@@ -1045,3 +1045,129 @@ $$;
 
 revoke all on function public.record_ops_event(text, text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.record_ops_event(text, text, text, jsonb) to service_role;
+
+-- ---------- web mentions (fourth signal: third-party chatter) --------
+-- Mentions of the brand and its topics on Reddit and other third-party
+-- sites, sourced from a web-search API (Brave first, behind a provider
+-- interface) — NOT the official Reddit API. Named "web mentions" throughout:
+-- `mentions` above already means "brand named inside an LLM answer", and
+-- overloading that word would hurt for years.
+--
+-- Collection is WEEKLY by design (a past-week freshness window on the search
+-- side means a weekly tick loses nothing a daily one would catch), and the
+-- signal is opt-in per project: it spends real search-API money.
+
+-- One watch config per project. `sites` is the per-client watch list — any
+-- third-party host is just an entry here, no per-site integrations.
+-- `exclude_terms` is the name-collision guard (clients named after common
+-- words). `query_budget` caps queries per collection tick: it exists to stop
+-- a runaway config (100 topics x 10 sites), not to shave dollars.
+create table if not exists public.web_mention_watch (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects (id) on delete cascade,
+  enabled boolean not null default false,
+  sites text[] not null default '{reddit.com}',
+  extra_keywords text[] not null default '{}',
+  exclude_terms text[] not null default '{}',
+  query_budget integer not null default 60,
+  -- Set by the collector on every attempt; the weekly scheduler's due check
+  -- (>= 7 days) reads this, mirroring projects.last_run_at.
+  last_collected_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (project_id)
+);
+
+-- Collection events. A sibling of `runs`, not a reuse: `runs` has LLM
+-- provider/model baked into NOT NULL checks that make no sense here.
+-- `query_count` is the billing truth — monthly search-API spend is one
+-- aggregate over it.
+create table if not exists public.web_mention_runs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects (id) on delete cascade,
+  status text not null default 'running' check (status in ('running', 'completed', 'failed')),
+  query_count integer not null default 0,
+  new_count integer not null default 0,
+  seen_count integer not null default 0,
+  error text,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+-- One row per (project, page). Repeated sightings UPDATE the row
+-- (last_seen_at, seen_count, best rank) instead of duplicating it; the topic
+-- trend is derived from first_seen_at — new mentions per day — which stays
+-- honest because a re-sighting isn't new chatter. `metadata` absorbs future
+-- enrichment (v2: live Reddit scores) without migrations.
+create table if not exists public.web_mentions (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects (id) on delete cascade,
+  page_key text not null,        -- pageKey(url): host+path, the dedup identity
+  url text not null,
+  domain text not null,          -- e.g. 'reddit.com'
+  title text,
+  snippet text,                  -- search-engine capture at crawl time, goes stale
+  kind text not null check (kind in ('brand', 'topic')),
+  topic_id uuid references public.topics (id) on delete set null,
+  matched_terms text[] not null default '{}',
+  search_rank integer,
+  seen_count integer not null default 1,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  discovered_via text not null default 'search' check (discovered_via in ('search', 'llm_citation')),
+  metadata jsonb not null default '{}'::jsonb,
+  unique (project_id, page_key)
+);
+
+-- ---------- search_keys (BYOK web-search credential, encrypted) ------
+-- Same contract as provider_keys: verify against the API first, encrypt
+-- second, persist ciphertext + non-reversible hint only. A separate table
+-- rather than more provider_keys rows for the same reason router_keys is:
+-- a search engine is not an answer engine, and must never widen the LLM
+-- provider allow-list or become a project's default_provider.
+create table if not exists public.search_keys (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  provider text not null check (provider in ('brave')),
+  label text,
+  encrypted_key text not null,
+  key_hint text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, provider)
+);
+
+create index if not exists idx_web_mention_watch_project on public.web_mention_watch (project_id);
+create index if not exists idx_web_mention_runs_project on public.web_mention_runs (project_id, created_at desc);
+-- The feed reads newest-activity-first; the summary groups by topic.
+create index if not exists idx_web_mentions_project_seen on public.web_mentions (project_id, last_seen_at desc);
+create index if not exists idx_web_mentions_project_topic on public.web_mentions (project_id, topic_id);
+-- The trend derives from first_seen_at.
+create index if not exists idx_web_mentions_project_first on public.web_mentions (project_id, first_seen_at desc);
+
+alter table public.web_mention_watch enable row level security;
+alter table public.web_mention_runs  enable row level security;
+alter table public.web_mentions      enable row level security;
+alter table public.search_keys       enable row level security;
+
+-- Project children: access allowed when the parent project belongs to the
+-- user, same shape as topics/runs/mentions above. The weekly cron uses the
+-- service-role client and bypasses these, exactly like /api/cron/run.
+drop policy if exists "web_mention_watch_owner" on public.web_mention_watch;
+create policy "web_mention_watch_owner" on public.web_mention_watch
+  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
+  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+
+drop policy if exists "web_mention_runs_owner" on public.web_mention_runs;
+create policy "web_mention_runs_owner" on public.web_mention_runs
+  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
+  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+
+drop policy if exists "web_mentions_owner" on public.web_mentions;
+create policy "web_mentions_owner" on public.web_mentions
+  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
+  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+
+-- search_keys: owned by user, same shape as provider_keys.
+drop policy if exists "search_keys_owner" on public.search_keys;
+create policy "search_keys_owner" on public.search_keys
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
