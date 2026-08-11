@@ -84,10 +84,21 @@ const config: Config = {
           "0%,100%": { opacity: "1" },
           "50%": { opacity: "0" },
         },
+        // The track holds the review list twice over, so travelling exactly
+        // -50% lands the duplicate where the original started and the loop is
+        // seamless. Percentages here are of the track's own width, which is why
+        // the halves must be identical.
+        marquee: {
+          from: { transform: "translateX(0)" },
+          to: { transform: "translateX(-50%)" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.6s cubic-bezier(0.22,1,0.36,1) both",
         blink: "blink 1.1s step-end infinite",
+        // Duration is set per-row at the call site; linear so the drift never
+        // eases and re-reads as a stutter at the loop seam.
+        marquee: "marquee 60s linear infinite",
       },
     },
   },

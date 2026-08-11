@@ -16,6 +16,7 @@ import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 import { InstallCli } from "@/components/install-cli";
+import { Reviews } from "@/components/reviews";
 
 const GITHUB_URL = "https://github.com/letterstory/lettertrace";
 
@@ -160,6 +161,7 @@ export default function LandingPage() {
             <a href="#how" className="transition hover:text-ink">How it works</a>
             <a href="#features" className="transition hover:text-ink">Features</a>
             <a href="#open-source" className="transition hover:text-ink">Open source</a>
+            <a href="#reviews" className="transition hover:text-ink">Reviews</a>
           </nav>
           <div className="flex items-center gap-2">
             <a
@@ -339,6 +341,9 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Reviews */}
+      <Reviews />
+
       {/* Final CTA */}
       <section className="relative overflow-hidden">
         <div className="pointer-events-none absolute left-1/2 top-0 h-64 w-[36rem] -translate-x-1/2 rounded bg-terracotta/50 glow-blob" />
@@ -373,6 +378,7 @@ export default function LandingPage() {
               { label: "How it works", href: "#how" },
               { label: "Features", href: "#features" },
               { label: "Open source", href: "#open-source" },
+              { label: "Reviews", href: "#reviews" },
             ]}
           />
           <FooterCol
