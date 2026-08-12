@@ -212,10 +212,10 @@ between the internet and your provider spend.
 
 ### Building it yourself
 
-The published image is **amd64**, built from this repository by
-[`.github/workflows/docker.yml`](./.github/workflows/docker.yml). On Apple
-Silicon it runs under Rosetta — a little slower to start, otherwise unremarkable.
-Build locally if you want a native arm64 image, or just prefer to build your own:
+The published image is multi-arch (amd64 + arm64), built from this repository by
+[`.github/workflows/docker.yml`](./.github/workflows/docker.yml) — each
+architecture on its own native runner, so `docker run` needs no `--platform`
+flag on Apple Silicon or anywhere else. To build it yourself instead:
 
 ```bash
 docker build -t lettertrace .

@@ -6,8 +6,19 @@ name: Publish container image
 # still asks someone to clone the repo and build it. An image means one
 # `docker run` and no toolchain.
 #
-# Pull requests build but do not push — so a broken Dockerfile is caught in
-# review without publishing anything.
+# WHY TWO JOBS INSTEAD OF ONE MULTI-PLATFORM BUILD. The obvious
+# `platforms: linux/amd64,linux/arm64` on a single runner emulates arm64 under
+# QEMU: the first attempt at that ran 83 minutes and never published anything.
+# Dropping arm64 was worse in a different way — `docker run` on an M-series Mac
+# does not silently fall back to amd64, it fails outright with "no matching
+# manifest", so the documented command was broken for most people trying it.
+#
+# GitHub gives public repositories free native arm64 runners, so each
+# architecture is built on its own hardware in parallel and the two are stitched
+# into one manifest at the end. No emulation, both architectures, minutes.
+#
+# Pull requests build but do not push — a broken Dockerfile is caught in review
+# without publishing anything.
 
 on:
   push:
@@ -29,7 +40,16 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -37,18 +57,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # amd64 only, deliberately. The first multi-arch run on master ran 83
-      # minutes and never published: arm64 has to be emulated under QEMU, and
-      # caches written on a PR branch aren't readable from the base branch, so
-      # every merge paid for a cold emulated build.
-      #
-      # Apple Silicon runs an amd64 image under Rosetta. It starts a little
-      # slower; nobody trying a container for ten minutes will notice. That is
-      # a far better trade than an image that takes over an hour to ship.
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Each job pushes an untagged, digest-only image. Tags are applied once,
+      # by the merge job below — two jobs racing to move the same tag would
+      # leave whichever finished last as a single-architecture `latest`, which
+      # is the bug this whole workflow exists to avoid.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          # Cache per architecture. A shared scope would have the two jobs
+          # overwriting each other's layers on every run.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    if: github.event_name != 'pull_request'
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -65,12 +130,23 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+
+      # Proves the published tag actually carries both architectures. Without
+      # this the failure mode is silent: a single-arch `latest` looks fine in
+      # the registry UI and fails on somebody's laptop.
+      - name: Verify both architectures are present
+        run: |
+          MANIFEST=$(docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} --raw)
+          echo "$MANIFEST" | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort > /tmp/arches
+          cat /tmp/arches
+          grep -qx 'linux/amd64' /tmp/arches || { echo "::error::amd64 missing from manifest"; exit 1; }
+          grep -qx 'linux/arm64' /tmp/arches || { echo "::error::arm64 missing from manifest"; exit 1; }
