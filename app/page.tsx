@@ -399,6 +399,22 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
+
+      {/* Floating Product Hunt badge */}
+      <a
+        href="https://www.producthunt.com/products/lettertrace?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-lettertrace"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="fixed bottom-5 right-5 z-50 shadow-lift transition hover:-translate-y-0.5"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          alt="Lettertrace - Free, open-source AI visibility tracking for coding agents | Product Hunt"
+          width={250}
+          height={54}
+          src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1213444&theme=light&t=1785826485100"
+        />
+      </a>
     </div>
   );
 }
