@@ -3,6 +3,7 @@ import { Logo } from "@/components/logo";
 import { DashboardNav } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
+import { WhyFree } from "@/components/dashboard/why-free";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
@@ -97,6 +98,7 @@ export default async function DashboardLayout({
           <DashboardNav />
 
           <div className="mt-auto hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
+            <WhyFree />
             <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
               {user.email}
             </p>
@@ -104,9 +106,12 @@ export default async function DashboardLayout({
           </div>
 
           <div className="flex items-center justify-between gap-2 border-t border-ink/10 pt-4 md:hidden">
-            <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
-              {user.email}
-            </p>
+            <div className="flex min-w-0 flex-col gap-1">
+              <WhyFree />
+              <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
+                {user.email}
+              </p>
+            </div>
             <div className="flex items-center gap-2">
               <ThemeToggle />
               <SignOutButton />
