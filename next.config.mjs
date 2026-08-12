@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Emits .next/standalone — a self-contained server with only the node_modules
+  // it actually needs. This is what keeps the container image small enough to
+  // be worth publishing. Vercel ignores it, so the hosted deploy is unaffected.
+  output: "standalone",
   eslint: {
     // Lint is run separately in CI; don't fail production builds on lint.
     ignoreDuringBuilds: true,

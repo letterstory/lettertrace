@@ -136,6 +136,88 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 3. **Topics** → add a topic and click **Generate variations** to auto-create prompts (or add your own).
 4. **Runs** → **Run monitor now**. When it finishes, the **Overview** fills in with visibility, share of voice, sentiment, and per-topic breakdowns.
 
+## Run it with Docker
+
+Steps 1–2 above still apply — Lettertrace needs a Supabase project and its
+schema, and there is no way around that. Everything after them is one command:
+
+```bash
+docker run -p 3000:3000 \
+  -e NEXT_PUBLIC_SUPABASE_URL="https://xxxx.supabase.co" \
+  -e NEXT_PUBLIC_SUPABASE_ANON_KEY="eyJ..." \
+  -e SUPABASE_SERVICE_ROLE_KEY="eyJ..." \
+  -e ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  -e NEXT_PUBLIC_SITE_URL="http://localhost:3000" \
+  ghcr.io/letterstory/lettertrace
+```
+
+Then open [http://localhost:3000](http://localhost:3000) and create an account.
+Add your provider key in **Settings** as usual — it is BYOK either way, so the
+image ships with no model credentials in it.
+
+Already have a `.env`? `--env-file` is less to type and keeps keys out of your
+shell history:
+
+```bash
+docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
+```
+
+> [!IMPORTANT]
+> `ENCRYPTION_KEY` decrypts the provider keys stored in your database. Generate
+> it once and keep it. If you lose it, every stored BYOK key becomes
+> unreadable and has to be re-entered; if you change it, the same.
+
+### What's required and what isn't
+
+| Variable | Needed for |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Everything |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Everything |
+| `SUPABASE_SERVICE_ROLE_KEY` | Scheduled runs, admin surfaces |
+| `ENCRYPTION_KEY` | Storing BYOK provider keys (32 bytes, base64) |
+| `NEXT_PUBLIC_SITE_URL` | Correct auth redirects and OG metadata — set it to the URL users actually visit |
+| `CRON_SECRET` | Only if you wire up scheduled runs (below) |
+
+Everything else in [`.env.example`](./.env.example) is optional: the `TRIAL_*`
+keys exist to hand out free runs on your own provider account, and the
+`ADMIN_*` / `RESEND_API_KEY` values only enable operator alerts.
+
+Unlike a typical Next.js image, the `NEXT_PUBLIC_*` values here are read **at
+runtime**, not baked in at build time — so the published image works against any
+Supabase project without rebuilding. See [`lib/public-env.ts`](./lib/public-env.ts)
+if you want to know how, and note the one invariant it documents before adding a
+statically-rendered page that talks to Supabase from the browser.
+
+### Scheduled runs off Vercel
+
+[`vercel.json`](./vercel.json) schedules `/api/cron/run` daily, and that
+scheduler does not exist outside Vercel. Point your own cron at the endpoint
+instead:
+
+```bash
+0 8 * * * curl -fsS -X POST http://localhost:3000/api/cron/run \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+Set the same `CRON_SECRET` on the container. Without it the endpoint refuses
+the request, which is the intended behaviour — it is the only thing standing
+between the internet and your provider spend.
+
+### Building it yourself
+
+The published image is multi-arch (amd64 + arm64) and built from this
+repository by [`.github/workflows/docker.yml`](./.github/workflows/docker.yml).
+To build locally instead:
+
+```bash
+docker build -t lettertrace .
+docker run -p 3000:3000 --env-file .env lettertrace
+```
+
+No build arguments are needed, deliberately — passing `NEXT_PUBLIC_*` at build
+time would bake one Supabase project into the bundle and silently override
+whatever you pass at run time.
+
 ## LLM routers (one key, several assistants)
 
 Instead of a key per provider, you can connect a single **LLM router** (gateway) credential and reach several assistants through it. The bar for adding one is a live probe, not a docs page — both entries below were corrected by probing:

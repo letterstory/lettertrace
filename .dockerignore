@@ -1,0 +1,24 @@
+# Keep the build context small and, more importantly, keep secrets out of it.
+# Anything listed here cannot end up in an image layer by accident.
+.env
+.env.local
+.env*.local
+*.pem
+
+node_modules
+.next
+out
+coverage
+
+.git
+.github
+.vercel
+.claude
+
+**/*.test.ts
+**/*.test.tsx
+
+.DS_Store
+npm-debug.log*
+README.md
+docs
