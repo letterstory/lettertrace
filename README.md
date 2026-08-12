@@ -116,6 +116,9 @@ openssl rand -hex 32      # -> CRON_SECRET
 
 ### 4. Install & run
 
+> Running it as a container instead? Skip to [Run it with Docker](#run-it-with-docker)
+> — steps 1–3 still apply, step 4 becomes a single `docker run`.
+
 Use **Node 22 LTS** (see [`.nvmrc`](./.nvmrc)). Node 23+ has an `undici`
 regression that intermittently drops provider connections mid-response
 ("Premature close"). With [nvm](https://github.com/nvm-sh/nvm):
@@ -138,8 +141,12 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and you'
 
 ## Run it with Docker
 
-Steps 1–2 above still apply — Lettertrace needs a Supabase project and its
-schema, and there is no way around that. Everything after them is one command:
+**Prerequisites:** a Supabase project with [`supabase/schema.sql`](./supabase/schema.sql)
+applied — [steps 1](#1-create-a-supabase-project) and [2](#2-apply-the-database-schema)
+above, about two minutes on the free tier. Supabase provides auth and the
+database, so it lives outside the container.
+
+Then:
 
 ```bash
 docker run -p 3000:3000 \
@@ -151,9 +158,9 @@ docker run -p 3000:3000 \
   ghcr.io/letterstory/lettertrace
 ```
 
-Then open [http://localhost:3000](http://localhost:3000) and create an account.
-Add your provider key in **Settings** as usual — it is BYOK either way, so the
-image ships with no model credentials in it.
+Open [http://localhost:3000](http://localhost:3000), create an account, and add
+your provider key in **Settings** as usual — it is BYOK either way, so the image
+ships with no model credentials in it.
 
 Already have a `.env`? `--env-file` is less to type and keeps keys out of your
 shell history:
