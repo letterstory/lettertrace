@@ -35,6 +35,20 @@ describe("provider catalog", () => {
     expect(defaultModelFor("google")).toBe("gemini-pro-latest");
   });
 
+  // The consumer-surface refresh (2026-08): these are what ChatGPT and
+  // claude.ai actually serve, offered WITHOUT touching the defaults — a
+  // default swap changes the measured surface under every project that never
+  // picked a model, and rates are only comparable run-over-run on one surface.
+  it("offers the current consumer models without moving the defaults", () => {
+    const openaiIds = PROVIDERS.openai.models.map((m) => m.id);
+    expect(openaiIds).toContain("gpt-5.6-sol");
+    expect(openaiIds).toContain("gpt-5.6-luna");
+    expect(defaultModelFor("openai")).toBe("gpt-4o");
+    const anthropicIds = PROVIDERS.anthropic.models.map((m) => m.id);
+    expect(anthropicIds).toContain("claude-sonnet-5");
+    expect(defaultModelFor("anthropic")).toBe("claude-opus-4-8");
+  });
+
   it("offers Google AI Overviews as a distinct engine under google", () => {
     const ids = PROVIDERS.google.models.map((m) => m.id);
     expect(ids).toContain(GOOGLE_AI_OVERVIEWS_MODEL);

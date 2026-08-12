@@ -31,8 +31,12 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
     label: "Anthropic (Claude)",
     keyUrl: "https://console.anthropic.com/settings/keys",
     keyPrefix: "sk-ant-",
+    // Ordered by capability; the FIRST entry is the provider default
+    // (defaultModelFor), so reordering is a behavior change for every project
+    // that never picked a model — don't reorder to freshen the picker.
     models: [
       { id: "claude-opus-4-8", label: "Claude Opus 4.8", note: "Most capable" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "claude.ai's default" },
       { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", note: "Balanced" },
       { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Fast & cheap" },
     ],
@@ -42,8 +46,16 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
     label: "OpenAI (ChatGPT)",
     keyUrl: "https://platform.openai.com/api-keys",
     keyPrefix: "sk-",
+    // gpt-4o stays first (the default) for measurement continuity — a run's
+    // rates are only comparable to the runs before it on the same surface, so
+    // moving the default is a deliberate cut-over, not a freshen. The 5.6
+    // entries are what ChatGPT actually serves consumers today; nothing is
+    // removed because a project pinned to a dropped id would fail its next
+    // run at resolveEngine.
     models: [
-      { id: "gpt-4o", label: "GPT-4o", note: "Flagship" },
+      { id: "gpt-4o", label: "GPT-4o", note: "Legacy flagship" },
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", note: "ChatGPT's paid default" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", note: "ChatGPT's free default" },
       { id: "gpt-4o-mini", label: "GPT-4o mini", note: "Fast & cheap" },
       { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
     ],
