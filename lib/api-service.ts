@@ -31,7 +31,7 @@ import {
   type RunSummary,
   type TopicStat,
 } from "@/lib/metrics";
-import { waitUntil } from "@vercel/functions";
+import { fireAndForget } from "@/lib/notify";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { selectAll } from "@/lib/paging";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
@@ -1227,9 +1227,13 @@ export async function triggerRunForProject(
 
   if (options?.background) {
     const prepared = await prepareRun(runParams);
-    // waitUntil keeps the serverless invocation alive past the response; the
-    // run settles its own row (completed/failed) exactly as in the sync path.
-    waitUntil(
+    // Keeps the serverless invocation alive past the response; the run settles
+    // its own row (completed/failed) exactly as in the sync path. Routed
+    // through fireAndForget rather than calling Vercel's waitUntil directly:
+    // off-Vercel — a container, a plain Node host — the import itself is what
+    // fails, and this was the one call site that would have taken background
+    // runs down with it.
+    fireAndForget(
       resumeRun(prepared, runParams).catch(async (err) => {
         // resumeRun never rejects for per-prompt failures, so reaching here
         // means the settle itself failed — and swallowing that left the row

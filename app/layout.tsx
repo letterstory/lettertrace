@@ -3,6 +3,7 @@ import { DM_Sans, DM_Mono, Ibarra_Real_Nova } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme";
 import { RB2BPixel } from "@/components/rb2b-pixel";
+import { publicEnvScript } from "@/lib/public-env";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -69,6 +70,10 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        {/* Supabase browser config, read from the server environment at request
+            time so a prebuilt container image can be pointed at any project.
+            Public values only — see lib/public-env.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: publicEnvScript() }} />
         {/* Applies the saved theme before first paint to avoid a flash. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
