@@ -9,9 +9,10 @@ import { cn } from "@/lib/utils";
 // video answering "Why is this free?". Its own "use client" island so the
 // server-rendered dashboard layout stays a server component.
 
-// youtu.be/pQNaLHnxY8c -> privacy-friendly embed, autoplay on open.
+// youtu.be/pQNaLHnxY8c -> privacy-friendly embed, autoplay on open,
+// captions off by default (cc_load_policy=0).
 const VIDEO_EMBED_URL =
-  "https://www.youtube-nocookie.com/embed/pQNaLHnxY8c?autoplay=1&rel=0";
+  "https://www.youtube-nocookie.com/embed/pQNaLHnxY8c?autoplay=1&rel=0&cc_load_policy=0";
 
 export function WhyFree({ className }: { className?: string }) {
   const [open, setOpen] = useState(false);
