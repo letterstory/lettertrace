@@ -37,10 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # arm64 as well as amd64: most people evaluating this locally are on an
-      # Apple Silicon laptop, and an amd64-only image makes their first
-      # experience a QEMU emulation warning.
-      - uses: docker/setup-qemu-action@v3
+      # amd64 only, deliberately. The first multi-arch run on master ran 83
+      # minutes and never published: arm64 has to be emulated under QEMU, and
+      # caches written on a PR branch aren't readable from the base branch, so
+      # every merge paid for a cold emulated build.
+      #
+      # Apple Silicon runs an amd64 image under Rosetta. It starts a little
+      # slower; nobody trying a container for ten minutes will notice. That is
+      # a far better trade than an image that takes over an hour to ship.
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -64,7 +68,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
