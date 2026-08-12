@@ -37,10 +37,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # arm64 as well as amd64: most people evaluating this locally are on an
-      # Apple Silicon laptop, and an amd64-only image makes their first
-      # experience a QEMU emulation warning.
-      - uses: docker/setup-qemu-action@v3
+      # arm64 is built under QEMU emulation, which costs ~20 minutes on top of
+      # the amd64 build. That is worth paying for a release — most people
+      # evaluating this locally are on an Apple Silicon laptop, and an
+      # amd64-only image greets them with an emulation warning — but not on
+      # every merge to master, on a repo that sees several a day.
+      #
+      # So: master publishes amd64 only, tags publish both. `latest` stays
+      # instant, and anyone pulling a version tag gets their native arch.
+      - id: platforms
+        run: |
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo "list=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=linux/amd64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -64,7 +78,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ steps.platforms.outputs.list }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

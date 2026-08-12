@@ -205,9 +205,15 @@ between the internet and your provider spend.
 
 ### Building it yourself
 
-The published image is multi-arch (amd64 + arm64) and built from this
-repository by [`.github/workflows/docker.yml`](./.github/workflows/docker.yml).
-To build locally instead:
+The image is built from this repository by
+[`.github/workflows/docker.yml`](./.github/workflows/docker.yml). `latest`
+tracks `master` and is amd64; **version tags are multi-arch (amd64 + arm64)**,
+so pull a tag if you want a native image on Apple Silicon. (The arm64 layer is
+emulated in CI and adds about twenty minutes, which is worth paying per release
+and not per merge.)
+
+To build locally instead — this always produces an image for your own
+architecture, whatever it is:
 
 ```bash
 docker build -t lettertrace .
