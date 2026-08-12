@@ -43,13 +43,22 @@ const RATES: Record<Provider, { models: Record<string, number>; fallback: number
   anthropic: {
     models: {
       "claude-opus-4-8": 25,
+      "claude-sonnet-5": 10,
       "claude-sonnet-4-6": 15,
       "claude-haiku-4-5": 5,
     },
     fallback: 25,
   },
-  // Placeholders that err high — see PROVENANCE above.
-  openai: { models: {}, fallback: 30 },
+  // The 5.6 rows are published output rates (Sol $30/Mtok; Luna quoted $1.20–6,
+  // charged at the higher figure per the err-high rule). Anything else falls
+  // back to the deliberately-high placeholder — see PROVENANCE above.
+  openai: {
+    models: {
+      "gpt-5.6-sol": 30,
+      "gpt-5.6-luna": 6,
+    },
+    fallback: 30,
+  },
   google: { models: {}, fallback: 30 },
   perplexity: { models: {}, fallback: 30 },
 };
