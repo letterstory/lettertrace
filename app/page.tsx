@@ -399,6 +399,24 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
+
+      {/* Product Hunt badge */}
+      <a
+        href="https://www.producthunt.com/products/lettertrace?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-lettertrace-2"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Lettertrace on Product Hunt"
+        className="fixed bottom-5 right-5 z-50 transition hover:opacity-90"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          alt="Lettertrace - Track your AI visibility for free (using your own API keys!) | Product Hunt"
+          width={210}
+          height={45}
+          src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1218357&theme=light&t=1786538146874"
+          className="rounded shadow-lift"
+        />
+      </a>
     </div>
   );
 }
