@@ -33,6 +33,7 @@ import {
 } from "../lib/llm";
 import { detectMention, brandTerms } from "../lib/mentions";
 import { hostOf, isOwnedDomain } from "../lib/engine";
+import { isProvider } from "../lib/models";
 import type { Provider } from "../lib/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -95,10 +96,11 @@ const maxPrompts = Number(flag("max-prompts", "10"));
 const providers = flag("providers", "anthropic,openai")
   .split(",")
   .map((p) => p.trim())
-  .filter(
-    (p): p is Provider =>
-      p === "anthropic" || p === "openai" || p === "google" || p === "perplexity",
-  );
+  // isProvider, not a chain of comparisons: the chain was compiler-invisible, so
+  // a provider added to the catalog stayed silently unrunnable here — `--providers
+  // xai` would be dropped without a word and the pilot would report on whatever
+  // was left, which is the wrong answer rather than an error.
+  .filter(isProvider);
 const webSearch = flag("web-search", "on") !== "off";
 
 // Answer models: the flagship of each provider, i.e. what a real user asking
@@ -109,6 +111,7 @@ const ANSWER_MODEL: Record<Provider, string> = {
   openai: "gpt-4o",
   google: "gemini-pro-latest",
   perplexity: "sonar-pro",
+  xai: "grok-4.6",
 };
 
 // Rough blended $/1M tokens, only for an order-of-magnitude spend estimate.
@@ -119,6 +122,9 @@ const BLENDED_COST_PER_MTOK: Record<Provider, number> = {
   // Perplexity bills per request and per search on top of tokens; this is only
   // an order-of-magnitude figure for the pilot's spend estimate.
   perplexity: 6,
+  // Grok 4.6's own tiered rate, blended: the pilot's requests sit well under
+  // the 200k-token threshold where xAI's higher tier starts.
+  xai: 5,
 };
 
 // --- concurrency ----------------------------------------------------------
@@ -185,6 +191,7 @@ function keyFor(provider: Provider): string {
     openai: "TRIAL_OPENAI_API_KEY",
     google: "TRIAL_GOOGLE_API_KEY",
     perplexity: "TRIAL_PERPLEXITY_API_KEY",
+    xai: "TRIAL_XAI_API_KEY",
   };
   const k = process.env[env[provider]];
   if (!k) throw new Error(`Missing ${env[provider]} in .env.local`);

@@ -53,6 +53,7 @@ const TRIAL_KEY_ENV: Record<Provider, string> = {
   openai: "TRIAL_OPENAI_API_KEY",
   google: "TRIAL_GOOGLE_API_KEY",
   perplexity: "TRIAL_PERPLEXITY_API_KEY",
+  xai: "TRIAL_XAI_API_KEY",
 };
 
 const TRIAL_MODEL_ENV: Record<Provider, string> = {
@@ -60,6 +61,7 @@ const TRIAL_MODEL_ENV: Record<Provider, string> = {
   openai: "TRIAL_OPENAI_MODEL",
   google: "TRIAL_GOOGLE_MODEL",
   perplexity: "TRIAL_PERPLEXITY_MODEL",
+  xai: "TRIAL_XAI_MODEL",
 };
 
 // Derived from the env map above rather than written out again, so a provider
@@ -186,21 +188,31 @@ export interface ResolvedKey {
   available?: Provider[];
 }
 
-/** The provider new projects default to: one we can actually serve (has a trial key), else anthropic. */
+/** The provider new projects default to: one we can actually serve (has a trial
+ *  key), else anthropic. Walks PROVIDER_IDS rather than a chain of ifs, for the
+ *  same reason PROVIDER_IDS itself is derived — a provider missing from the
+ *  chain is invisible to the compiler and simply never gets picked. */
 export function pickDefaultProvider(): Provider {
-  if (trialKeyFor("anthropic")) return "anthropic";
-  if (trialKeyFor("openai")) return "openai";
-  if (trialKeyFor("google")) return "google";
-  if (trialKeyFor("perplexity")) return "perplexity";
-  return "anthropic";
+  return PROVIDER_IDS.find((p) => trialKeyFor(p)) ?? "anthropic";
 }
 
-const PROVIDER_ORDER: Record<Provider, Provider[]> = {
-  anthropic: ["anthropic", "openai", "google", "perplexity"],
-  openai: ["openai", "anthropic", "google", "perplexity"],
-  google: ["google", "anthropic", "openai", "perplexity"],
-  perplexity: ["perplexity", "anthropic", "openai", "google"],
-};
+/**
+ * Preference order for AUXILIARY work: the requested provider, then every other
+ * one in catalog order.
+ *
+ * Derived rather than kept as the N x N table this replaces. That table was a
+ * half-caught hazard: growing `Provider` made the compiler demand a new ROW, so
+ * the new engine got its own preference list — but nothing required it to be
+ * ADDED to the four existing rows, and a provider absent from those is one no
+ * other provider will ever fall back to. It would have been a key the user
+ * holds, silently never used, with no error anywhere.
+ *
+ * The four rows it replaces were each exactly "preferred, then catalog order
+ * minus self", so this reproduces them unchanged; a test pins that.
+ */
+function providerOrder(preferred: Provider): Provider[] {
+  return [preferred, ...PROVIDER_IDS.filter((p) => p !== preferred)];
+}
 
 /**
  * Resolve a key for AUXILIARY work — prompt/competitor/topic suggestion — by
@@ -223,7 +235,7 @@ export async function resolveKey(
   preferred: Provider,
   preferredModel?: string,
 ): Promise<ResolvedKey> {
-  const order = PROVIDER_ORDER[preferred];
+  const order = providerOrder(preferred);
   const modelFor = (p: Provider) =>
     p === preferred && preferredModel ? preferredModel : defaultModelFor(p);
   const requested = { provider: preferred, model: modelFor(preferred) };

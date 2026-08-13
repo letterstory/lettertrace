@@ -289,6 +289,10 @@ const DIRECT_SHAPE: Record<Provider, CallShape> = {
   openai: "openai-chat",
   google: "google",
   perplexity: "perplexity",
+  // xAI's utility surface really is chat-completions: same JSON-object
+  // response_format, so it wants OpenAI's phrasing rather than a shape of its
+  // own. Only the ANSWER path differs (the Responses API, below).
+  xai: "openai-chat",
 };
 
 function callShape(opts: BaseCall, model: string): CallShape {
@@ -319,6 +323,13 @@ async function utilityChat(
       ? anthropicChat(opts.apiKey, model, system, user, maxTokens, plan)
       : openaiChat(opts.apiKey, model, system, user, maxTokens, json, plan);
   }
+  // Exhaustive on purpose — no `default`. The default this replaces sent every
+  // unlisted provider to openaiChat, i.e. to api.openai.com, so a provider added
+  // to the catalog without a branch here would have posted the user's key for a
+  // DIFFERENT vendor to OpenAI: a leaked credential and a wrong answer, with
+  // nothing failing to say so. Listing every case makes the compiler refuse to
+  // build until the next engine is handled. (Same bug the pilot harness's
+  // `keyFor` had, where google was handed the OpenAI key.)
   switch (opts.provider) {
     case "anthropic":
       return anthropicChat(opts.apiKey, model, system, user, maxTokens);
@@ -326,7 +337,9 @@ async function utilityChat(
       return googleChat(opts.apiKey, model, system, user, maxTokens, json);
     case "perplexity":
       return perplexityChat(opts.apiKey, model, system, user, maxTokens);
-    default:
+    case "xai":
+      return xaiChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "openai":
       return openaiChat(opts.apiKey, model, system, user, maxTokens, json);
   }
 }
@@ -345,6 +358,11 @@ export async function verifyKey(
       await googleChat(apiKey, "gemini-flash-lite-latest", undefined, "ping", 8);
     } else if (provider === "perplexity") {
       await perplexityChat(apiKey, "sonar", undefined, "ping", 8);
+    } else if (provider === "xai") {
+      // The cheap model, and a budget xaiChat will clamp up to the floor rather
+      // than send as-is — see XAI_MIN_MAX_TOKENS for why a too-small ping is how
+      // a valid key gets reported invalid.
+      await xaiChat(apiKey, "grok-4.3", undefined, "ping", 8);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -527,6 +545,11 @@ export async function runQuery(
   // Perplexity always searches, so it ignores the project toggle entirely.
   if (opts.provider === "perplexity") {
     return perplexityRunQuery(opts.apiKey, opts.model, opts.prompt);
+  }
+  // xAI answers on the Responses API whether or not it is browsing, so it takes
+  // its own branch rather than splitting across the shared web-search one below.
+  if (opts.provider === "xai") {
+    return xaiRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
   }
   if (!webSearch) {
     const res =
@@ -1311,6 +1334,277 @@ async function perplexityRunQuery(
   return { text, tokens, sources: perplexitySources(data) };
 }
 
+// ==================================================================
+// xAI (Grok)
+//
+// Two surfaces under one host, because xAI splits them the way OpenAI does:
+//
+//   /v1/chat/completions  utility work — JSON classification, suggestion. Plain
+//                         OpenAI-compatible, response_format included, which is
+//                         why DIRECT_SHAPE calls this provider 'openai-chat'.
+//   /v1/responses         monitored answers. The server-side `web_search` tool
+//                         lives only here, and it returns citations in the same
+//                         `annotations[] {type:"url_citation"}` shape the direct
+//                         OpenAI path and gatewaySources already read.
+//
+// Raw fetch for both, like the Google and Perplexity adapters: the OpenAI SDK
+// would carry us for chat-completions but not for the Responses body below, and
+// one transport per provider beats two.
+//
+// The legacy `search_parameters` / Live Search API xAI shipped first is gone —
+// retired 2026-01-12, answering 410 — so anything written against it is dead.
+// Server-side search is the Agent Tools route only.
+// ==================================================================
+
+const XAI_API_BASE = "https://api.x.ai/v1";
+const XAI_TIMEOUT_MS = 60_000;
+const XAI_MAX_ATTEMPTS = 4;
+const XAI_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+// Same bounds and same reasoning as the Google and Perplexity adapters: a rate
+// limit's window does not care about our backoff, so honour Retry-After, but
+// never block one prompt long enough to starve the rest of the run.
+const XAI_MAX_RETRY_WAIT_MS = 45_000;
+const XAI_RETRY_BUDGET_MS = 90_000;
+// Floor for the verifyKey ping. NOT yet measured against a live key — set to
+// Perplexity's known floor as the conservative guess, because the failure it
+// guards against is silent and one-directional: too small and a VALID key is
+// reported invalid (exactly what an 8-token ping copied from the Google adapter
+// did to Perplexity), while too large costs a few tokens once. Clamped inside
+// xaiGenerate so no caller can reintroduce a smaller one.
+// TODO(probe): confirm xAI's real floor and lower this if it allows less.
+const XAI_MIN_MAX_TOKENS = 16;
+
+export class XaiAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "XaiAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+/** Seconds from a Retry-After header, which may be a delta or an HTTP date. */
+function xaiRetryAfterSec(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return secs;
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
+  return undefined;
+}
+
+/** POST to one of xAI's two surfaces, with the shared retry policy. */
+async function xaiFetch<T>(path: "/chat/completions" | "/responses", apiKey: string, body: unknown): Promise<T> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < XAI_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${XAI_API_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(XAI_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const errBody = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+        detail?: unknown;
+      };
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
+        `xAI API error (${res.status}).`;
+      const xerr = new XaiAPIError(res.status, message, xaiRetryAfterSec(res));
+      if (!XAI_RETRYABLE.has(res.status)) throw xerr;
+      lastErr = xerr;
+    } catch (err) {
+      if (err instanceof XaiAPIError && !XAI_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= XAI_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof XaiAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > XAI_MAX_RETRY_WAIT_MS || sleptMs + waitMs > XAI_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("xAI request failed.");
+}
+
+interface XaiChatResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+/** Utility-call helper, matching anthropicChat / openaiChat / perplexityChat. */
+async function xaiChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await xaiFetch<XaiChatResponse>("/chat/completions", apiKey, {
+    model,
+    messages,
+    max_tokens: Math.max(maxTokens, XAI_MIN_MAX_TOKENS),
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // Same guards as everywhere else: a 200 carrying no usable answer is an error,
+  // not an empty measurement. See googleGenerate for why this matters.
+  if (!choice) throw new Error("xAI returned no answer (the response contained no choices).");
+  if (!text) {
+    throw new Error(
+      `xAI returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+interface XaiResponsesReply {
+  output?: {
+    type?: string;
+    content?: {
+      type?: string;
+      text?: string;
+      annotations?: { type?: string; url?: string; title?: string }[];
+    }[];
+  }[];
+  /** Every URL the agent touched, cited in the answer or not. */
+  citations?: string[];
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * Sources from an xAI answer. Exported for tests.
+ *
+ * `annotations[].title` is NOT a page title — xAI puts the citation's LABEL
+ * there ("1", "2", …), so passing it through would store the string "1" as the
+ * title of every source and show that in the UI. Titles are dropped rather than
+ * faked; the URL is the part that carries meaning, and `domain` comes from
+ * parsing it.
+ *
+ * The top-level `citations` list is used only when the answer cited nothing
+ * inline — the same preference the Anthropic path applies to its retrieved-but-
+ * not-cited results. xAI's own docs say not every URL in it is referenced in the
+ * final answer, so it is the weaker signal of the two.
+ */
+export function xaiSources(reply: XaiResponsesReply): CitedSource[] {
+  const cited: CitedSource[] = [];
+  for (const item of reply.output ?? []) {
+    for (const c of item.content ?? []) {
+      for (const a of c.annotations ?? []) {
+        if (a.type && a.type !== "url_citation") continue;
+        const s = a.url ? safeSource(a.url, null, null) : null;
+        if (s) cited.push(s);
+      }
+    }
+  }
+  if (cited.length > 0) return dedupeSources(cited);
+
+  const fallback: CitedSource[] = [];
+  for (const url of reply.citations ?? []) {
+    const s = typeof url === "string" ? safeSource(url, null, null) : null;
+    if (s) fallback.push(s);
+  }
+  return dedupeSources(fallback);
+}
+
+/** Answer text from a Responses reply, concatenated across output items. */
+function xaiText(reply: XaiResponsesReply): string {
+  let text = "";
+  for (const item of reply.output ?? []) {
+    for (const c of item.content ?? []) {
+      if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+    }
+  }
+  return text.trim();
+}
+
+// Ask for the browse rather than leaving it to the model, matching every other
+// grounded engine here (Anthropic's tool_choice, OpenAI's tool_choice, Gemini's
+// ALWAYS_SEARCH instruction). Left to choose, a model answers a question it
+// thinks it knows from memory and cites nothing, and its mention rate then
+// measures something different from the engines that were made to look.
+//
+// The SHAPE below is measured, not guessed. xAI documents the web_search tool
+// but not tool_choice for it, so the first draft of this used
+// `{type:"web_search"}` by analogy with OpenAI's Responses surface — which xAI
+// rejects outright with 422 "did not match any variant of untagged enum
+// ModelToolChoice". Every grounded run would have failed.
+//
+// Probed 2026-08-13 against grok-4.6 on /v1/responses. xAI validates the body
+// BEFORE it checks billing, so the status code separates a legal shape (403, on
+// a credit-less team) from an illegal one (422) without spending anything:
+//
+//   "required"                              403  legal
+//   {type:"tool", name:"web_search"}        403  legal   <- this one
+//   {function_name:"web_search"}            422  rejected
+//   {type:"web_search"}                     422  rejected
+//   {type:"function", function:{...}}       422  rejected
+//   search_parameters:{mode:"on"} (legacy)  410  "Live search is deprecated"
+//
+// Of the two legal forms, the named one is chosen deliberately: "required"
+// compels SOME tool, this compels THIS tool, and it is the exact shape the
+// Anthropic path already uses. That matters the moment a second tool is offered
+// here — with "required", Grok could satisfy the constraint by calling anything.
+//
+// STILL UNVERIFIED: whether the model then actually browses. A legal parameter
+// that the model ignores is the dangerous case — it looks forced and isn't.
+// Confirm with forced-vs-unforced source counts on a question answerable from
+// memory (probe-xai-forcing) once the key's team has credit, and record the
+// counts here. Until then Grok's grounding is expressible, not proven.
+const XAI_FORCE_SEARCH = { type: "tool", name: "web_search" } as const;
+
+async function xaiRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  const reply = await xaiFetch<XaiResponsesReply>("/responses", apiKey, {
+    model,
+    input: prompt,
+    max_output_tokens: Math.max(ANSWER_MAX_TOKENS, XAI_MIN_MAX_TOKENS),
+    ...(webSearch
+      ? { tools: [{ type: "web_search" }], tool_choice: XAI_FORCE_SEARCH }
+      : {}),
+  });
+
+  const text = xaiText(reply);
+  const usage = reply.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+
+  if (!text) {
+    // A grounded ask that comes back empty is the dangerous case: stored, it
+    // scans for zero mentions and charts as "the brand wasn't named".
+    throw new Error("xAI returned an empty answer.");
+  }
+  return { text, tokens, sources: webSearch ? xaiSources(reply) : [] };
+}
+
 // Prompt shape is the single biggest lever on whether a run measures anything.
 // Measured against a stealth-stage brand (24 queries per shape, both providers):
 //
@@ -1717,6 +2011,28 @@ export function humanError(err: unknown): string {
       );
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof XaiAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    // xAI bills from a prepaid credit balance rather than an invoice, so a key
+    // that authenticates fine still stops working when the balance runs out.
+    // "Provider error (402)" would send someone looking for a bug in the key.
+    if (err.status === 402) return "This xAI key has no credit left. Top it up in the xAI console.";
+    if (err.status === 429) {
+      // Same reasoning as the Gemini and Perplexity 429s: "rate limited" reads
+      // as "we went too fast" and invites an immediate retry that cannot work.
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` xAI asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `xAI rejected the request: this key is over its rate limit.${wait} ` +
+        `Check the key's limits and credit balance in the xAI console, or wait and run again.`
+      );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof Error) {

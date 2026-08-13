@@ -314,12 +314,20 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
   },
 };
 
-/** OpenRouter's upstream-provider names, for the pinning above. */
+/**
+ * OpenRouter's upstream-provider names, for the pinning above.
+ *
+ * A name here is NOT a claim that any router serves the engine — `providers`
+ * on each RouterInfo is the only thing that decides that, and no router lists
+ * xai. This map is total over `Provider` because the pinning helper is, so an
+ * entry is required for every provider whether or not it is ever reached.
+ */
 const OPENROUTER_UPSTREAM: Record<Provider, string> = {
   anthropic: "anthropic",
   openai: "openai",
   google: "google-vertex",
   perplexity: "perplexity",
+  xai: "xai",
 };
 
 /** Display order for the settings cards and CLI listing: Merge leads. */

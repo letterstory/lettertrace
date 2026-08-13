@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), and Perplexity Sonar. Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, and Grok (xAI). Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -45,7 +45,7 @@ For each answer the model returns, Lettertrace:
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding) and Perplexity Sonar (always search-grounded, real source URLs)
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), and xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations)
 
 ## Getting started
 
@@ -256,7 +256,7 @@ ROUTER_API_KEY_OPENROUTER=...  npx tsx scripts/probe-router.ts openrouter
 
 The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.
 
-**Gemini, Google AI Overviews and Perplexity still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label.
+**Gemini, Google AI Overviews, Perplexity and Grok still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label. Grok is absent from the router registry for a plainer reason — no gateway has been probed for it yet, and an entry there is a claim about what survives the trip, not a guess.
 
 Router keys are encrypted at rest exactly like provider keys, and resolution order is: your own provider key → your router key → the operator's trial key (if any) → nothing.
 

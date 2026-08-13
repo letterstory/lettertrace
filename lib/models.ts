@@ -98,14 +98,39 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
       { id: "sonar-reasoning-pro", label: "Sonar Reasoning Pro", note: "Chain-of-thought" },
     ],
   },
+  xai: {
+    id: "xai",
+    label: "xAI (Grok)",
+    keyUrl: "https://console.x.ai/team/default/api-keys",
+    keyPrefix: "xai-",
+    // Two entries, not seven. xAI publishes grok-4.5, three grok-4.20 variants
+    // and grok-build-0.1 alongside these, but a new provider has no trend line
+    // to preserve, so there is nothing for an older generation to be continuous
+    // with — it would just be picker clutter. The 4.20 variants (reasoning,
+    // non-reasoning, multi-agent) and grok-build are specialised surfaces no
+    // consumer Grok product serves; whether the multi-agent one can finish
+    // inside a run's budget is untested, and offering an untested model is how
+    // `sonar-deep-research` would have shipped.
+    models: [
+      { id: "grok-4.6", label: "Grok 4.6", note: "grok.com's default" },
+      { id: "grok-4.3", label: "Grok 4.3", note: "Fast & cheap" },
+    ],
+  },
 };
 
 export const PROVIDER_LIST: ProviderInfo[] = Object.values(PROVIDERS);
 
+// Derived from the catalog rather than a hand-written chain of comparisons, so a
+// provider added above can't be silently unrecognised here. The chain this
+// replaces was compiler-invisible: widening `Provider` did not fail the build,
+// it just left the new engine rejected by every write path that validates a
+// provider id — a saved key, a project's default, a v1 request body — with no
+// error pointing at this function.
+//
+// hasOwnProperty rather than `value in PROVIDERS`: `in` walks the prototype, so
+// "toString" and "constructor" would both answer true and narrow to Provider.
 export function isProvider(value: string): value is Provider {
-  return (
-    value === "anthropic" || value === "openai" || value === "google" || value === "perplexity"
-  );
+  return Object.prototype.hasOwnProperty.call(PROVIDERS, value);
 }
 
 export function defaultModelFor(provider: Provider): string {
@@ -157,6 +182,7 @@ const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
   openai: "ANALYSIS_OPENAI_MODEL",
   google: "ANALYSIS_GOOGLE_MODEL",
   perplexity: "ANALYSIS_PERPLEXITY_MODEL",
+  xai: "ANALYSIS_XAI_MODEL",
 };
 
 const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
@@ -165,6 +191,9 @@ const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
   google: "gemini-flash-lite-latest",
   // Sonar is the cheap search model; classification never needs Pro.
   perplexity: "sonar",
+  // xAI's own model page calls 4.3 suitable for classification, and it is the
+  // cheapest per token of the entries offered above.
+  xai: "grok-4.3",
 };
 
 // Sentiment/recommendation enrichment is a simple structured-JSON judgment;

@@ -22,9 +22,23 @@ import type { Provider, ProviderKeyPublic } from "@/lib/types";
 // Brand glyphs (transparent PNGs in /public/providers) on the cards' tinted
 // chips. OpenAI's mark is monochrome, so it carries a per-theme pair swapped by
 // the .logo-for-* rules in globals.css; the others read on both themes as-is.
+// `logo` is optional: a provider whose mark we don't have falls back to a
+// monogram on the same tinted plate. Drawing an approximation of a company's
+// trademark from memory is worse than not showing one — it ships a wrong mark
+// under their name — and a required field would have forced exactly that to
+// get the card rendering. Dropping a real PNG into /public/providers and
+// naming it here is then a one-line change.
 const PROVIDER_STYLE: Record<
   Provider,
-  { title: string; subtitle: string; chipClass: string; logo: string; darkLogo?: string }
+  {
+    title: string;
+    subtitle: string;
+    chipClass: string;
+    logo?: string;
+    darkLogo?: string;
+    /** Shown when there is no logo. One or two characters. */
+    monogram?: string;
+  }
 > = {
   anthropic: {
     title: "Claude",
@@ -51,6 +65,12 @@ const PROVIDER_STYLE: Record<
     chipClass: "bg-mint-tint",
     logo: "/providers/perplexity-black.png",
     darkLogo: "/providers/perplexity-teal.png",
+  },
+  xai: {
+    title: "Grok",
+    subtitle: "xAI API key",
+    chipClass: "bg-ink/5 border border-ink/10",
+    monogram: "xAI",
   },
 };
 
@@ -154,13 +174,17 @@ function ProviderCard({
             )}
             aria-hidden
           >
-            {style.darkLogo ? (
+            {style.logo && style.darkLogo ? (
               <>
                 <img src={style.logo} alt="" className="logo-for-light h-6 w-6 object-contain" />
                 <img src={style.darkLogo} alt="" className="logo-for-dark h-6 w-6 object-contain" />
               </>
-            ) : (
+            ) : style.logo ? (
               <img src={style.logo} alt="" className="h-6 w-6 object-contain" />
+            ) : (
+              <span className="text-[11px] font-semibold tracking-tight text-ink-faint">
+                {style.monogram ?? style.title.slice(0, 2)}
+              </span>
             )}
           </span>
           <div>

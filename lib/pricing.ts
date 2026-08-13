@@ -61,6 +61,17 @@ const RATES: Record<Provider, { models: Record<string, number>; fallback: number
   },
   google: { models: {}, fallback: 30 },
   perplexity: { models: {}, fallback: 30 },
+  // xAI prices in tiers — a lower rate under 200k tokens in the request, a
+  // higher one at or above it. These are the HIGH tier, per the err-high rule
+  // at the top of this file: the cheaper tier would let a long-context run
+  // overshoot the cap it was supposed to stop.
+  xai: {
+    models: {
+      "grok-4.6": 12,
+      "grok-4.3": 5,
+    },
+    fallback: 12,
+  },
 };
 
 /**

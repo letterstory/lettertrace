@@ -66,9 +66,11 @@ const TRIAL_VARS = [
   "TRIAL_OPENAI_API_KEY",
   "TRIAL_GOOGLE_API_KEY",
   "TRIAL_PERPLEXITY_API_KEY",
+  "TRIAL_XAI_API_KEY",
   "TRIAL_ANTHROPIC_MODEL",
   "TRIAL_OPENAI_MODEL",
   "TRIAL_GOOGLE_MODEL",
+  "TRIAL_XAI_MODEL",
   "TRIAL_RUN_LIMIT",
 ] as const;
 
@@ -91,6 +93,78 @@ afterEach(() => {
     if (saved[v] === undefined) delete process.env[v];
     else process.env[v] = saved[v];
   }
+});
+
+// providerOrder replaced a hand-written N x N table. The compiler could only
+// ever catch half of that table's hazard: growing `Provider` demanded a new ROW,
+// but nothing required the new provider to be ADDED to the existing rows — and a
+// provider missing from those is one no other provider ever falls back to, so a
+// key the user holds would sit unused with nothing failing to say so.
+//
+// These observe the order the resolver actually walks rather than re-asserting a
+// table, so they would catch a provider dropped from the sequence as well as one
+// misplaced in it. The first case is the exact order the old table encoded.
+describe("auxiliary fallback order", () => {
+  /** The providers resolveKey asks about, in the order it asks. */
+  async function askedOrder(preferred: Provider): Promise<Provider[]> {
+    const asked: Provider[] = [];
+    vi.mocked(getDecryptedKey).mockImplementation(async (...args: unknown[]) => {
+      asked.push(args[2] as Provider);
+      return null;
+    });
+    await resolveKey(db(0), "user-1", preferred);
+    return asked;
+  }
+
+  it("prefers the requested engine, then walks the catalog in order", async () => {
+    expect(await askedOrder("anthropic")).toEqual([
+      "anthropic",
+      "openai",
+      "google",
+      "perplexity",
+      "xai",
+    ]);
+  });
+
+  it("puts the requested engine first whichever one it is", async () => {
+    expect(await askedOrder("google")).toEqual([
+      "google",
+      "anthropic",
+      "openai",
+      "perplexity",
+      "xai",
+    ]);
+    expect(await askedOrder("xai")).toEqual([
+      "xai",
+      "anthropic",
+      "openai",
+      "google",
+      "perplexity",
+    ]);
+  });
+
+  it("asks about every provider exactly once", async () => {
+    for (const p of ["anthropic", "openai", "google", "perplexity", "xai"] as Provider[]) {
+      const order = await askedOrder(p);
+      expect(new Set(order).size).toBe(order.length);
+      expect(order).toHaveLength(5);
+    }
+  });
+
+  it("actually falls back to a newly added provider", async () => {
+    // The bug the old table would have had: xai present as its own row but
+    // absent from the other four, so a user holding only an xAI key and asking
+    // for Claude would have been told they had no key at all.
+    vi.mocked(getDecryptedKey).mockImplementation(async (...args: unknown[]) =>
+      args[2] === "xai" ? "xai-only-key" : null,
+    );
+    const k = await resolveKey(db(0), "user-1", "anthropic");
+    expect(k.source).toBe("own");
+    expect(k.provider).toBe("xai");
+    expect(k.apiKey).toBe("xai-only-key");
+    // and it still reports what was ASKED for, not what answered
+    expect(k.requested.provider).toBe("anthropic");
+  });
 });
 
 describe("resolveKey", () => {
