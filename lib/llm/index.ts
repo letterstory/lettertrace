@@ -1365,13 +1365,18 @@ const XAI_RETRYABLE = new Set([429, 500, 502, 503, 504]);
 // never block one prompt long enough to starve the rest of the run.
 const XAI_MAX_RETRY_WAIT_MS = 45_000;
 const XAI_RETRY_BUDGET_MS = 90_000;
-// Floor for the verifyKey ping. NOT yet measured against a live key — set to
-// Perplexity's known floor as the conservative guess, because the failure it
-// guards against is silent and one-directional: too small and a VALID key is
-// reported invalid (exactly what an 8-token ping copied from the Google adapter
-// did to Perplexity), while too large costs a few tokens once. Clamped inside
-// xaiGenerate so no caller can reintroduce a smaller one.
-// TODO(probe): confirm xAI's real floor and lower this if it allows less.
+// Floor for the verifyKey ping. Set to Perplexity's known floor as a
+// conservative guess, because the failure it guards against is silent and
+// one-directional: too small and a VALID key is reported invalid (exactly what
+// an 8-token ping copied from the Google adapter did to Perplexity), while too
+// large costs a few tokens once.
+//
+// Probed 2026-08-14 against grok-4.6 with a funded key: 16 is ACCEPTED (no
+// "must be at least N" rejection). Not re-tested below 16 — the guess already
+// works, and the failure mode this guards against only bites if the floor
+// creeps UP, not down, so there was nothing to gain from finding the exact
+// minimum. Clamped inside xaiGenerate so no caller can reintroduce a smaller
+// value without re-confirming it.
 const XAI_MIN_MAX_TOKENS = 16;
 
 export class XaiAPIError extends Error {
@@ -1509,6 +1514,25 @@ interface XaiResponsesReply {
  * inline — the same preference the Anthropic path applies to its retrieved-but-
  * not-cited results. xAI's own docs say not every URL in it is referenced in the
  * final answer, so it is the weaker signal of the two.
+ *
+ * A note on the TEXT this function's sources sit alongside, not on the sources
+ * themselves: xAI writes its inline citations directly into the answer text as
+ * markdown, `[[1]](url)` — double-bracketed, unlike the single-bracket
+ * `[label](url)` most tools emit. `response_text` stores that markdown as-is
+ * (no other adapter here needs to strip anything, since Anthropic/OpenAI/Google
+ * keep citation metadata separate from the visible text). Two consequences,
+ * checked live 2026-08-14 against a real captured answer rather than assumed:
+ *   - Mention detection is NOT at risk: `lib/mentions.ts`'s `stripLinkSurfaces`
+ *     blanks any bare `https://...` run independently of bracket nesting, so a
+ *     citation URL whose domain happens to match a tracked brand does not leak
+ *     into the scanned text, even though its markdown-link regex (written for
+ *     single brackets) doesn't recognise xAI's link as a link.
+ *   - Display is cosmetically affected: the dashboard renders `response_text`
+ *     as plain text (no markdown renderer in this app), so a user reading a raw
+ *     Grok answer sees the literal `[[1]](https://...)` characters rather than
+ *     a clean sentence or a rendered link. Not a correctness bug, not fixed
+ *     here — worth a follow-up if raw Grok answers turn out to read poorly in
+ *     the UI once real users see them.
  */
 export function xaiSources(reply: XaiResponsesReply): CitedSource[] {
   const cited: CitedSource[] = [];
@@ -1570,11 +1594,30 @@ function xaiText(reply: XaiResponsesReply): string {
 // Anthropic path already uses. That matters the moment a second tool is offered
 // here — with "required", Grok could satisfy the constraint by calling anything.
 //
-// STILL UNVERIFIED: whether the model then actually browses. A legal parameter
-// that the model ignores is the dangerous case — it looks forced and isn't.
-// Confirm with forced-vs-unforced source counts on a question answerable from
-// memory (probe-xai-forcing) once the key's team has credit, and record the
-// counts here. Until then Grok's grounding is expressible, not proven.
+// Whether the model then actually browses, rather than accepting a legal
+// parameter and ignoring it, needed a funded key — checked 2026-08-14 against
+// grok-4.6 on /v1/responses, forced vs merely offered, source counts compared:
+//
+//   Round 1 — "What is the capital of France?" (answerable from memory)
+//     offered, no tool_choice   5 inline sources
+//     forced (this shape)       5 inline sources
+//
+//   Round 2 — "a headline from the last 48 hours" (NOT answerable from memory,
+//   so a real dated/sourced answer is unambiguous proof a search happened)
+//     offered, no tool_choice   1 inline source, real Aug-14-2026 headline
+//     forced (this shape)       1 inline source, a DIFFERENT real headline
+//
+// Both rounds: identical behaviour forced vs offered. grok-4.6 appears to
+// browse readily whenever the tool is merely available, at least when the
+// prompt itself asks it to search. That is NOT the same finding Anthropic and
+// Gemini gave (there, offering alone measured 0/2) — it may mean this model
+// needs less pushing, or it may mean two data points can't tell the difference
+// between "forcing works" and "this model always searches when it can". This
+// codebase's own standard for ranking behaviour needs more than a couple of
+// prompts (see the Perplexity PR's Wilson-interval discussion), so the honest
+// state is: forcing is accepted, never behaves worse, and its marginal effect
+// over merely offering is UNPROVEN at this sample size. Kept forced anyway —
+// it costs nothing to ask and matches the other providers' shape.
 const XAI_FORCE_SEARCH = { type: "tool", name: "web_search" } as const;
 
 async function xaiRunQuery(
