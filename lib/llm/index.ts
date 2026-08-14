@@ -1516,23 +1516,35 @@ interface XaiResponsesReply {
  * final answer, so it is the weaker signal of the two.
  *
  * A note on the TEXT this function's sources sit alongside, not on the sources
- * themselves: xAI writes its inline citations directly into the answer text as
- * markdown, `[[1]](url)` — double-bracketed, unlike the single-bracket
+ * themselves: xAI CAN write its inline citations directly into the answer text
+ * as markdown, `[[1]](url)` — double-bracketed, unlike the single-bracket
  * `[label](url)` most tools emit. `response_text` stores that markdown as-is
- * (no other adapter here needs to strip anything, since Anthropic/OpenAI/Google
- * keep citation metadata separate from the visible text). Two consequences,
- * checked live 2026-08-14 against a real captured answer rather than assumed:
+ * when present (no other adapter here needs to strip anything, since
+ * Anthropic/OpenAI/Google keep citation metadata separate from the visible
+ * text).
+ *
+ * "Can", not "always does" — checked live twice, 2026-08-14: a forced grok-4.6
+ * probe answer embedded the bracket markdown inline (captured JSON, see the
+ * commit that added this note), but a real dashboard run against grok-4.3 with
+ * the same forcing shape came back with 18 real sources and ZERO inline
+ * brackets in the visible text — citations arrived purely as separate
+ * annotation metadata that `xaiSources` above reads regardless. So the display
+ * concern below is a "sometimes", not an "every Grok answer" — worth knowing
+ * before assuming a fix is needed, not before knowing the format could appear.
+ *
+ * Two consequences on the occasions the brackets ARE present:
  *   - Mention detection is NOT at risk: `lib/mentions.ts`'s `stripLinkSurfaces`
  *     blanks any bare `https://...` run independently of bracket nesting, so a
  *     citation URL whose domain happens to match a tracked brand does not leak
  *     into the scanned text, even though its markdown-link regex (written for
- *     single brackets) doesn't recognise xAI's link as a link.
+ *     single brackets) doesn't recognise xAI's link as a link. Verified against
+ *     an actual captured citation string, not assumed.
  *   - Display is cosmetically affected: the dashboard renders `response_text`
  *     as plain text (no markdown renderer in this app), so a user reading a raw
- *     Grok answer sees the literal `[[1]](https://...)` characters rather than
- *     a clean sentence or a rendered link. Not a correctness bug, not fixed
- *     here — worth a follow-up if raw Grok answers turn out to read poorly in
- *     the UI once real users see them.
+ *     Grok answer that DID get inline brackets sees the literal
+ *     `[[1]](https://...)` characters rather than a clean sentence or a
+ *     rendered link. Not a correctness bug, not fixed here — worth a follow-up
+ *     only if this turns out to be common enough that real users notice it.
  */
 export function xaiSources(reply: XaiResponsesReply): CitedSource[] {
   const cited: CitedSource[] = [];

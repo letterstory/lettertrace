@@ -43,7 +43,11 @@ const repoRoot = resolve(here, "..");
 
 function loadEnvLocal(): void {
   const raw = readFileSync(resolve(repoRoot, ".env.local"), "utf8");
-  for (const line of raw.split("\n")) {
+  // Split on /\r?\n/, not "\n": on a CRLF file every line keeps a trailing \r,
+  // and `.` in a JS regex can never consume \r (it's a line terminator), so
+  // (.*)$ never reaches end-of-string and the whole line fails to match --
+  // silently, for every variable, not just one. Reproduced live 2026-08-14.
+  for (const line of raw.split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
     if (!m) continue;
     const value = m[2].trim().replace(/^["']|["']$/g, "");
