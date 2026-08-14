@@ -72,6 +72,18 @@ const RATES: Record<Provider, { models: Record<string, number>; fallback: number
     },
     fallback: 12,
   },
+  // Published output rates are $0.87 (Pro) and $0.28 (Flash) per Mtok — an
+  // order of magnitude under everything else here. Rounded UP to whole dollars,
+  // and the fallback sits well above both, because DeepSeek has announced a
+  // significant price rise with no figure attached: under-charging silently is
+  // the failure this table exists to prevent.
+  deepseek: {
+    models: {
+      "deepseek-v4-pro": 1,
+      "deepseek-v4-flash": 1,
+    },
+    fallback: 5,
+  },
 };
 
 /**

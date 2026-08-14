@@ -10,6 +10,7 @@ vi.mock("@/lib/data", () => ({
 }));
 
 import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
+import { PROVIDER_LIST } from "@/lib/models";
 import type { Provider, RouterId } from "@/lib/types";
 import {
   resolveKey,
@@ -67,10 +68,12 @@ const TRIAL_VARS = [
   "TRIAL_GOOGLE_API_KEY",
   "TRIAL_PERPLEXITY_API_KEY",
   "TRIAL_XAI_API_KEY",
+  "TRIAL_DEEPSEEK_API_KEY",
   "TRIAL_ANTHROPIC_MODEL",
   "TRIAL_OPENAI_MODEL",
   "TRIAL_GOOGLE_MODEL",
   "TRIAL_XAI_MODEL",
+  "TRIAL_DEEPSEEK_MODEL",
   "TRIAL_RUN_LIMIT",
 ] as const;
 
@@ -123,6 +126,7 @@ describe("auxiliary fallback order", () => {
       "google",
       "perplexity",
       "xai",
+      "deepseek",
     ]);
   });
 
@@ -133,21 +137,25 @@ describe("auxiliary fallback order", () => {
       "openai",
       "perplexity",
       "xai",
+      "deepseek",
     ]);
-    expect(await askedOrder("xai")).toEqual([
-      "xai",
+    expect(await askedOrder("deepseek")).toEqual([
+      "deepseek",
       "anthropic",
       "openai",
       "google",
       "perplexity",
+      "xai",
     ]);
   });
 
+  // Derived from the catalog, so this stays honest as providers are added
+  // rather than pinning a length that has to be edited every time.
   it("asks about every provider exactly once", async () => {
-    for (const p of ["anthropic", "openai", "google", "perplexity", "xai"] as Provider[]) {
+    for (const p of PROVIDER_LIST.map((i) => i.id)) {
       const order = await askedOrder(p);
       expect(new Set(order).size).toBe(order.length);
-      expect(order).toHaveLength(5);
+      expect(order).toHaveLength(PROVIDER_LIST.length);
     }
   });
 
@@ -164,6 +172,38 @@ describe("auxiliary fallback order", () => {
     expect(k.apiKey).toBe("xai-only-key");
     // and it still reports what was ASKED for, not what answered
     expect(k.requested.provider).toBe("anthropic");
+  });
+});
+
+// An engine that cannot browse must be refused for a grounded project no
+// matter what credential the user holds. The gate lives ahead of every
+// credential branch precisely so a perfectly good key can't route around it.
+describe("an engine that can't ground", () => {
+  it("refuses a grounded project even when the user owns that provider's key", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-deepseek-own");
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: true });
+    expect(k.source).toBe("ungrounded");
+    expect(k.apiKey).toBeUndefined(); // never hands back a key it won't let you use
+    expect(engineKeyMessage(k)).toMatch(/can't search/i);
+  });
+
+  it("refuses before spending a trial key on it", async () => {
+    process.env.TRIAL_DEEPSEEK_API_KEY = "sk-deepseek-trial";
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: true });
+    expect(k.source).toBe("ungrounded");
+  });
+
+  it("serves the same engine happily when the project isn't grounded", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-deepseek-own");
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: false });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("sk-deepseek-own");
+  });
+
+  it("does not block engines that can browse", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-own");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(k.source).toBe("own");
   });
 });
 

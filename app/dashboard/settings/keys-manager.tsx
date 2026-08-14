@@ -72,6 +72,14 @@ const PROVIDER_STYLE: Record<
     chipClass: "bg-ink/5 border border-ink/10",
     monogram: "xAI",
   },
+  deepseek: {
+    title: "DeepSeek",
+    // Says the limitation on the card, where the choice is actually being made,
+    // rather than leaving it to be discovered as a refused run later.
+    subtitle: "DeepSeek API key · answers from memory, no web search",
+    chipClass: "bg-ink/5 border border-ink/10",
+    monogram: "DS",
+  },
 };
 
 export default function KeysManager({

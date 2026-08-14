@@ -6,7 +6,13 @@ import {
   getDecryptedRouterKeys,
   type DecryptedRouterKey,
 } from "@/lib/data";
-import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
+import {
+  defaultModelFor,
+  modelLabel,
+  providerCanMeasure,
+  providerRefusalMessage,
+  PROVIDERS,
+} from "@/lib/models";
 import {
   ROUTERS,
   ROUTER_LIST,
@@ -54,6 +60,7 @@ const TRIAL_KEY_ENV: Record<Provider, string> = {
   google: "TRIAL_GOOGLE_API_KEY",
   perplexity: "TRIAL_PERPLEXITY_API_KEY",
   xai: "TRIAL_XAI_API_KEY",
+  deepseek: "TRIAL_DEEPSEEK_API_KEY",
 };
 
 const TRIAL_MODEL_ENV: Record<Provider, string> = {
@@ -62,6 +69,7 @@ const TRIAL_MODEL_ENV: Record<Provider, string> = {
   google: "TRIAL_GOOGLE_MODEL",
   perplexity: "TRIAL_PERPLEXITY_MODEL",
   xai: "TRIAL_XAI_MODEL",
+  deepseek: "TRIAL_DEEPSEEK_MODEL",
 };
 
 // Derived from the env map above rather than written out again, so a provider
@@ -154,7 +162,13 @@ export type KeySource =
   // measure it comparably — a distinct state from "no key", because the fix is
   // different (switch engine, turn off web search, or add a direct key) and
   // because running it anyway would produce data that looks fine and isn't.
-  | "unroutable";
+  | "unroutable"
+  // The engine itself can't ground: this project wants live-web answers and the
+  // provider's API has no search at all. Distinct from 'unroutable' because no
+  // credential can fix it — the fix is the project's grounding setting or a
+  // different engine, and saying "your router can't measure this" to someone
+  // holding a direct key would be nonsense. See providerCanMeasure.
+  | "ungrounded";
 
 export interface ResolvedKey {
   source: KeySource;
@@ -335,6 +349,16 @@ export async function resolveRunKeyFor(
   const requested = { provider, model: model || defaultModelFor(provider) };
   const base = { provider, model: requested.model, requested };
 
+  // Before any credential question: can this engine even produce the kind of
+  // answer the project asked for? A provider whose API cannot browse must not
+  // serve a grounded project on ANY credential, so this outranks every branch
+  // below — finding a perfectly good key first and refusing afterwards would
+  // just be a slower way to reach the same answer, and an easy one to forget in
+  // one of the paths. See providerCanMeasure.
+  if (!providerCanMeasure(provider, { webSearch: opts.webSearch })) {
+    return { ...base, source: "ungrounded", refusal: providerRefusalMessage(provider) };
+  }
+
   const own = await getDecryptedKey(supabase, userId, provider);
   if (own) return { ...base, source: "own", apiKey: own };
 
@@ -464,8 +488,12 @@ export function engineKeyMessage(key: ResolvedKey): string {
   const providerLabel = PROVIDERS[key.requested.provider].label;
 
   // Composed by the resolver, which is the only place that still knows which
-  // router refused and why.
-  if (key.source === "unroutable" && key.refusal) return key.refusal;
+  // router refused and why. 'ungrounded' carries its refusal the same way — the
+  // reason differs (the engine can't search at all, rather than the credential
+  // not carrying its search) but both arrive pre-written and naming the fix.
+  if ((key.source === "unroutable" || key.source === "ungrounded") && key.refusal) {
+    return key.refusal;
+  }
 
   if (key.source === "exhausted") {
     // The spend ceiling and the run ceiling are different refusals. Someone

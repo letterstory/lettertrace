@@ -40,7 +40,15 @@ export async function POST() {
   // 'unroutable' belongs here too: the user holds a credential that reaches this
   // engine, but not one that can measure it comparably. engineKeyMessage carries
   // the reason and the fix.
-  if (key.source === "none" || key.source === "mismatch" || key.source === "unroutable") {
+  // 'ungrounded' joins them for the same reason, one layer further down: the
+  // engine itself can't search, so no credential would make this run
+  // comparable with the ones already on the trend line.
+  if (
+    key.source === "none" ||
+    key.source === "mismatch" ||
+    key.source === "unroutable" ||
+    key.source === "ungrounded"
+  ) {
     return NextResponse.json(
       {
         error: engineKeyMessage(key),

@@ -293,6 +293,8 @@ const DIRECT_SHAPE: Record<Provider, CallShape> = {
   // response_format, so it wants OpenAI's phrasing rather than a shape of its
   // own. Only the ANSWER path differs (the Responses API, below).
   xai: "openai-chat",
+  // Genuinely chat-completions shaped, and wants OpenAI's JSON-object phrasing.
+  deepseek: "openai-chat",
 };
 
 function callShape(opts: BaseCall, model: string): CallShape {
@@ -339,6 +341,8 @@ async function utilityChat(
       return perplexityChat(opts.apiKey, model, system, user, maxTokens);
     case "xai":
       return xaiChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "deepseek":
+      return deepseekChat(opts.apiKey, model, system, user, maxTokens, json);
     case "openai":
       return openaiChat(opts.apiKey, model, system, user, maxTokens, json);
   }
@@ -363,6 +367,8 @@ export async function verifyKey(
       // than send as-is — see XAI_MIN_MAX_TOKENS for why a too-small ping is how
       // a valid key gets reported invalid.
       await xaiChat(apiKey, "grok-4.3", undefined, "ping", 8);
+    } else if (provider === "deepseek") {
+      await deepseekChat(apiKey, "deepseek-v4-flash", undefined, "ping", 8);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -550,6 +556,12 @@ export async function runQuery(
   // its own branch rather than splitting across the shared web-search one below.
   if (opts.provider === "xai") {
     return xaiRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
+  }
+  // DeepSeek can't browse, so it ignores the toggle the way Perplexity ignores
+  // it in the other direction. A grounded project never gets this far — see
+  // providerCanMeasure — so this is the ungrounded case by construction.
+  if (opts.provider === "deepseek") {
+    return deepseekRunQuery(opts.apiKey, opts.model, opts.prompt);
   }
   if (!webSearch) {
     const res =
@@ -878,6 +890,26 @@ interface GoogleResponse {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Seconds from a Retry-After header, in either form the spec allows: a delta in
+ * seconds, or an HTTP date.
+ *
+ * Shared by every adapter that honours the header (Perplexity, xAI, DeepSeek) —
+ * they had begun to accumulate byte-identical private copies, and the HTTP-date
+ * branch is the kind of thing that gets dropped when the third copy is written
+ * from memory. Google is the exception and stays separate: its wait arrives
+ * inside a google.rpc.RetryInfo detail rather than a header.
+ */
+function retryAfterSeconds(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return secs;
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
+  return undefined;
+}
+
 // Map the "google-ai-overviews" pseudo-model onto a real Gemini model so it
 // never reaches the wire; every other id passes through untouched.
 function resolveGoogleModel(model: string): string {
@@ -1164,17 +1196,6 @@ interface PerplexityResponse {
   detail?: unknown;
 }
 
-/** Seconds from a Retry-After header, which may be a delta or an HTTP date. */
-function perplexityRetryAfterSec(res: Response): number | undefined {
-  const raw = res.headers.get("retry-after");
-  if (!raw) return undefined;
-  const secs = Number(raw);
-  if (Number.isFinite(secs) && secs >= 0) return secs;
-  const when = Date.parse(raw);
-  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
-  return undefined;
-}
-
 async function perplexityFetch(apiKey: string, body: unknown): Promise<PerplexityResponse> {
   let lastErr: unknown;
   let sleptMs = 0;
@@ -1196,7 +1217,7 @@ async function perplexityFetch(apiKey: string, body: unknown): Promise<Perplexit
         errBody.error?.message ??
           (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
           `Perplexity API error (${res.status}).`,
-        perplexityRetryAfterSec(res),
+        retryAfterSeconds(res),
       );
       if (!PERPLEXITY_RETRYABLE.has(res.status)) throw perr;
       lastErr = perr;
@@ -1391,17 +1412,6 @@ export class XaiAPIError extends Error {
   }
 }
 
-/** Seconds from a Retry-After header, which may be a delta or an HTTP date. */
-function xaiRetryAfterSec(res: Response): number | undefined {
-  const raw = res.headers.get("retry-after");
-  if (!raw) return undefined;
-  const secs = Number(raw);
-  if (Number.isFinite(secs) && secs >= 0) return secs;
-  const when = Date.parse(raw);
-  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
-  return undefined;
-}
-
 /** POST to one of xAI's two surfaces, with the shared retry policy. */
 async function xaiFetch<T>(path: "/chat/completions" | "/responses", apiKey: string, body: unknown): Promise<T> {
   let lastErr: unknown;
@@ -1426,7 +1436,7 @@ async function xaiFetch<T>(path: "/chat/completions" | "/responses", apiKey: str
         (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
         (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
         `xAI API error (${res.status}).`;
-      const xerr = new XaiAPIError(res.status, message, xaiRetryAfterSec(res));
+      const xerr = new XaiAPIError(res.status, message, retryAfterSeconds(res));
       if (!XAI_RETRYABLE.has(res.status)) throw xerr;
       lastErr = xerr;
     } catch (err) {
@@ -1658,6 +1668,164 @@ async function xaiRunQuery(
     throw new Error("xAI returned an empty answer.");
   }
   return { text, tokens, sources: webSearch ? xaiSources(reply) : [] };
+}
+
+// ==================================================================
+// DeepSeek
+//
+// The only engine in the catalog that cannot browse, and the reason
+// ProviderSearch exists. DeepSeek's API documents `function` tools only —
+// caller-executed — so "grounding" would mean us running the search and handing
+// results back, which measures OUR search engine wearing DeepSeek's label. Web
+// search is a feature of their consumer app, not of the API. lib/models refuses
+// a grounded project on this provider (providerCanMeasure) before a call is
+// ever made; nothing here has to defend against it, but nothing here may
+// quietly answer one either.
+//
+// Raw fetch rather than the OpenAI SDK with a base URL, even though DeepSeek is
+// OpenAI-compatible enough for that to work. Two reasons, in order:
+//
+//   1. The SDK resolves its own fetch internally, so an SDK-backed adapter
+//      cannot be asserted at the wire level by this suite's mocked-fetch
+//      harness. Every other adapter here proves what it puts on the wire; one
+//      that can only be tested through its return value is the one where a
+//      wrong host or a stray search parameter would go unnoticed.
+//   2. DeepSeek's error semantics are its own — 402 is a spent prepaid balance,
+//      not a card problem — and mapping them needs its own error type.
+//
+// The cost is a retry loop that looks like googleFetch's and perplexityFetch's.
+// Those two are already near-identical for the same reason; per-provider
+// transports are the established shape in this file.
+// ==================================================================
+
+const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_TIMEOUT_MS = 60_000;
+const DEEPSEEK_MAX_ATTEMPTS = 4;
+const DEEPSEEK_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const DEEPSEEK_MAX_RETRY_WAIT_MS = 45_000;
+const DEEPSEEK_RETRY_BUDGET_MS = 90_000;
+
+export class DeepseekAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "DeepseekAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+interface DeepseekResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  error?: { message?: string } | string;
+}
+
+async function deepseekFetch(apiKey: string, body: unknown): Promise<DeepseekResponse> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < DEEPSEEK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(DEEPSEEK_API_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as DeepseekResponse;
+      const errBody = (await res.json().catch(() => ({}))) as DeepseekResponse;
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        `DeepSeek API error (${res.status}).`;
+      const derr = new DeepseekAPIError(res.status, message, retryAfterSeconds(res));
+      if (!DEEPSEEK_RETRYABLE.has(res.status)) throw derr;
+      lastErr = derr;
+    } catch (err) {
+      if (err instanceof DeepseekAPIError && !DEEPSEEK_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= DEEPSEEK_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof DeepseekAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > DEEPSEEK_MAX_RETRY_WAIT_MS || sleptMs + waitMs > DEEPSEEK_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("DeepSeek request failed.");
+}
+
+/** Utility-call helper, matching the other providers' chat helpers. */
+async function deepseekChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await deepseekFetch(apiKey, {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    // DeepSeek V4 has "thinking mode" ON by default, effort "high" per its own
+    // docs, and reasoning shares the SAME max_tokens as the visible answer --
+    // the identical failure shape as Gemini's thinking tokens (see
+    // GOOGLE_THINKING_HEADROOM), confirmed live 2026-08-14: the verifyKey ping
+    // (8 tokens) came back "empty answer (finish_reason: length)" — the entire
+    // budget was spent on hidden reasoning before a single visible token could
+    // be written. Disabled outright rather than padded with headroom the way
+    // Gemini's is: unlike Gemini, DeepSeek exposes a real off switch, and every
+    // call this adapter makes (a tiny ping, a structured classification, a
+    // company-listing answer) is a task that doesn't need chain-of-thought.
+    // Leaving it on would also make DeepSeek's cost and truncation risk
+    // unpredictable in a way no other engine here is, for no measured benefit.
+    thinking: { type: "disabled" },
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // A 200 carrying no usable answer is an error, not an empty measurement: it
+  // would be stored, scanned for zero mentions, and charted as "the brand
+  // wasn't named". Same guard as googleGenerate and perplexityGenerate.
+  if (!choice) {
+    throw new Error("DeepSeek returned no answer (the response contained no choices).");
+  }
+  if (!text) {
+    throw new Error(
+      `DeepSeek returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+async function deepseekRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+): Promise<QueryResult> {
+  // No webSearch parameter, and that is the point rather than an omission. A
+  // grounded project never reaches this function (providerCanMeasure refuses it
+  // at resolveRunKeyFor), and an ungrounded one has nothing to ask for. Sources
+  // are always empty because the model never looked anything up — recording a
+  // citation here would be inventing one.
+  const res = await deepseekChat(apiKey, model, undefined, prompt, ANSWER_MAX_TOKENS);
+  return { ...res, sources: [] };
 }
 
 // Prompt shape is the single biggest lever on whether a run measures anything.
@@ -2066,6 +2234,28 @@ export function humanError(err: unknown): string {
       );
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof DeepseekAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    // DeepSeek runs on a prepaid balance and calls this one out by name in its
+    // docs. A good key simply stops working when the balance hits zero, so
+    // "Provider error (402)" would send someone hunting for a bad key.
+    if (err.status === 402) {
+      return "This DeepSeek key is out of balance. Top it up in the DeepSeek platform console.";
+    }
+    if (err.status === 429) {
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` DeepSeek asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `DeepSeek rejected the request: this key is over its rate limit.${wait} ` +
+        `Check your rate limits and balance in the DeepSeek platform console, or wait and run again.`
+      );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof XaiAPIError) {

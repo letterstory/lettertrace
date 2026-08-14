@@ -328,6 +328,7 @@ const OPENROUTER_UPSTREAM: Record<Provider, string> = {
   google: "google-vertex",
   perplexity: "perplexity",
   xai: "xai",
+  deepseek: "deepseek",
 };
 
 /** Display order for the settings cards and CLI listing: Merge leads. */

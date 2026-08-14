@@ -116,6 +116,7 @@ const ANSWER_MODEL: Record<Provider, string> = {
   google: "gemini-pro-latest",
   perplexity: "sonar-pro",
   xai: "grok-4.6",
+  deepseek: "deepseek-v4-pro",
 };
 
 // Rough blended $/1M tokens, only for an order-of-magnitude spend estimate.
@@ -129,6 +130,8 @@ const BLENDED_COST_PER_MTOK: Record<Provider, number> = {
   // Grok 4.6's own tiered rate, blended: the pilot's requests sit well under
   // the 200k-token threshold where xAI's higher tier starts.
   xai: 5,
+  // An order of magnitude cheaper than everything else here; see lib/pricing.
+  deepseek: 1,
 };
 
 // --- concurrency ----------------------------------------------------------
@@ -196,6 +199,7 @@ function keyFor(provider: Provider): string {
     google: "TRIAL_GOOGLE_API_KEY",
     perplexity: "TRIAL_PERPLEXITY_API_KEY",
     xai: "TRIAL_XAI_API_KEY",
+    deepseek: "TRIAL_DEEPSEEK_API_KEY",
   };
   const k = process.env[env[provider]];
   if (!k) throw new Error(`Missing ${env[provider]} in .env.local`);

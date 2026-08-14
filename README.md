@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, and Grok (xAI). Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI / DeepSeek keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, Grok (xAI), and DeepSeek. Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -40,12 +40,32 @@ For each answer the model returns, Lettertrace:
 2. **LLM enrichment**, for the entities that were mentioned, a structured call classifies **sentiment** and whether the answer **recommended** them.
 3. **Aggregation**, visibility (mention rate), **share of voice**, average prominence, and sentiment are computed per run and trended over time.
 
+### Not every engine can browse
+
+Answer engines differ in whether they can search the live web, and Lettertrace
+treats that as a property of the engine rather than something to paper over:
+
+| | Engines | With web search **on** |
+|---|---|---|
+| **Always searches** | Perplexity Sonar, Google AI Overviews | Grounded; the project toggle is ignored |
+| **Searches on request** | Claude, ChatGPT, Gemini, Grok | Grounded, and the browse is **forced** rather than offered |
+| **Cannot search** | DeepSeek | **The run is refused** |
+
+DeepSeek's API has no server-side browsing — its documented tools are
+caller-executed functions, and web search exists only in its consumer app.
+Running your prompts through it with web search on would answer from the model's
+memory and record that as a search-grounded measurement, so Lettertrace refuses
+instead and tells you the two fixes: turn web search off for that project, or
+pick another engine. With web search off, DeepSeek measures exactly what it is —
+what the model recalls about your brand — and that is a legitimate thing to
+track, just not the same number as a grounded run.
+
 ## Tech stack
 
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), and xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations)
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations), and DeepSeek (memory-only — see below)
 
 ## Getting started
 
