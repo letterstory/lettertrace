@@ -3,6 +3,7 @@ import { DM_Sans, DM_Mono, Ibarra_Real_Nova } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme";
 import { RB2BPixel } from "@/components/rb2b-pixel";
+import { PostHogAnalytics } from "@/components/posthog";
 import { publicEnvScript } from "@/lib/public-env";
 
 const dmSans = DM_Sans({
@@ -80,6 +81,7 @@ export default function RootLayout({
       <body>
         <ThemeProvider>{children}</ThemeProvider>
         <RB2BPixel />
+        <PostHogAnalytics />
       </body>
     </html>
   );
