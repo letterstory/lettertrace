@@ -61,6 +61,7 @@ const TRIAL_KEY_ENV: Record<Provider, string> = {
   perplexity: "TRIAL_PERPLEXITY_API_KEY",
   xai: "TRIAL_XAI_API_KEY",
   deepseek: "TRIAL_DEEPSEEK_API_KEY",
+  meta: "TRIAL_META_API_KEY",
 };
 
 const TRIAL_MODEL_ENV: Record<Provider, string> = {
@@ -70,6 +71,7 @@ const TRIAL_MODEL_ENV: Record<Provider, string> = {
   perplexity: "TRIAL_PERPLEXITY_MODEL",
   xai: "TRIAL_XAI_MODEL",
   deepseek: "TRIAL_DEEPSEEK_MODEL",
+  meta: "TRIAL_META_MODEL",
 };
 
 // Derived from the env map above rather than written out again, so a provider

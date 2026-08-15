@@ -84,6 +84,15 @@ const RATES: Record<Provider, { models: Record<string, number>; fallback: number
     },
     fallback: 5,
   },
+  // Published output rate is $4.25/Mtok, rounded up. Fallback padded well above
+  // it since this is a brand-new product (public preview since April 2026) with
+  // no pricing track record yet to trust past its current published figure.
+  meta: {
+    models: {
+      "muse-spark-1.2": 5,
+    },
+    fallback: 8,
+  },
 };
 
 /**

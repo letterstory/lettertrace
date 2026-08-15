@@ -80,6 +80,12 @@ const PROVIDER_STYLE: Record<
     chipClass: "bg-ink/5 border border-ink/10",
     monogram: "DS",
   },
+  meta: {
+    title: "Meta",
+    subtitle: "Meta Model API key · Muse Spark",
+    chipClass: "bg-ink/5 border border-ink/10",
+    monogram: "M",
+  },
 };
 
 export default function KeysManager({

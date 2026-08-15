@@ -10,7 +10,8 @@ export type Provider =
   | "google"
   | "perplexity"
   | "xai"
-  | "deepseek";
+  | "deepseek"
+  | "meta";
 
 // LLM routers are credentials, not providers, so they get their own union and
 // stay out of `Provider` — which is what keeps `runs.provider` meaning "whose

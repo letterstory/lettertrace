@@ -181,6 +181,27 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
       { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", note: "Fast & cheap" },
     ],
   },
+  meta: {
+    id: "meta",
+    label: "Meta (Muse Spark)",
+    keyUrl: "https://dev.meta.ai/",
+    // Meta issues LLM|<digits>|<token> keys — distinctive, not sk-prefixed.
+    // Same caveat as DeepSeek's: this is a form hint only, every key is
+    // verified against its own provider before storage regardless of shape.
+    keyPrefix: "LLM|",
+    // Optional pending a live probe (2026-08-15): Meta's own docs offer a
+    // web_search tool but document no tool_choice/forcing parameter at all --
+    // "the model decides autonomously whether to search." Whether it grounds
+    // reliably enough to be measured the way Claude/GPT/Gemini are is what the
+    // probe answers; this may need to drop to a more conservative stance if it
+    // doesn't, the same way Grok's forcing effect remains an open question.
+    search: "optional",
+    // Only the current flagship. `muse-spark-1.1` is the prior generation at
+    // identical pricing (no reason to offer it new), and the `-contributor`
+    // variant opts your traffic into improving Meta's own products, which is
+    // not something to default anyone into.
+    models: [{ id: "muse-spark-1.2", label: "Muse Spark 1.2", note: "Most capable" }],
+  },
 };
 
 export const PROVIDER_LIST: ProviderInfo[] = Object.values(PROVIDERS);
@@ -291,6 +312,7 @@ const ANALYSIS_MODEL_ENV: Record<Provider, string> = {
   perplexity: "ANALYSIS_PERPLEXITY_MODEL",
   xai: "ANALYSIS_XAI_MODEL",
   deepseek: "ANALYSIS_DEEPSEEK_MODEL",
+  meta: "ANALYSIS_META_MODEL",
 };
 
 const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
@@ -305,6 +327,15 @@ const ANALYSIS_MODEL_DEFAULT: Record<Provider, string> = {
   // Flash is a third the price of Pro on output and classification is a
   // structured-JSON judgment, not a reasoning task.
   deepseek: "deepseek-v4-flash",
+  // Deliberate exception: this is the ONLY provider where the analysis id
+  // equals defaultModelFor's — Meta ships a single model, no separate cheap
+  // tier the way every other provider's catalog does. The cost/quality lever
+  // here is reasoning_effort, not model choice: the adapter hardcodes
+  // "minimal" for every utility call (see metaChat in lib/llm/index.ts) and
+  // "low" for answers, so classification is still cheaper in practice even
+  // though the id can't say so. The usual "must differ from the default" test
+  // gets a documented skip for this one provider rather than a silent gap.
+  meta: "muse-spark-1.2",
 };
 
 // Sentiment/recommendation enrichment is a simple structured-JSON judgment;

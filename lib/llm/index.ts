@@ -295,6 +295,9 @@ const DIRECT_SHAPE: Record<Provider, CallShape> = {
   xai: "openai-chat",
   // Genuinely chat-completions shaped, and wants OpenAI's JSON-object phrasing.
   deepseek: "openai-chat",
+  // Utility surface really is chat-completions; the answer path is the
+  // Responses API, mirroring xAI's split.
+  meta: "openai-chat",
 };
 
 function callShape(opts: BaseCall, model: string): CallShape {
@@ -343,6 +346,8 @@ async function utilityChat(
       return xaiChat(opts.apiKey, model, system, user, maxTokens, json);
     case "deepseek":
       return deepseekChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "meta":
+      return metaChat(opts.apiKey, model, system, user, maxTokens, json);
     case "openai":
       return openaiChat(opts.apiKey, model, system, user, maxTokens, json);
   }
@@ -369,6 +374,17 @@ export async function verifyKey(
       await xaiChat(apiKey, "grok-4.3", undefined, "ping", 8);
     } else if (provider === "deepseek") {
       await deepseekChat(apiKey, "deepseek-v4-flash", undefined, "ping", 8);
+    } else if (provider === "meta") {
+      // NOT an 8-token ping like the others. Measured live 2026-08-15: even
+      // at reasoning_effort:"minimal", a trivial "ping" still spends a
+      // reasoning-token count that swings widely between calls (samples from
+      // 5 up to 79) before any visible token -- minimal reduces reasoning
+      // cost, it does not remove it the way DeepSeek's thinking:"disabled"
+      // does. 100 tokens looked safe across one batch of samples and then
+      // failed live in the dashboard on the very next real key save. 300
+      // still costs a fraction of a cent and comfortably clears every
+      // reasoning-token sample measured so far.
+      await metaChat(apiKey, "muse-spark-1.2", undefined, "ping", 300);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -562,6 +578,11 @@ export async function runQuery(
   // providerCanMeasure — so this is the ungrounded case by construction.
   if (opts.provider === "deepseek") {
     return deepseekRunQuery(opts.apiKey, opts.model, opts.prompt);
+  }
+  // Meta answers on the Responses API whether or not it is browsing, same
+  // reasoning as xAI's branch above.
+  if (opts.provider === "meta") {
+    return metaRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
   }
   if (!webSearch) {
     const res =
@@ -1828,6 +1849,264 @@ async function deepseekRunQuery(
   return { ...res, sources: [] };
 }
 
+// ==================================================================
+// Meta (Muse Spark, via the Meta Model API)
+//
+// Not the retired Llama API (llama.developer.meta.com, sunset 2026-07-06) --
+// a different, currently-active product Meta launched in its place. Raw fetch,
+// matching DeepSeek's and xAI's shape rather than the OpenAI SDK, for the same
+// reason: this suite asserts on the actual wire body, and an SDK-backed
+// adapter can only be checked through its return value.
+//
+// Two surfaces, mirroring xAI's split: /chat/completions for utility work,
+// /responses for monitored answers, since that is where Meta's own
+// search-grounding cookbook puts the web_search tool.
+//
+// reasoning_effort is set on EVERY call this adapter makes, never left unset.
+// Meta's own docs say the default "is still being finalized" -- an admitted
+// unknown, not a safe one to leave alone. That is the DeepSeek lesson applied
+// before a live call, not after one: DeepSeek's thinking mode defaulted to
+// "high" and reasoning shares the same token budget as the visible answer,
+// which turned an 8-token verifyKey ping into an empty answer. Muse Spark's
+// docs describe the identical budget-sharing behaviour ("reasoning_tokens are
+// part of completion_tokens"), so the same failure is available here on day
+// one if a default ever lands on something expensive. "minimal" for utility
+// calls (classification/suggestion have no use for chain-of-thought), "low"
+// for answers (some benefit for a real monitored question, without inviting
+// the failure mode a high default would risk).
+// ==================================================================
+
+const META_API_BASE = "https://api.meta.ai/v1";
+const META_TIMEOUT_MS = 60_000;
+const META_MAX_ATTEMPTS = 4;
+const META_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const META_MAX_RETRY_WAIT_MS = 45_000;
+const META_RETRY_BUDGET_MS = 90_000;
+
+export class MetaAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "MetaAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+interface MetaChatResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  error?: { message?: string } | string;
+}
+
+async function metaFetch<T>(
+  path: "/chat/completions" | "/responses",
+  apiKey: string,
+  body: unknown,
+): Promise<T> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < META_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${META_API_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(META_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const errBody = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+      };
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        `Meta API error (${res.status}).`;
+      const merr = new MetaAPIError(res.status, message, retryAfterSeconds(res));
+      if (!META_RETRYABLE.has(res.status)) throw merr;
+      lastErr = merr;
+    } catch (err) {
+      if (err instanceof MetaAPIError && !META_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= META_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof MetaAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > META_MAX_RETRY_WAIT_MS || sleptMs + waitMs > META_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("Meta request failed.");
+}
+
+/** Utility-call helper, matching the other providers' chat helpers. */
+async function metaChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await metaFetch<MetaChatResponse>("/chat/completions", apiKey, {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    // See the section header: never left unset. Every call this adapter makes
+    // for utility work is a structured-JSON judgment with no use for extended
+    // reasoning, so this is the cheapest tier rather than a guess at "safe".
+    reasoning_effort: "minimal",
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // A 200 carrying no usable answer is an error, not an empty measurement --
+  // same guard as every other adapter here, and the exact shape of failure
+  // reasoning_effort above exists to prevent (reasoning eating the budget
+  // before any visible token is written).
+  if (!choice) {
+    throw new Error("Meta returned no answer (the response contained no choices).");
+  }
+  if (!text) {
+    throw new Error(
+      `Meta returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+interface MetaResponsesReply {
+  output?: {
+    type?: string;
+    // Present (value "commentary") on the throwaway "I'll look that up for
+    // you" message a search turn emits before its web_search_call items;
+    // absent on the real final answer and on every message when search is
+    // off. Measured live 2026-08-15: a 2-search grounded call returned TWO
+    // message items, commentary first, real answer last -- concatenating
+    // both (the original bug here) stored the commentary sentence glued
+    // onto the front of the real answer.
+    phase?: string;
+    content?: {
+      type?: string;
+      text?: string;
+      annotations?: { type?: string; url?: string; title?: string }[];
+    }[];
+  }[];
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * Sources from a Meta answer. Exported for tests.
+ *
+ * Unlike xAI, Meta's own docs describe `annotations[].title` as the source's
+ * real page title, not a citation-number label. Measured live 2026-08-15
+ * across several grounded answers: presence is prompt-dependent, not
+ * missing. A plain "list the top 5..." prompt came back with empty
+ * annotations despite two completed web_search_call actions in the same
+ * reply, but two "what is the best X" / "how do I..." prompts through the
+ * real pilot harness both returned real citations -- one of them the
+ * project's own domain. Don't assume a Meta run has zero sources just
+ * because one earlier prompt shape didn't attach any.
+ */
+export function metaSources(reply: MetaResponsesReply): CitedSource[] {
+  const raw: CitedSource[] = [];
+  for (const item of reply.output ?? []) {
+    for (const c of item.content ?? []) {
+      for (const a of c.annotations ?? []) {
+        if (a.type && a.type !== "url_citation") continue;
+        const s = a.url ? safeSource(a.url, a.title ?? null, null) : null;
+        if (s) raw.push(s);
+      }
+    }
+  }
+  return dedupeSources(raw);
+}
+
+function metaText(reply: MetaResponsesReply): string {
+  let text = "";
+  for (const item of reply.output ?? []) {
+    if (item.type !== "message" || item.phase === "commentary") continue;
+    for (const c of item.content ?? []) {
+      if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+    }
+  }
+  return text.trim();
+}
+
+// Probed live 2026-08-15, three real calls against Muse Spark: no tools, tools
+// offered with no tool_choice, then this shape. `tool_choice: {type:"web_search"}`
+// was rejected outright with HTTP 400 "`tool_choice` did not match any
+// supported type" -- not silently ignored, genuinely unsupported. Confirms
+// Meta's own docs ("the model decides autonomously") rather than just being
+// silent on the point the way Grok's were. Left permanently unset;
+// metaRunQuery only offers the tool.
+const META_FORCE_SEARCH: Record<string, unknown> | undefined = undefined;
+
+// A grounded call's tool-calling turns count against the SAME output budget
+// as the answer, same class of bug as the reasoning-token one above but far
+// bigger: measured live 2026-08-15 on an open-ended "best CDN" question, Muse
+// Spark ran one search plus THREE full open_page fetches before writing a
+// word of the answer, spending all 1200 tokens on tool orchestration and
+// leaving incomplete_details:{reason:"max_output_tokens"} with no message at
+// all -- every such prompt would refuse rather than measure anything.
+// search_context_size:"low" did not reduce the page-open count (tested, no
+// effect). 3000 tokens let the same prompt finish both the exploration and a
+// full final answer with ~774 tokens of headroom (2226 used); 4000 keeps
+// that margin under prompts that search more, still under 2 cents worst
+// case at Meta's own output rate. Ungrounded calls never hit this path (no
+// tools means no tool-calling turns), so they keep the shared budget.
+const META_GROUNDED_MAX_TOKENS = 4000;
+
+async function metaRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  const reply = await metaFetch<MetaResponsesReply>("/responses", apiKey, {
+    model,
+    input: prompt,
+    max_output_tokens: webSearch ? META_GROUNDED_MAX_TOKENS : ANSWER_MAX_TOKENS,
+    // NOT `reasoning_effort` -- that flat field is the chat-completions shape.
+    // The Responses API rejects it outright with HTTP 400 "unknown parameter"
+    // (measured live 2026-08-15); the nested form below is what it actually
+    // reads back in the reply. Getting this wrong doesn't degrade the
+    // answer, it fails every single monitored Meta run.
+    reasoning: { effort: "low" },
+    ...(webSearch
+      ? {
+          tools: [{ type: "web_search" }],
+          ...(META_FORCE_SEARCH ? { tool_choice: META_FORCE_SEARCH } : {}),
+        }
+      : {}),
+  });
+
+  const text = metaText(reply);
+  const usage = reply.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+
+  if (!text) {
+    throw new Error("Meta returned an empty answer.");
+  }
+  return { text, tokens, sources: webSearch ? metaSources(reply) : [] };
+}
+
 // Prompt shape is the single biggest lever on whether a run measures anything.
 // Measured against a stealth-stage brand (24 queries per shape, both providers):
 //
@@ -2253,6 +2532,20 @@ export function humanError(err: unknown): string {
         `DeepSeek rejected the request: this key is over its rate limit.${wait} ` +
         `Check your rate limits and balance in the DeepSeek platform console, or wait and run again.`
       );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof MetaAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    if (err.status === 402) return "This Meta key has no credit left.";
+    if (err.status === 429) {
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` Meta asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return `Meta rejected the request: this key is over its rate limit.${wait} Wait and run again.`;
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
     if (err.status === 404) return "The requested model isn't available for this key.";

@@ -329,6 +329,7 @@ const OPENROUTER_UPSTREAM: Record<Provider, string> = {
   perplexity: "perplexity",
   xai: "xai",
   deepseek: "deepseek",
+  meta: "meta",
 };
 
 /** Display order for the settings cards and CLI listing: Merge leads. */

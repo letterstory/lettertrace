@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI / DeepSeek keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, Grok (xAI), and DeepSeek. Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI / DeepSeek / Meta keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, Grok (xAI), DeepSeek, and Meta (Muse Spark). Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -49,6 +49,7 @@ treats that as a property of the engine rather than something to paper over:
 |---|---|---|
 | **Always searches** | Perplexity Sonar, Google AI Overviews | Grounded; the project toggle is ignored |
 | **Searches on request** | Claude, ChatGPT, Gemini, Grok | Grounded, and the browse is **forced** rather than offered |
+| **Searches on request, not forced** | Meta (Muse Spark) | The tool is offered; no forcing parameter is documented, so the model decides whether to use it |
 | **Cannot search** | DeepSeek | **The run is refused** |
 
 DeepSeek's API has no server-side browsing — its documented tools are
@@ -65,7 +66,7 @@ track, just not the same number as a grounded run.
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations), and DeepSeek (memory-only — see below)
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations), DeepSeek (memory-only — see below), and Meta Muse Spark (Responses-API-shaped `web_search`, offered not forced, `url_citation` annotations)
 
 ## Getting started
 

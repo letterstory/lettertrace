@@ -69,11 +69,13 @@ const TRIAL_VARS = [
   "TRIAL_PERPLEXITY_API_KEY",
   "TRIAL_XAI_API_KEY",
   "TRIAL_DEEPSEEK_API_KEY",
+  "TRIAL_META_API_KEY",
   "TRIAL_ANTHROPIC_MODEL",
   "TRIAL_OPENAI_MODEL",
   "TRIAL_GOOGLE_MODEL",
   "TRIAL_XAI_MODEL",
   "TRIAL_DEEPSEEK_MODEL",
+  "TRIAL_META_MODEL",
   "TRIAL_RUN_LIMIT",
 ] as const;
 
@@ -127,6 +129,7 @@ describe("auxiliary fallback order", () => {
       "perplexity",
       "xai",
       "deepseek",
+      "meta",
     ]);
   });
 
@@ -138,6 +141,7 @@ describe("auxiliary fallback order", () => {
       "perplexity",
       "xai",
       "deepseek",
+      "meta",
     ]);
     expect(await askedOrder("deepseek")).toEqual([
       "deepseek",
@@ -146,6 +150,7 @@ describe("auxiliary fallback order", () => {
       "google",
       "perplexity",
       "xai",
+      "meta",
     ]);
   });
 
