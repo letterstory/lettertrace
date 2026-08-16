@@ -9,15 +9,18 @@ import { cn } from "@/lib/utils";
  * layout became these tabs. Client-side only for usePathname — there is no
  * state here.
  *
- * A run detail page is reached from Growth, so it highlights Growth: the tab
- * answers "which section am I in", not "which URL is this".
+ * A run or account detail page is reached from Growth, so both highlight
+ * Growth: the tab answers "which section am I in", not "which URL is this".
  */
 const TABS = [
   { href: "/admin", label: "Operations", match: (p: string) => p === "/admin" },
   {
     href: "/admin/growth",
     label: "Growth",
-    match: (p: string) => p.startsWith("/admin/growth") || p.startsWith("/admin/runs"),
+    match: (p: string) =>
+      p.startsWith("/admin/growth") ||
+      p.startsWith("/admin/runs") ||
+      p.startsWith("/admin/accounts"),
   },
 ];
 

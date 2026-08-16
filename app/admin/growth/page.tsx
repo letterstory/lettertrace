@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/admin";
 import { growthReport, type EmailClass, type Lead } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
+import { PeopleDirectory } from "../people";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -107,6 +108,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
       <SectionHeading
         title="Growth"
         description="Activity measured in runs, and the lead list it produces. Emails are shown in the clear here — this page exists for outbound."
+        action={<PeopleDirectory accounts={report.accounts} />}
       />
 
       {report.degraded && (
