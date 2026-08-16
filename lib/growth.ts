@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/service";
+import { shapeAccounts, type AccountRow } from "./accounts";
 
 /**
  * The growth half of the operations picture: who is actually using the
@@ -439,6 +440,8 @@ export interface GrowthReport {
   topAccounts: TopAccount[];
   recentRuns: RecentRun[];
   leads: Lead[];
+  /** Every account, ranked by last used — the People directory behind the modal. */
+  accounts: AccountRow[];
   totalUsers: number;
   /** Set when a query failed — the page says "incomplete", never fake zero. */
   degraded: string | null;
@@ -461,7 +464,15 @@ export async function growthReport(now = Date.now()): Promise<GrowthReport> {
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(RUNS_CAP),
-    svc.from("projects").select("id, user_id, name, brand_name, last_run_at").limit(ROWS_CAP),
+    // Ordered oldest-first so shapeAccounts' brands[0] (the company label for a
+    // consumer-email account) is the oldest project's brand — the same brand the
+    // account detail page headlines, which also orders projects created_at asc.
+    // Without a stable order the two surfaces can disagree on the label.
+    svc
+      .from("projects")
+      .select("id, user_id, name, brand_name, last_run_at")
+      .order("created_at", { ascending: true })
+      .limit(ROWS_CAP),
     svc
       .from("profiles")
       .select("id, email, created_at")
@@ -485,6 +496,7 @@ export async function growthReport(now = Date.now()): Promise<GrowthReport> {
     topAccounts: shapeTopAccounts(runs, projects, profiles),
     recentRuns: shapeRecentRuns(runs, projects, profiles),
     leads: shapeLeads(runs, projects, profiles, now),
+    accounts: shapeAccounts(runs, projects, profiles),
     totalUsers: profiles.length,
     degraded: failed.length > 0 ? failed.join(", ") : null,
   };
