@@ -262,3 +262,58 @@ export interface ActivityLog {
   metadata: Record<string, unknown>;
   created_at: string;
 }
+
+// ---------- web mentions (fourth signal) ----------
+
+/** Per-project watch config for the web-mentions signal. Off by default:
+ *  collection spends real search-API money. */
+export interface WebMentionWatch {
+  id: string;
+  project_id: string;
+  enabled: boolean;
+  /** Watched hosts; index 0 is the primary (queried every tick), the rest
+   *  rotate one per tick. */
+  sites: string[];
+  extra_keywords: string[];
+  /** Name-collision guard: results matching any of these are dropped. */
+  exclude_terms: string[];
+  /** Max search queries per collection tick — a runaway-config brake. */
+  query_budget: number;
+  last_collected_at: string | null;
+  created_at: string;
+}
+
+/** One collection event. query_count is the billing truth. */
+export interface WebMentionRun {
+  id: string;
+  project_id: string;
+  status: "running" | "completed" | "failed";
+  query_count: number;
+  new_count: number;
+  seen_count: number;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+}
+
+/** One third-party page where the brand or a topic came up. One row per
+ *  (project, page); re-sightings update the row rather than duplicate it. */
+export interface WebMention {
+  id: string;
+  project_id: string;
+  page_key: string;
+  url: string;
+  domain: string;
+  title: string | null;
+  snippet: string | null;
+  kind: "brand" | "topic";
+  topic_id: string | null;
+  matched_terms: string[];
+  search_rank: number | null;
+  seen_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  discovered_via: "search" | "llm_citation";
+  metadata: Record<string, unknown>;
+}
