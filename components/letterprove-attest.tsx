@@ -30,7 +30,19 @@ import { useEffect } from "react";
  */
 
 const SCRIPT_ID = "letterprove-attest";
-const DEFAULT_ORIGIN = "https://letterprove.vercel.app";
+
+/**
+ * Letterprove's own custom domain — deliberately NOT a `*.vercel.app` alias.
+ *
+ * This defaulted to `letterprove.vercel.app`, which broke collection silently:
+ * that alias has moved between Letterprove projects more than once and now
+ * 404s entirely, so the script simply never loaded. Because telemetry fails
+ * quietly by design, nothing surfaced it — the only symptom was `hot_events`
+ * staying flat for two and a half days.
+ *
+ * A generated alias is not a stable contract. Point at a domain someone owns.
+ */
+const DEFAULT_ORIGIN = "https://app.letterprove.com";
 
 declare global {
   interface Window {
