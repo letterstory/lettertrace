@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isFirstSignIn } from "./letterprove";
+import { afterEach, describe, expect, it } from "vitest";
+import { isFirstSignIn, letterproveOrigin } from "./letterprove";
 
 describe("isFirstSignIn", () => {
   // Supabase stamps both fields in the same request at signup, so they
@@ -51,5 +51,25 @@ describe("isFirstSignIn", () => {
     expect(isFirstSignIn({ created_at: "2026-08-17T17:28:32Z" })).toBe(false);
     expect(isFirstSignIn({ created_at: "2026-08-17T17:28:32Z", last_sign_in_at: null })).toBe(false);
     expect(isFirstSignIn({ created_at: "not-a-date", last_sign_in_at: "also-not" })).toBe(false);
+  });
+});
+
+describe("letterproveOrigin", () => {
+  const saved = process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN;
+    else process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN = saved;
+  });
+
+  // Not a *.vercel.app alias. One of those moved between projects and started
+  // 404ing, which is how collection died silently for 65 hours.
+  it("defaults to Letterprove's own domain", () => {
+    delete process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN;
+    expect(letterproveOrigin()).toBe("https://app.letterprove.com");
+  });
+
+  it("can be pointed elsewhere", () => {
+    process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN = "https://staging.example";
+    expect(letterproveOrigin()).toBe("https://staging.example");
   });
 });

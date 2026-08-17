@@ -33,3 +33,20 @@ export function isFirstSignIn(user: {
   // one instant.
   return Math.abs(signedIn - created) < 10_000;
 }
+
+/**
+ * Letterprove's own custom domain — deliberately NOT a `*.vercel.app` alias.
+ *
+ * The default was `letterprove.vercel.app`, which broke collection silently:
+ * that alias has moved between Letterprove projects more than once and now
+ * 404s entirely, so the script never loaded and nothing said so.
+ *
+ * Shared by the browser component and the health canary ON PURPOSE. If the two
+ * ever read different values, the canary would be checking a URL nobody uses
+ * and would stay green through exactly the outage it exists to catch.
+ */
+const DEFAULT_ORIGIN = "https://app.letterprove.com";
+
+export function letterproveOrigin(): string {
+  return process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN ?? DEFAULT_ORIGIN;
+}
