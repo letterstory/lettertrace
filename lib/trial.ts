@@ -13,6 +13,7 @@ import {
   routerCanMeasure,
   routerProviders,
   routerRefusalMessage,
+  routerSlug,
   routerSupport,
 } from "@/lib/routers";
 import { article } from "@/lib/utils";
@@ -330,11 +331,16 @@ export async function resolveRunKeyFor(
   // a direct key would — see routerCanMeasure. A router that reaches the engine
   // without carrying its web search is refused below rather than used here.
   const routerKeys = await getDecryptedRouterKeys(supabase, userId);
-  const usable = routerKeys.find((rk) =>
-    routerCanMeasure(rk.router, provider, {
-      webSearch: opts.webSearch,
-      verified: rk.searchVerified,
-    }),
+  const usable = routerKeys.find(
+    (rk) =>
+      routerCanMeasure(rk.router, provider, {
+        webSearch: opts.webSearch,
+        verified: rk.searchVerified,
+      }) &&
+      // Measuring the ENGINE isn't enough — a router with no slug for this exact
+      // model (e.g. the google-ai-overviews pseudo-model) would fail at planRoute.
+      // Keep those on the direct/trial path instead of selecting a route that dies.
+      routerSlug(rk.router, provider, requested.model) !== null,
   );
   if (usable) {
     return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };

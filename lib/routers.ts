@@ -120,18 +120,19 @@ export interface RouterInfo {
   providers: Partial<Record<Provider, RouterProviderSupport>>;
 }
 
-// Google and Perplexity are deliberately absent from the routers below.
+// Perplexity is deliberately absent from the routers below, and Google is
+// partial.
 //
-// Not because the models are unreachable — they are — but because their
-// measurement paths don't survive normalization. Gemini's answers are grounded
-// with a `google_search` tool whose grounding chunks come back through a
-// Google-specific redirect host we resolve ourselves, and the "Google AI
-// Overviews" engine is a pseudo-model: a real Gemini model plus a forced-search
-// system prompt that imitates the Overviews style. Perplexity's search is not a
-// parameter at all, it is the product, and its sources arrive in its own shape.
-// Routing any of the three through an OpenAI-compatible endpoint would return an
-// answer, and it would be a different measurement wearing the same label. Those
-// engines keep requiring a direct key, and `engineKeyMessage` says so plainly.
+// Not because the models are unreachable — they are — but because some
+// measurement paths don't survive normalization. Perplexity's search is not a
+// parameter at all, it is the product, and its sources arrive in its own shape,
+// so it keeps requiring a direct key. Gemini's standard models DO ground through
+// Concentrate (web_search_options → native Google grounding; see its entry, and
+// gatewaySources for how the redirect-host domains are resolved), but the "Google
+// AI Overviews" engine is a pseudo-model — a real Gemini model plus a forced-
+// search system prompt that imitates the Overviews style, with no gateway
+// equivalent — so it too keeps a direct key (routerSlug refuses it).
+// `engineKeyMessage` says so plainly for the paths that still need a key.
 
 export const ROUTERS: Record<RouterId, RouterInfo> = {
   concentrate: {
@@ -146,6 +147,12 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
     anthropicBaseUrl: "https://api.concentrate.ai",
     // Concentrate's API reference documents bearer auth for the whole API.
     anthropicAuth: "bearer",
+    // Gemini grounds through the chat surface only when web_search_options is
+    // present — Concentrate forwards it to Google's native grounding. Claude and
+    // OpenAI carry their own forced search tool on their own shapes (anthropic /
+    // openai-responses), so they need nothing extra here.
+    extraBody: (provider, { webSearch }) =>
+      provider === "google" && webSearch ? { web_search_options: {} } : {},
     providers: {
       anthropic: {
         shape: "anthropic",
@@ -164,15 +171,19 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         slugPrefix: "openai",
       },
       google: {
-        // Routable, but never measurable. Probed 2026-08-02 with a live key:
-        // the call succeeds and returns a ~36-character ungrounded answer with
-        // no sources — Concentrate mirrors Google's chat surface but not its
-        // grounding, and there is no equivalent of the forced tool_choice that
-        // makes the Anthropic and OpenAI paths comparable. Ungrounded runs are
-        // served; a grounded project is refused rather than quietly measured
-        // against an answer that never searched.
+        // Grounded and measurable via web_search_options. The 2026-08-02 probe
+        // saw only ungrounded answers, but as of 2026-08-17 Concentrate forwards
+        // Gemini's native Google-Search grounding: the router's extraBody adds
+        // `web_search_options: {}`, and the reply carries url_citation annotations
+        // backed by Google's vertexaisearch redirect host. It grounds
+        // consistently — even a memory-answerable question ("capital of France")
+        // searched — so no forcing lever is needed. The real domain rides in the
+        // annotation title, which gatewaySources resolves (the same shape the
+        // direct Google path handles). NOTE: the google-ai-overviews pseudo-model
+        // still can't route — routerSlug returns null for it — so its projects
+        // stay on a direct key.
         shape: "openai-chat",
-        search: "none",
+        search: "passthrough",
         // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
         // which no router resolves — every model needs an explicit slug, and
         // the `slugPrefix` fallback would produce a 404. A Google model added
