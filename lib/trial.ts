@@ -81,9 +81,47 @@ export function trialModelFor(provider: Provider, fallback: string): string {
   return v && v.trim() ? v.trim() : fallback;
 }
 
-/** True if a trial is offered for at least one provider. */
+/** The operator's shared Concentrate (router) key for free-tier runs (env:
+ *  TRIAL_CONCENTRATE_API_KEY). One capped gateway key can fund the whole free
+ *  tier for every engine Concentrate serves — Claude, GPT, Gemini — instead of a
+ *  direct key per provider. Engines it can't serve (AI Overviews, Perplexity)
+ *  still use their per-provider TRIAL_*_API_KEY. */
+export function trialConcentrateKey(): string | null {
+  const v = process.env.TRIAL_CONCENTRATE_API_KEY;
+  return v && v.trim() ? v.trim() : null;
+}
+
+/** Can the shared Concentrate trial key faithfully serve this (provider, model)?
+ *  Gated on the STATIC router capability, not a stored per-key verification (env
+ *  trial keys carry none — the operator is trusted to have confirmed the key on
+ *  the paid side). A grounded run needs passthrough search + a routable slug; an
+ *  ungrounded utility call just needs the router to reach the provider. */
+function concentrateTrialServes(provider: Provider, model: string, webSearch: boolean): boolean {
+  const support = routerSupport("concentrate", provider);
+  if (!support) return false;
+  if (routerSlug("concentrate", provider, model) === null) return false;
+  return webSearch ? support.search === "passthrough" : true;
+}
+
+/** The trial credential for a (provider, model): the shared Concentrate key +
+ *  route when it can serve the engine, else the per-provider direct trial key. */
+function trialCredFor(
+  provider: Provider,
+  model: string,
+  webSearch: boolean,
+): { apiKey: string; route?: RouteInfo } | null {
+  const cc = trialConcentrateKey();
+  if (cc && concentrateTrialServes(provider, model, webSearch)) {
+    return { apiKey: cc, route: { router: "concentrate", baseUrl: null } };
+  }
+  const direct = trialKeyFor(provider);
+  return direct ? { apiKey: direct } : null;
+}
+
+/** True if a trial is offered — either the shared Concentrate key or at least
+ *  one per-provider direct key. */
 export function trialEnabled(): boolean {
-  return PROVIDER_IDS.some((p) => trialKeyFor(p));
+  return !!trialConcentrateKey() || PROVIDER_IDS.some((p) => trialKeyFor(p));
 }
 
 /** How many free trial runs this user has already consumed. */
@@ -190,6 +228,8 @@ export interface ResolvedKey {
 
 /** The provider new projects default to: one we can actually serve (has a trial key), else anthropic. */
 export function pickDefaultProvider(): Provider {
+  // A Concentrate trial key serves Claude/GPT/Gemini, so it can fund the default.
+  if (trialConcentrateKey() && routerSupport("concentrate", "anthropic")) return "anthropic";
   if (trialKeyFor("anthropic")) return "anthropic";
   if (trialKeyFor("openai")) return "openai";
   if (trialKeyFor("google")) return "google";
@@ -262,13 +302,16 @@ export async function resolveKey(
   const usage = await getTrialUsage(supabase, userId);
   let trialConfigured = false;
   for (const p of order) {
-    const tk = trialKeyFor(p);
-    if (!tk) continue;
+    // Utility calls never search, so webSearch=false — Concentrate serves the
+    // engine whenever it has a slug for it; else the per-provider direct key.
+    const cred = trialCredFor(p, modelFor(p), false);
+    if (!cred) continue;
     trialConfigured = true;
     if (withinTrial(usage, limit, cap)) {
       return {
         source: "trial",
-        apiKey: tk,
+        apiKey: cred.apiKey,
+        ...(cred.route ? { route: cred.route } : {}),
         provider: p,
         model: trialModelFor(p, modelFor(p)),
         requested,
@@ -357,18 +400,22 @@ export async function resolveRunKeyFor(
     return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };
   }
 
-  // The operator's shared key, but only for the engine actually chosen.
+  // The operator's shared key, but only for the engine actually chosen. Prefer
+  // the Concentrate trial key (routes through the gateway — one capped key,
+  // discount) for engines it can serve; AI Overviews / Perplexity fall to their
+  // per-provider direct trial key.
   const limit = trialRunLimit();
   const cap = trialSpendLimitMicros();
-  const trialKey = trialKeyFor(provider);
+  const trialCred = trialCredFor(provider, requested.model, opts.webSearch);
   let trialUsage: TrialUsage | null = null;
-  if (trialKey) {
+  if (trialCred) {
     trialUsage = await getTrialUsage(supabase, userId);
     if (withinTrial(trialUsage, limit, cap)) {
       return {
         ...base,
         source: "trial",
-        apiKey: trialKey,
+        apiKey: trialCred.apiKey,
+        ...(trialCred.route ? { route: trialCred.route } : {}),
         // Still a substitution, but within the chosen provider: the answers
         // remain that assistant's, and `requested` carries the difference.
         model: trialModelFor(provider, requested.model),
@@ -410,7 +457,7 @@ export async function resolveRunKeyFor(
   const others = Array.from(new Set([...direct, ...viaRouters])).filter((p) => p !== provider);
   if (others.length > 0) return { ...base, source: "mismatch", available: others };
 
-  if (trialKey) {
+  if (trialCred) {
     const usage = trialUsage ?? (await getTrialUsage(supabase, userId));
     return {
       ...base,
