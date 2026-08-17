@@ -71,6 +71,7 @@ const TRIAL_VARS = [
   "TRIAL_OPENAI_MODEL",
   "TRIAL_GOOGLE_MODEL",
   "TRIAL_RUN_LIMIT",
+  "TRIAL_CONCENTRATE_API_KEY",
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -644,5 +645,51 @@ describe("the free-tier spend ceiling", () => {
     } as never;
     const key = await resolveKey(legacy, "u1", "anthropic");
     expect(key.source).toBe("trial");
+  });
+});
+
+// The free tier can be funded by one shared Concentrate key instead of four
+// direct provider keys: it routes the engines Concentrate serves through the
+// gateway (one capped key, discount) and falls back to per-provider trial keys
+// for the engines it can't (AI Overviews, Perplexity).
+describe("free tier through a shared Concentrate key", () => {
+  it("routes a served engine through Concentrate", async () => {
+    process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
+    const k = await runKeyFor(db(0), "user-1", "anthropic", "claude-opus-4-8", { webSearch: true });
+    expect(k.source).toBe("trial");
+    expect(k.apiKey).toBe("sk-cn-trial");
+    expect(k.route?.router).toBe("concentrate");
+  });
+
+  it("routes real Gemini through Concentrate", async () => {
+    process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
+    const k = await runKeyFor(db(0), "user-1", "google", "gemini-flash-latest", { webSearch: true });
+    expect(k.source).toBe("trial");
+    expect(k.apiKey).toBe("sk-cn-trial");
+    expect(k.route?.router).toBe("concentrate");
+  });
+
+  it("falls back to a direct trial key for AI Overviews (Concentrate can't route it)", async () => {
+    process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
+    process.env.TRIAL_GOOGLE_API_KEY = "trial-google";
+    const k = await runKeyFor(db(0), "user-1", "google", GOOGLE_AI_OVERVIEWS_MODEL, { webSearch: true });
+    expect(k.source).toBe("trial");
+    expect(k.apiKey).toBe("trial-google");
+    expect(k.route).toBeUndefined();
+  });
+
+  it("falls back to a direct trial key for Perplexity (not in Concentrate's catalog)", async () => {
+    process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
+    process.env.TRIAL_PERPLEXITY_API_KEY = "trial-pplx";
+    const k = await runKeyFor(db(0), "user-1", "perplexity", undefined, { webSearch: true });
+    expect(k.source).toBe("trial");
+    expect(k.apiKey).toBe("trial-pplx");
+    expect(k.route).toBeUndefined();
+  });
+
+  it("enables the trial with only a Concentrate key set", () => {
+    expect(trialEnabled()).toBe(false);
+    process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
+    expect(trialEnabled()).toBe(true);
   });
 });
