@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sendAdminAlert, signupAlert, adminAlertEmail } from "@/lib/notify";
+import { sendAdminAlert, signupAlert, adminAlertEmails } from "@/lib/notify";
 
 /**
  * Tell the operator about a new account, exactly once.
@@ -26,7 +26,7 @@ export async function alertNewSignup(
   // Claim the alert before doing anything slow. Cheap when unconfigured: skip
   // the write entirely so a deployment with no alerting doesn't take a round
   // trip on every sign-in.
-  if (!adminAlertEmail()) return "not-configured";
+  if (adminAlertEmails().length === 0) return "not-configured";
 
   const { data, error } = await admin
     .from("profiles")
