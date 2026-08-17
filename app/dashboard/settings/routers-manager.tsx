@@ -297,6 +297,20 @@ function EngineStatus({
   searchVerified: Provider[];
   checks: Check[] | null;
 }) {
+  // Engines that still need a direct key on this router: the base providers it
+  // doesn't serve, plus Google AI Overviews — a pseudo-model that never routes
+  // through any gateway (routerSlug is null for it), even when the router serves
+  // the Gemini assistant. Computed rather than hardcoded so it stays truthful as
+  // a router gains coverage (e.g. Concentrate now grounds Gemini).
+  const needsOwnKey = [
+    ...(Object.keys(PROVIDERS) as Provider[]).filter((p) => !served.includes(p)).map((p) => PROVIDERS[p].label),
+    "Google AI Overviews",
+  ];
+  const needsOwnKeyList =
+    needsOwnKey.length === 1
+      ? needsOwnKey[0]
+      : `${needsOwnKey.slice(0, -1).join(", ")} and ${needsOwnKey[needsOwnKey.length - 1]}`;
+
   return (
     <div className="space-y-2">
       <ul className="space-y-1.5">
@@ -330,7 +344,7 @@ function EngineStatus({
           worth naming once, because "my router does 400 models" makes their
           absence surprising. */}
       <p className="text-xs text-ink-faint">
-        Gemini, Google AI Overviews and Perplexity need their own keys — their answers
+        {needsOwnKeyList} {needsOwnKey.length === 1 ? "needs its own key" : "need their own keys"} — their answers
         aren&apos;t comparable when routed through a gateway.
       </p>
     </div>
