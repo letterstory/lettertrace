@@ -1521,6 +1521,12 @@ async function xaiChat(
 interface XaiResponsesReply {
   output?: {
     type?: string;
+    // Present (value "commentary") on the throwaway "I'll look that up for
+    // you" message a search turn emits before its web_search_call items —
+    // same shape as Meta's MetaResponsesReply, and the same failure mode:
+    // concatenating it onto the real answer glues commentary text onto the
+    // front of what gets scanned for brand mentions.
+    phase?: string;
     content?: {
       type?: string;
       text?: string;
@@ -1598,11 +1604,18 @@ export function xaiSources(reply: XaiResponsesReply): CitedSource[] {
   return dedupeSources(fallback);
 }
 
-/** Answer text from a Responses reply, concatenated across output items. */
+/**
+ * Answer text from a Responses reply: final message items only, never
+ * reasoning, tool items, or search-turn commentary. This had no item-type
+ * filter at all until now, so any of those could get concatenated into the
+ * stored answer — the exact bug metaText was already fixed for below.
+ */
 function xaiText(reply: XaiResponsesReply): string {
   let text = "";
   for (const item of reply.output ?? []) {
+    if (item.type !== "message" || item.phase === "commentary") continue;
     for (const c of item.content ?? []) {
+      if (c.type !== undefined && c.type !== "output_text") continue;
       if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
     }
   }
@@ -1663,6 +1676,14 @@ function xaiText(reply: XaiResponsesReply): string {
 // it costs nothing to ask and matches the other providers' shape.
 const XAI_FORCE_SEARCH = { type: "tool", name: "web_search" } as const;
 
+// A grounded call's tool-calling turns count against the SAME output budget as
+// the answer — the identical bug fixed for Meta below (META_GROUNDED_MAX_TOKENS),
+// and Grok is a reasoning model on the same Responses surface, so tool turns
+// plus reasoning can exhaust 1200 tokens before any answer text is written.
+// Ungrounded calls never hit this path (no tools means no tool-calling turns),
+// so they keep the shared answer budget.
+const XAI_GROUNDED_MAX_TOKENS = 4000;
+
 async function xaiRunQuery(
   apiKey: string,
   model: string,
@@ -1672,7 +1693,9 @@ async function xaiRunQuery(
   const reply = await xaiFetch<XaiResponsesReply>("/responses", apiKey, {
     model,
     input: prompt,
-    max_output_tokens: Math.max(ANSWER_MAX_TOKENS, XAI_MIN_MAX_TOKENS),
+    max_output_tokens: webSearch
+      ? XAI_GROUNDED_MAX_TOKENS
+      : Math.max(ANSWER_MAX_TOKENS, XAI_MIN_MAX_TOKENS),
     ...(webSearch
       ? { tools: [{ type: "web_search" }], tool_choice: XAI_FORCE_SEARCH }
       : {}),
@@ -2001,6 +2024,8 @@ interface MetaResponsesReply {
     // both (the original bug here) stored the commentary sentence glued
     // onto the front of the real answer.
     phase?: string;
+    // On a web_search_call item: "completed" for a search that actually ran.
+    status?: string;
     content?: {
       type?: string;
       text?: string;
@@ -2046,6 +2071,13 @@ function metaText(reply: MetaResponsesReply): string {
     }
   }
   return text.trim();
+}
+
+/** Did a completed web_search_call actually run? */
+function metaSearched(reply: MetaResponsesReply): boolean {
+  return (reply.output ?? []).some(
+    (item) => item.type === "web_search_call" && (item.status === undefined || item.status === "completed"),
+  );
 }
 
 // Probed live 2026-08-15, three real calls against Muse Spark: no tools, tools
@@ -2095,6 +2127,17 @@ async function metaRunQuery(
         }
       : {}),
   });
+
+  // Offered-only search: Meta can only offer web_search, never force it (see
+  // META_FORCE_SEARCH above), so the model may answer from memory instead of
+  // browsing. That answer is not a grounded measurement and must not be stored
+  // as one -- the same line providerCanMeasure draws for DeepSeek, drawn per
+  // reply here since forcing can't draw it up front.
+  if (webSearch && !metaSearched(reply)) {
+    throw new Error(
+      "Meta answered without searching the web, so the answer can't be recorded as search-grounded.",
+    );
+  }
 
   const text = metaText(reply);
   const usage = reply.usage;

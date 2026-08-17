@@ -49,7 +49,7 @@ treats that as a property of the engine rather than something to paper over:
 |---|---|---|
 | **Always searches** | Perplexity Sonar, Google AI Overviews | Grounded; the project toggle is ignored |
 | **Searches on request** | Claude, ChatGPT, Gemini, Grok | Grounded, and the browse is **forced** rather than offered |
-| **Searches on request, not forced** | Meta (Muse Spark) | The tool is offered; no forcing parameter is documented, so the model decides whether to use it |
+| **Searches on request, not forced** | Meta (Muse Spark) | The tool is offered (Meta rejects forcing); an answer in which the model didn't search is refused rather than stored as grounded |
 | **Cannot search** | DeepSeek | **The run is refused** |
 
 DeepSeek's API has no server-side browsing — its documented tools are
@@ -301,9 +301,9 @@ By default Lettertrace is bring-your-own-key: a user must add a key before runni
 
 Set in your environment:
 
-- `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY` / `TRIAL_GOOGLE_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
+- `TRIAL_<PROVIDER>_API_KEY` (`ANTHROPIC`, `OPENAI`, `GOOGLE`, `PERPLEXITY`, `XAI`, `DEEPSEEK`, `META`): the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
 - `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap).
-- `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL` / `TRIAL_GOOGLE_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
+- `TRIAL_<PROVIDER>_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model). Meta has no cheaper tier; its cost lever is the adapter's fixed `reasoning_effort`.
 - `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.

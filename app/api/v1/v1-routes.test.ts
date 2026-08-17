@@ -398,6 +398,22 @@ describe("POST /api/v1/projects/:id/runs", () => {
     expect(res.status).toBe(402);
   });
 
+  it("400s, not 402s, when the engine can't ground the project — a key won't fix it", async () => {
+    vi.mocked(triggerRunForProject).mockResolvedValue({
+      ok: false,
+      code: "ungrounded",
+      message: "DeepSeek can't search. Turn off web search for this project.",
+    });
+    const res = await postRunRoute(
+      req("/api/v1/projects/p1/runs", { method: "POST" }),
+      { params: { id: "p1" } },
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "DeepSeek can't search. Turn off web search for this project.",
+    });
+  });
+
   it("returns the run result on success", async () => {
     vi.mocked(triggerRunForProject).mockResolvedValue({
       ok: true,

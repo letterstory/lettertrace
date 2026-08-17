@@ -22,11 +22,11 @@ import { PROVIDERS, PROVIDER_LIST, analysisModelFor, defaultModelFor } from "@/l
 //      the visible answer, the exact failure that turned an 8-token DeepSeek
 //      ping into an empty response. Pinning this here is what stops a future
 //      edit from removing the parameter and reintroducing that failure live.
-//   2. No tool_choice/forcing parameter is documented for web_search at all
-//      (unlike Grok, where xai-proto at least implied one existed before it
-//      was measured). Until the Tier-0 probe runs, the adapter must OFFER the
-//      tool and not claim to force it -- these tests pin that honest state,
-//      not a guess at what the probe will eventually find.
+//   2. Meta rejects tool_choice for web_search outright (HTTP 400, probed
+//      2026-08-15), so the adapter can only OFFER the tool -- it cannot force
+//      a browse the way the other engines do. A grounded reply that shows no
+//      completed web_search_call is therefore refused rather than stored as a
+//      grounded measurement; the tests below pin both halves of that.
 // ------------------------------------------------------------------
 
 const KEY = "LLM|test|key";
@@ -46,11 +46,14 @@ function respOk(
   extra: {
     annotations?: { type?: string; url?: string; title?: string }[];
     usage?: Record<string, number>;
+    /** Include a completed web_search_call item, as a live grounded reply carries. */
+    searched?: boolean;
   } = {},
 ) {
   return {
     id: "r",
     output: [
+      ...(extra.searched ? [{ type: "web_search_call", status: "completed" }] : []),
       {
         type: "message",
         content: [
@@ -129,7 +132,7 @@ describe("meta runQuery", () => {
   });
 
   it("offers web_search when the project asks for grounding", async () => {
-    mockFetch(jsonResponse(respOk("grounded")));
+    mockFetch(jsonResponse(respOk("grounded", { searched: true })));
     await runQuery(answer({ webSearch: true }));
     expect(sentBody().tools).toEqual([{ type: "web_search" }]);
   });
@@ -144,7 +147,7 @@ describe("meta runQuery", () => {
   // above. search_context_size:"low" did not reduce the page-open count
   // (tested, no effect); a bigger ceiling was the only lever that worked.
   it("gives a grounded call a bigger token ceiling than the shared answer budget", async () => {
-    mockFetch(jsonResponse(respOk("grounded")));
+    mockFetch(jsonResponse(respOk("grounded", { searched: true })));
     await runQuery(answer({ webSearch: true }));
     expect(sentBody().max_output_tokens).toBe(4000);
   });
@@ -155,14 +158,28 @@ describe("meta runQuery", () => {
     expect(sentBody().max_output_tokens).toBe(1200);
   });
 
-  // The honest pre-probe state: no documented forcing parameter exists, so
-  // none is sent. This must FAIL once a real forcing shape is wired in after
-  // the Tier-0 probe -- that failure is the reminder to update this test
-  // alongside the code, not a regression.
-  it("does not claim to force search — no forcing shape is confirmed yet", async () => {
-    mockFetch(jsonResponse(respOk("grounded")));
+  // Meta rejects every tool_choice shape for web_search (400, probed
+  // 2026-08-15), so nothing is sent; the tool is offered and the model decides.
+  it("sends no tool_choice — Meta rejects forcing", async () => {
+    mockFetch(jsonResponse(respOk("grounded", { searched: true })));
     await runQuery(answer({ webSearch: true }));
     expect(sentBody().tool_choice).toBeUndefined();
+  });
+
+  // Offered-only search means the model may answer from memory. That answer
+  // is not a grounded measurement and must not be stored as one -- the same
+  // line providerCanMeasure draws for DeepSeek, drawn per reply here since
+  // forcing can't draw it up front.
+  it("refuses a grounded answer in which the model never searched", async () => {
+    mockFetch(jsonResponse(respOk("Akamai is the biggest CDN.")));
+    await expect(runQuery(answer({ webSearch: true }))).rejects.toThrow(/without searching/i);
+  });
+
+  it("does not require a search when the project isn't grounded", async () => {
+    mockFetch(jsonResponse(respOk("Akamai is the biggest CDN.")));
+    await expect(runQuery(answer({ webSearch: false }))).resolves.toMatchObject({
+      text: "Akamai is the biggest CDN.",
+    });
   });
 
   // Live-measured 2026-08-15: a real 2-search grounded call returned output

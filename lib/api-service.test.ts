@@ -400,6 +400,25 @@ describe("triggerRunForProject", () => {
     },
   );
 
+  it("reports an engine that can't ground as 'ungrounded', with the resolver's fix, not as a missing key", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
+      source: "ungrounded",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      requested: { provider: "deepseek", model: "deepseek-v4-pro" },
+      refusal: "DeepSeek can't search. Turn off web search for this project.",
+    });
+    vi.mocked(engineKeyMessage).mockImplementation((k) => k.refusal ?? "");
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: "ungrounded",
+      message: "DeepSeek can't search. Turn off web search for this project.",
+    });
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+
   it("executes with the user's own key", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
     vi.mocked(resolveRunKeyFor).mockResolvedValue({

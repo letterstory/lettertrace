@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Project, Provider, RouteInfo } from "@/lib/types";
 import {
   getDecryptedKey,
+  getDecryptedKeys,
   getConfiguredProviders,
   getDecryptedRouterKeys,
   type DecryptedRouterKey,
@@ -11,6 +12,7 @@ import {
   modelLabel,
   providerCanMeasure,
   providerRefusalMessage,
+  PROVIDER_LIST,
   PROVIDERS,
 } from "@/lib/models";
 import {
@@ -74,10 +76,8 @@ const TRIAL_MODEL_ENV: Record<Provider, string> = {
   meta: "TRIAL_META_MODEL",
 };
 
-// Derived from the env map above rather than written out again, so a provider
-// added to the catalog can't be silently skipped here — omitting perplexity
-// from this list is what made a perplexity-only deployment report no trial.
-const PROVIDER_IDS = Object.keys(TRIAL_KEY_ENV) as Provider[];
+// Catalog order, from the catalog itself: this is also the fallback/default walk order.
+const PROVIDER_IDS: Provider[] = PROVIDER_LIST.map((p) => p.id);
 
 /** The operator's shared key for a provider, if configured. */
 export function trialKeyFor(provider: Provider): string | null {
@@ -204,28 +204,12 @@ export interface ResolvedKey {
   available?: Provider[];
 }
 
-/** The provider new projects default to: one we can actually serve (has a trial
- *  key), else anthropic. Walks PROVIDER_IDS rather than a chain of ifs, for the
- *  same reason PROVIDER_IDS itself is derived — a provider missing from the
- *  chain is invisible to the compiler and simply never gets picked. */
+/** The provider new projects default to: the first in catalog order with a trial key, else anthropic. */
 export function pickDefaultProvider(): Provider {
   return PROVIDER_IDS.find((p) => trialKeyFor(p)) ?? "anthropic";
 }
 
-/**
- * Preference order for AUXILIARY work: the requested provider, then every other
- * one in catalog order.
- *
- * Derived rather than kept as the N x N table this replaces. That table was a
- * half-caught hazard: growing `Provider` made the compiler demand a new ROW, so
- * the new engine got its own preference list — but nothing required it to be
- * ADDED to the four existing rows, and a provider absent from those is one no
- * other provider will ever fall back to. It would have been a key the user
- * holds, silently never used, with no error anywhere.
- *
- * The four rows it replaces were each exactly "preferred, then catalog order
- * minus self", so this reproduces them unchanged; a test pins that.
- */
+/** Preference order for AUXILIARY work: the requested provider, then the rest in catalog order. */
 function providerOrder(preferred: Provider): Provider[] {
   return [preferred, ...PROVIDER_IDS.filter((p) => p !== preferred)];
 }
@@ -264,9 +248,12 @@ export async function resolveKey(
   //    which credential settles the bill, and a user holding a direct Claude key
   //    should get Claude rather than Claude-via-a-gateway. Web search never
   //    applies to utility work, so any router that reaches the engine will do.
-  const routerKeys = await getDecryptedRouterKeys(supabase, userId);
+  const [ownKeys, routerKeys] = await Promise.all([
+    getDecryptedKeys(supabase, userId),
+    getDecryptedRouterKeys(supabase, userId),
+  ]);
   for (const p of order) {
-    const own = await getDecryptedKey(supabase, userId, p);
+    const own = ownKeys[p];
     if (own) return { source: "own", apiKey: own, provider: p, model: modelFor(p), requested };
 
     const viaRouter = routerKeys.find((rk) => routerSupport(rk.router, p) !== null);

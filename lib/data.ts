@@ -186,6 +186,26 @@ export async function getDecryptedRouterKeys(
   return keys;
 }
 
+/** Decrypt every provider key the user has stored, in one query (server-only). Undecryptable rows are skipped. */
+export async function getDecryptedKeys(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<Partial<Record<Provider, string>>> {
+  const { data } = await supabase
+    .from("provider_keys")
+    .select("provider, encrypted_key")
+    .eq("user_id", userId);
+  const keys: Partial<Record<Provider, string>> = {};
+  for (const row of (data ?? []) as { provider: Provider; encrypted_key: string }[]) {
+    try {
+      keys[row.provider] = decryptSecret(row.encrypted_key);
+    } catch {
+      continue;
+    }
+  }
+  return keys;
+}
+
 /** Decrypt the user's key for a provider (server-only). Returns null if none. */
 export async function getDecryptedKey(
   supabase: SupabaseClient,

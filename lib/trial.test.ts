@@ -5,11 +5,17 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 // stays clean; resolveKey's own use of it is mocked per-test below.
 vi.mock("@/lib/data", () => ({
   getDecryptedKey: vi.fn(),
+  getDecryptedKeys: vi.fn(),
   getConfiguredProviders: vi.fn(),
   getDecryptedRouterKeys: vi.fn(),
 }));
 
-import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
+import {
+  getDecryptedKey,
+  getDecryptedKeys,
+  getConfiguredProviders,
+  getDecryptedRouterKeys,
+} from "@/lib/data";
 import { PROVIDER_LIST } from "@/lib/models";
 import type { Provider, RouterId } from "@/lib/types";
 import {
@@ -89,6 +95,17 @@ beforeEach(() => {
   }
   process.env.TRIAL_RUN_LIMIT = "5";
   vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
+  // The batch lookup mirrors the per-provider mock, so one getDecryptedKey setup drives both resolvers.
+  vi.mocked(getDecryptedKeys)
+    .mockReset()
+    .mockImplementation(async (sb, uid) => {
+      const keys: Partial<Record<Provider, string>> = {};
+      for (const { id } of PROVIDER_LIST) {
+        const k = await getDecryptedKey(sb, uid, id);
+        if (k) keys[id] = k;
+      }
+      return keys;
+    });
   vi.mocked(getConfiguredProviders).mockReset().mockResolvedValue([]);
   vi.mocked(getDecryptedRouterKeys).mockReset().mockResolvedValue([]);
 });
@@ -100,81 +117,49 @@ afterEach(() => {
   }
 });
 
-// providerOrder replaced a hand-written N x N table. The compiler could only
-// ever catch half of that table's hazard: growing `Provider` demanded a new ROW,
-// but nothing required the new provider to be ADDED to the existing rows — and a
-// provider missing from those is one no other provider ever falls back to, so a
-// key the user holds would sit unused with nothing failing to say so.
-//
-// These observe the order the resolver actually walks rather than re-asserting a
-// table, so they would catch a provider dropped from the sequence as well as one
-// misplaced in it. The first case is the exact order the old table encoded.
+// providerOrder replaced a hand-written N x N table that the compiler could
+// only half-check: a new provider got its own row but nothing forced it INTO
+// the existing rows, so a key the user held could sit unused with no error.
+// These assert which key wins, so they catch a provider dropped from the
+// sequence as well as one misplaced in it.
 describe("auxiliary fallback order", () => {
-  /** The providers resolveKey asks about, in the order it asks. */
-  async function askedOrder(preferred: Provider): Promise<Provider[]> {
-    const asked: Provider[] = [];
-    vi.mocked(getDecryptedKey).mockImplementation(async (...args: unknown[]) => {
-      asked.push(args[2] as Provider);
-      return null;
-    });
-    await resolveKey(db(0), "user-1", preferred);
-    return asked;
+  const CATALOG = PROVIDER_LIST.map((i) => i.id);
+
+  /** The provider resolveKey settles on when the user holds keys for exactly `holders`. */
+  async function winner(preferred: Provider, holders: Provider[]): Promise<Provider | null> {
+    ownsKeysFor(...holders);
+    const k = await resolveKey(db(0), "user-1", preferred);
+    return k.source === "own" ? k.provider : null;
   }
 
-  it("prefers the requested engine, then walks the catalog in order", async () => {
-    expect(await askedOrder("anthropic")).toEqual([
-      "anthropic",
-      "openai",
-      "google",
-      "perplexity",
-      "xai",
-      "deepseek",
-      "meta",
-    ]);
+  it("prefers the requested engine when its key exists", async () => {
+    for (const p of CATALOG) expect(await winner(p, CATALOG)).toBe(p);
   });
 
-  it("puts the requested engine first whichever one it is", async () => {
-    expect(await askedOrder("google")).toEqual([
-      "google",
-      "anthropic",
-      "openai",
-      "perplexity",
-      "xai",
-      "deepseek",
-      "meta",
-    ]);
-    expect(await askedOrder("deepseek")).toEqual([
-      "deepseek",
-      "anthropic",
-      "openai",
-      "google",
-      "perplexity",
-      "xai",
-      "meta",
-    ]);
-  });
-
-  // Derived from the catalog, so this stays honest as providers are added
-  // rather than pinning a length that has to be edited every time.
-  it("asks about every provider exactly once", async () => {
-    for (const p of PROVIDER_LIST.map((i) => i.id)) {
-      const order = await askedOrder(p);
-      expect(new Set(order).size).toBe(order.length);
-      expect(order).toHaveLength(PROVIDER_LIST.length);
+  it("otherwise walks the catalog in order, whichever engine was requested", async () => {
+    for (const preferred of CATALOG) {
+      const rest = CATALOG.filter((p) => p !== preferred);
+      // Peel the expected winner off the front each time; the next must be the next in catalog order.
+      for (let i = 0; i < rest.length; i++) {
+        expect(await winner(preferred, rest.slice(i))).toBe(rest[i]);
+      }
     }
+  });
+
+  it("looks the user's keys up once, not once per provider", async () => {
+    await resolveKey(db(0), "user-1", "anthropic");
+    expect(getDecryptedKeys).toHaveBeenCalledTimes(1);
   });
 
   it("actually falls back to a newly added provider", async () => {
     // The bug the old table would have had: xai present as its own row but
     // absent from the other four, so a user holding only an xAI key and asking
     // for Claude would have been told they had no key at all.
-    vi.mocked(getDecryptedKey).mockImplementation(async (...args: unknown[]) =>
-      args[2] === "xai" ? "xai-only-key" : null,
-    );
+    ownsKeysFor("xai");
     const k = await resolveKey(db(0), "user-1", "anthropic");
     expect(k.source).toBe("own");
     expect(k.provider).toBe("xai");
-    expect(k.apiKey).toBe("xai-only-key");
+    expect(k.apiKey).toBe("key-for-xai");
     // and it still reports what was ASKED for, not what answered
     expect(k.requested.provider).toBe("anthropic");
   });

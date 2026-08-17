@@ -107,6 +107,8 @@ export default function ProjectForm({
   // hidden, because two of the three fixes (turn web search off, re-check the
   // key) leave this engine selected.
   const unroutable = coverage.kind === "unroutable" ? coverage : null;
+  // The engine can't browse at all; the fix is the web-search toggle on this form.
+  const ungrounded = coverage.kind === "ungrounded" ? coverage : null;
   // Which credential will carry the run, when one can. Worth saying: a user who
   // set up a gateway shouldn't have to infer that it covers the engine they just
   // picked from the absence of a warning.
@@ -282,6 +284,8 @@ export default function ProjectForm({
           // it here — while the toggle that causes it is on screen — is the
           // difference between a fixable setting and a failed run.
           <p className="mt-1.5 text-xs text-butter-ink">{unroutable.reason}</p>
+        ) : ungrounded ? (
+          <p className="mt-1.5 text-xs text-butter-ink">{ungrounded.reason}</p>
         ) : (
           <div className="mt-1.5 space-y-1">
             <p className="text-xs text-ink-faint">
@@ -375,6 +379,8 @@ export default function ProjectForm({
                 Saved, but {ROUTERS[unroutable.router].label} can&apos;t measure{" "}
                 {providerLabel} on these settings
               </span>
+            ) : ungrounded ? (
+              <span>Saved, but {providerLabel} can&apos;t search the web, which this project asks for</span>
             ) : (
               "Saved"
             )}

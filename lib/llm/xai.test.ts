@@ -175,6 +175,44 @@ describe("xai runQuery", () => {
     const res = await runQuery(answer());
     expect(res.text).toBe("one\ntwo");
   });
+
+  // Same guard the Meta path needed after a live commentary message was glued
+  // onto a real answer: only final message text is the answer. xaiText had no
+  // item-type filter at all until now, so any of these could have leaked in.
+  it("keeps only message text — never reasoning, tool items, or search-turn commentary", async () => {
+    mockFetch(
+      jsonResponse({
+        output: [
+          { type: "reasoning", content: [{ type: "reasoning_text", text: "thinking aloud" }] },
+          {
+            type: "message",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Let me look that up." }],
+          },
+          { type: "web_search_call", content: [{ type: "output_text", text: "query: cdn" }] },
+          { type: "message", content: [{ type: "output_text", text: "Akamai and Fastly." }] },
+        ],
+        usage: { total_tokens: 5 },
+      }),
+    );
+    const res = await runQuery(answer({ webSearch: true }));
+    expect(res.text).toBe("Akamai and Fastly.");
+  });
+
+  // Tool turns spend the same output budget as the answer; 1200 was exhausted
+  // before any answer text on the Meta path (measured), and Grok is a
+  // reasoning model on the same Responses surface.
+  it("gives a grounded call a bigger token ceiling than the shared answer budget", async () => {
+    mockFetch(jsonResponse(respOk("grounded")));
+    await runQuery(answer({ webSearch: true }));
+    expect(sentBody().max_output_tokens).toBe(4000);
+  });
+
+  it("keeps the shared answer budget for an ungrounded call", async () => {
+    mockFetch(jsonResponse(respOk("from memory")));
+    await runQuery(answer({ webSearch: false }));
+    expect(sentBody().max_output_tokens).toBe(1200);
+  });
 });
 
 // --- sources --------------------------------------------------------------
@@ -297,7 +335,7 @@ describe("xai token accounting", () => {
   });
 
   it("reports zero rather than NaN when usage is absent", async () => {
-    mockFetch(jsonResponse({ output: [{ content: [{ text: "hi" }] }] }));
+    mockFetch(jsonResponse({ output: [{ type: "message", content: [{ text: "hi" }] }] }));
     expect((await runQuery(answer())).tokens).toBe(0);
   });
 });
