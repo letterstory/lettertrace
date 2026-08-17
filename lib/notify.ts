@@ -24,10 +24,21 @@ export interface AdminAlert {
   body: string;
 }
 
-/** Who gets operator alerts, if anyone. */
-export function adminAlertEmail(): string | null {
-  const v = process.env.ADMIN_ALERT_EMAIL;
-  return v && v.trim() ? v.trim() : null;
+/**
+ * Who gets operator alerts, if anyone.
+ *
+ * Comma-separated, parsed the same way as the admin allowlists in lib/admin.ts.
+ * A single address is still the common case and still works unchanged — the
+ * variable keeps its singular name so existing deployments need no edit.
+ *
+ * Empty means nobody, which is the normal state for a self-hoster who doesn't
+ * want alerts.
+ */
+export function adminAlertEmails(): string[] {
+  return (process.env.ADMIN_ALERT_EMAIL ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
 }
 
 /** The address alerts are sent FROM. Must be on a domain verified with the mail
@@ -47,12 +58,12 @@ export type AlertOutcome = "sent" | "not-configured" | "failed";
  * result is also correct.
  */
 export async function sendAdminAlert(alert: AdminAlert): Promise<AlertOutcome> {
-  const to = adminAlertEmail();
+  const to = adminAlertEmails();
   const apiKey = process.env.RESEND_API_KEY?.trim();
 
   // Unconfigured is the normal state for a self-hosted deployment that doesn't
   // want alerts, so it is not an error and not worth logging on every signup.
-  if (!to || !apiKey) return "not-configured";
+  if (to.length === 0 || !apiKey) return "not-configured";
 
   try {
     const res = await fetch(RESEND_ENDPOINT, {
@@ -63,7 +74,10 @@ export async function sendAdminAlert(alert: AdminAlert): Promise<AlertOutcome> {
       },
       body: JSON.stringify({
         from: alertFrom(),
-        to: [to],
+        // One request with several recipients rather than one request each:
+        // Resend takes an array, and a partial failure across N sends is a
+        // worse thing to reason about than a single all-or-nothing result.
+        to,
         subject: alert.subject,
         text: alert.body,
       }),

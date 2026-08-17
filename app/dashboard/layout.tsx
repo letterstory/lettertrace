@@ -9,7 +9,7 @@ import { LetterproveAttest } from "@/components/letterprove-attest";
 import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { adminAlertEmail, fireAndForget } from "@/lib/notify";
+import { adminAlertEmails, fireAndForget } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
 import { getUnseenRun } from "@/lib/results-seen";
@@ -44,7 +44,7 @@ export default async function DashboardLayout({
   // Costs nothing when alerting is switched off — the check short-circuits
   // before any query — and one indexed read when it is on. The claim itself is
   // guarded in the database, so a second tab cannot produce a second email.
-  if (adminAlertEmail()) {
+  if (adminAlertEmails().length > 0) {
     const { data: alertState } = await supabase
       .from("profiles")
       .select("admin_alerted_at")

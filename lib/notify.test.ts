@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { sendAdminAlert, signupAlert, adminAlertEmail } from "@/lib/notify";
+import { sendAdminAlert, signupAlert, adminAlertEmails } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
 
 const ENV = ["ADMIN_ALERT_EMAIL", "ADMIN_ALERT_FROM", "RESEND_API_KEY"] as const;
@@ -77,10 +77,30 @@ describe("sendAdminAlert", () => {
     expect(await sendAdminAlert({ subject: "s", body: "b" })).toBe("failed");
   });
 
-  it("reads the address from the environment", () => {
-    expect(adminAlertEmail()).toBeNull();
+  // Several people can want the same alert. One request with N recipients
+  // rather than N requests: a partial failure across separate sends is a worse
+  // thing to reason about than a single all-or-nothing result.
+  it("delivers one email to every configured recipient", async () => {
+    process.env.ADMIN_ALERT_EMAIL = "ops@example.com, second@example.com";
+    process.env.RESEND_API_KEY = "re_x";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+
+    expect(await sendAdminAlert({ subject: "s", body: "b" })).toBe("sent");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
+    expect(sent.to).toEqual(["ops@example.com", "second@example.com"]);
+  });
+
+  it("reads the recipients from the environment", () => {
+    expect(adminAlertEmails()).toEqual([]);
     process.env.ADMIN_ALERT_EMAIL = "  ops@example.com  ";
-    expect(adminAlertEmail()).toBe("ops@example.com");
+    expect(adminAlertEmails()).toEqual(["ops@example.com"]);
+    // Trailing separators and stray whitespace are the shape a human actually
+    // types into a Vercel env field.
+    process.env.ADMIN_ALERT_EMAIL = "a@x.com, b@y.com ,";
+    expect(adminAlertEmails()).toEqual(["a@x.com", "b@y.com"]);
   });
 });
 
