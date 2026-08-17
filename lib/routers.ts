@@ -402,6 +402,25 @@ export function routerCanMeasure(
 }
 
 /**
+ * Should a capable router be PREFERRED over a direct key for this
+ * (provider, model)? Default is no — BYOK wins, the router is the fallback.
+ *
+ * The one exception is Google's non-Overviews models. Google answers on two
+ * surfaces that share the provider: AI Overviews (the google-ai-overviews
+ * pseudo-model, which CAN'T route — routerSlug is null) and the Gemini
+ * assistant (which can). An account needs a direct Google key for AI Overviews,
+ * but with plain BYOK-first that same key would pin the Gemini surface to direct
+ * too — so the two surfaces could never sit on different credentials. Reserving
+ * the direct key for AI Overviews and preferring the router for real Gemini
+ * models is what lets AI-Overviews-direct and Gemini-via-gateway coexist on one
+ * account. The router is only actually used when it's verified (routerCanMeasure)
+ * and has a slug, so this preference degrades safely to the direct key.
+ */
+export function prefersRouter(provider: Provider, model: string): boolean {
+  return provider === "google" && model !== GOOGLE_AI_OVERVIEWS_MODEL;
+}
+
+/**
  * Why a router can't serve this engine, phrased as the fix.
  *
  * Only called when routerCanMeasure said no, and deliberately specific about

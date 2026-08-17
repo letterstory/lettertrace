@@ -10,6 +10,7 @@ import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
 import {
   ROUTERS,
   ROUTER_LIST,
+  prefersRouter,
   routerCanMeasure,
   routerProviders,
   routerRefusalMessage,
@@ -325,11 +326,12 @@ export async function resolveRunKeyFor(
   const base = { provider, model: requested.model, requested };
 
   const own = await getDecryptedKey(supabase, userId, provider);
-  if (own) return { ...base, source: "own", apiKey: own };
 
   // A router credential, but only one that can measure this engine the same way
   // a direct key would — see routerCanMeasure. A router that reaches the engine
   // without carrying its web search is refused below rather than used here.
+  // Fetched before the direct-key return because a router-preferred model (real
+  // Gemini) routes even when a direct key exists — see prefersRouter.
   const routerKeys = await getDecryptedRouterKeys(supabase, userId);
   const usable = routerKeys.find(
     (rk) =>
@@ -342,6 +344,15 @@ export async function resolveRunKeyFor(
       // Keep those on the direct/trial path instead of selecting a route that dies.
       routerSlug(rk.router, provider, requested.model) !== null,
   );
+
+  // Router-preferred models (Google's non-Overviews surfaces) route through a
+  // capable router even when a direct key is present — the direct key stays
+  // reserved for the AI-Overviews surface it alone can serve. Everything else is
+  // BYOK-first: the direct key wins and the router is the fallback.
+  if (usable && prefersRouter(provider, requested.model)) {
+    return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };
+  }
+  if (own) return { ...base, source: "own", apiKey: own };
   if (usable) {
     return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };
   }
