@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
+import { AdminNav } from "./nav";
 
 /**
  * A deliberately plain shell, separate from the dashboard's.
@@ -20,12 +21,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-paper">
       <header className="border-b border-ink/10">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
           <div className="flex items-center gap-3">
             <Logo />
-            <span className="rounded-sm bg-ink/[0.06] px-2 py-0.5 text-xs font-medium text-ink-soft">
-              operations
-            </span>
+            <AdminNav />
           </div>
           <div className="flex items-center gap-3">
             <Link href="/dashboard" className="text-sm text-ink-faint hover:text-ink">
@@ -35,7 +34,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
+      <main className="mx-auto max-w-6xl px-6 py-10">{children}</main>
     </div>
   );
 }
