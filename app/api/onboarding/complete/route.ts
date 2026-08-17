@@ -131,11 +131,14 @@ export async function POST(request: Request) {
   // New projects are created grounded (use_web_search defaults on in the
   // database), so coverage is asked for the grounded case.
   const routerKeys = await getRouterKeysPublic(supabase, user.id);
-  const runnable = coveredProviders({
+  const credentials = {
     direct: providers,
     routers: routerKeys.map((k) => ({ router: k.router, searchVerified: k.search_verified ?? [] })),
-    webSearch: true,
-  });
+  };
+  const grounded = coveredProviders({ ...credentials, webSearch: true });
+  // An engine the user can only run ungrounded (DeepSeek) still beats the env default:
+  // Settings and the run page then name the exact fix instead of "no key" for an engine they never chose.
+  const runnable = grounded.length > 0 ? grounded : coveredProviders({ ...credentials, webSearch: false });
   const envDefault = pickDefaultProvider();
   const provider =
     runnable.length === 0 || runnable.includes(envDefault) ? envDefault : runnable[0];

@@ -289,6 +289,15 @@ const DIRECT_SHAPE: Record<Provider, CallShape> = {
   openai: "openai-chat",
   google: "google",
   perplexity: "perplexity",
+  // xAI's utility surface really is chat-completions: same JSON-object
+  // response_format, so it wants OpenAI's phrasing rather than a shape of its
+  // own. Only the ANSWER path differs (the Responses API, below).
+  xai: "openai-chat",
+  // Genuinely chat-completions shaped, and wants OpenAI's JSON-object phrasing.
+  deepseek: "openai-chat",
+  // Utility surface really is chat-completions; the answer path is the
+  // Responses API, mirroring xAI's split.
+  meta: "openai-chat",
 };
 
 function callShape(opts: BaseCall, model: string): CallShape {
@@ -319,6 +328,13 @@ async function utilityChat(
       ? anthropicChat(opts.apiKey, model, system, user, maxTokens, plan)
       : openaiChat(opts.apiKey, model, system, user, maxTokens, json, plan);
   }
+  // Exhaustive on purpose — no `default`. The default this replaces sent every
+  // unlisted provider to openaiChat, i.e. to api.openai.com, so a provider added
+  // to the catalog without a branch here would have posted the user's key for a
+  // DIFFERENT vendor to OpenAI: a leaked credential and a wrong answer, with
+  // nothing failing to say so. Listing every case makes the compiler refuse to
+  // build until the next engine is handled. (Same bug the pilot harness's
+  // `keyFor` had, where google was handed the OpenAI key.)
   switch (opts.provider) {
     case "anthropic":
       return anthropicChat(opts.apiKey, model, system, user, maxTokens);
@@ -326,7 +342,13 @@ async function utilityChat(
       return googleChat(opts.apiKey, model, system, user, maxTokens, json);
     case "perplexity":
       return perplexityChat(opts.apiKey, model, system, user, maxTokens);
-    default:
+    case "xai":
+      return xaiChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "deepseek":
+      return deepseekChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "meta":
+      return metaChat(opts.apiKey, model, system, user, maxTokens, json);
+    case "openai":
       return openaiChat(opts.apiKey, model, system, user, maxTokens, json);
   }
 }
@@ -345,6 +367,24 @@ export async function verifyKey(
       await googleChat(apiKey, "gemini-flash-lite-latest", undefined, "ping", 8);
     } else if (provider === "perplexity") {
       await perplexityChat(apiKey, "sonar", undefined, "ping", 8);
+    } else if (provider === "xai") {
+      // The cheap model, and a budget xaiChat will clamp up to the floor rather
+      // than send as-is — see XAI_MIN_MAX_TOKENS for why a too-small ping is how
+      // a valid key gets reported invalid.
+      await xaiChat(apiKey, "grok-4.3", undefined, "ping", 8);
+    } else if (provider === "deepseek") {
+      await deepseekChat(apiKey, "deepseek-v4-flash", undefined, "ping", 8);
+    } else if (provider === "meta") {
+      // NOT an 8-token ping like the others. Measured live 2026-08-15: even
+      // at reasoning_effort:"minimal", a trivial "ping" still spends a
+      // reasoning-token count that swings widely between calls (samples from
+      // 5 up to 79) before any visible token -- minimal reduces reasoning
+      // cost, it does not remove it the way DeepSeek's thinking:"disabled"
+      // does. 100 tokens looked safe across one batch of samples and then
+      // failed live in the dashboard on the very next real key save. 300
+      // still costs a fraction of a cent and comfortably clears every
+      // reasoning-token sample measured so far.
+      await metaChat(apiKey, "muse-spark-1.2", undefined, "ping", 300);
     } else {
       await openaiChat(apiKey, "gpt-4o-mini", undefined, "ping", 4);
     }
@@ -527,6 +567,22 @@ export async function runQuery(
   // Perplexity always searches, so it ignores the project toggle entirely.
   if (opts.provider === "perplexity") {
     return perplexityRunQuery(opts.apiKey, opts.model, opts.prompt);
+  }
+  // xAI answers on the Responses API whether or not it is browsing, so it takes
+  // its own branch rather than splitting across the shared web-search one below.
+  if (opts.provider === "xai") {
+    return xaiRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
+  }
+  // DeepSeek can't browse, so it ignores the toggle the way Perplexity ignores
+  // it in the other direction. A grounded project never gets this far — see
+  // providerCanMeasure — so this is the ungrounded case by construction.
+  if (opts.provider === "deepseek") {
+    return deepseekRunQuery(opts.apiKey, opts.model, opts.prompt);
+  }
+  // Meta answers on the Responses API whether or not it is browsing, same
+  // reasoning as xAI's branch above.
+  if (opts.provider === "meta") {
+    return metaRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
   }
   if (!webSearch) {
     const res =
@@ -868,6 +924,26 @@ interface GoogleResponse {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Seconds from a Retry-After header, in either form the spec allows: a delta in
+ * seconds, or an HTTP date.
+ *
+ * Shared by every adapter that honours the header (Perplexity, xAI, DeepSeek) —
+ * they had begun to accumulate byte-identical private copies, and the HTTP-date
+ * branch is the kind of thing that gets dropped when the third copy is written
+ * from memory. Google is the exception and stays separate: its wait arrives
+ * inside a google.rpc.RetryInfo detail rather than a header.
+ */
+function retryAfterSeconds(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return secs;
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
+  return undefined;
+}
+
 // Map the "google-ai-overviews" pseudo-model onto a real Gemini model so it
 // never reaches the wire; every other id passes through untouched.
 function resolveGoogleModel(model: string): string {
@@ -1154,17 +1230,6 @@ interface PerplexityResponse {
   detail?: unknown;
 }
 
-/** Seconds from a Retry-After header, which may be a delta or an HTTP date. */
-function perplexityRetryAfterSec(res: Response): number | undefined {
-  const raw = res.headers.get("retry-after");
-  if (!raw) return undefined;
-  const secs = Number(raw);
-  if (Number.isFinite(secs) && secs >= 0) return secs;
-  const when = Date.parse(raw);
-  if (!Number.isNaN(when)) return Math.max(0, (when - Date.now()) / 1000);
-  return undefined;
-}
-
 async function perplexityFetch(apiKey: string, body: unknown): Promise<PerplexityResponse> {
   let lastErr: unknown;
   let sleptMs = 0;
@@ -1186,7 +1251,7 @@ async function perplexityFetch(apiKey: string, body: unknown): Promise<Perplexit
         errBody.error?.message ??
           (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
           `Perplexity API error (${res.status}).`,
-        perplexityRetryAfterSec(res),
+        retryAfterSeconds(res),
       );
       if (!PERPLEXITY_RETRYABLE.has(res.status)) throw perr;
       lastErr = perr;
@@ -1322,6 +1387,780 @@ async function perplexityRunQuery(
     search: true,
   });
   return { text, tokens, sources: perplexitySources(data) };
+}
+
+// ==================================================================
+// xAI (Grok)
+//
+// Two surfaces under one host, because xAI splits them the way OpenAI does:
+//
+//   /v1/chat/completions  utility work — JSON classification, suggestion. Plain
+//                         OpenAI-compatible, response_format included, which is
+//                         why DIRECT_SHAPE calls this provider 'openai-chat'.
+//   /v1/responses         monitored answers. The server-side `web_search` tool
+//                         lives only here, and it returns citations in the same
+//                         `annotations[] {type:"url_citation"}` shape the direct
+//                         OpenAI path and gatewaySources already read.
+//
+// Raw fetch for both, like the Google and Perplexity adapters: the OpenAI SDK
+// would carry us for chat-completions but not for the Responses body below, and
+// one transport per provider beats two.
+//
+// The legacy `search_parameters` / Live Search API xAI shipped first is gone —
+// retired 2026-01-12, answering 410 — so anything written against it is dead.
+// Server-side search is the Agent Tools route only.
+// ==================================================================
+
+const XAI_API_BASE = "https://api.x.ai/v1";
+const XAI_TIMEOUT_MS = 60_000;
+const XAI_MAX_ATTEMPTS = 4;
+const XAI_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+// Same bounds and same reasoning as the Google and Perplexity adapters: a rate
+// limit's window does not care about our backoff, so honour Retry-After, but
+// never block one prompt long enough to starve the rest of the run.
+const XAI_MAX_RETRY_WAIT_MS = 45_000;
+const XAI_RETRY_BUDGET_MS = 90_000;
+// Floor for the verifyKey ping. Set to Perplexity's known floor as a
+// conservative guess, because the failure it guards against is silent and
+// one-directional: too small and a VALID key is reported invalid (exactly what
+// an 8-token ping copied from the Google adapter did to Perplexity), while too
+// large costs a few tokens once.
+//
+// Probed 2026-08-14 against grok-4.6 with a funded key: 16 is ACCEPTED (no
+// "must be at least N" rejection). Not re-tested below 16 — the guess already
+// works, and the failure mode this guards against only bites if the floor
+// creeps UP, not down, so there was nothing to gain from finding the exact
+// minimum. Clamped inside xaiGenerate so no caller can reintroduce a smaller
+// value without re-confirming it.
+const XAI_MIN_MAX_TOKENS = 16;
+
+export class XaiAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "XaiAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+/** POST to one of xAI's two surfaces, with the shared retry policy. */
+async function xaiFetch<T>(path: "/chat/completions" | "/responses", apiKey: string, body: unknown): Promise<T> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < XAI_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${XAI_API_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(XAI_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const errBody = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+        detail?: unknown;
+      };
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        (typeof errBody.detail === "string" ? errBody.detail : undefined) ??
+        `xAI API error (${res.status}).`;
+      const xerr = new XaiAPIError(res.status, message, retryAfterSeconds(res));
+      if (!XAI_RETRYABLE.has(res.status)) throw xerr;
+      lastErr = xerr;
+    } catch (err) {
+      if (err instanceof XaiAPIError && !XAI_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= XAI_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof XaiAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > XAI_MAX_RETRY_WAIT_MS || sleptMs + waitMs > XAI_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("xAI request failed.");
+}
+
+interface XaiChatResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+/** Utility-call helper, matching anthropicChat / openaiChat / perplexityChat. */
+async function xaiChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await xaiFetch<XaiChatResponse>("/chat/completions", apiKey, {
+    model,
+    messages,
+    max_tokens: Math.max(maxTokens, XAI_MIN_MAX_TOKENS),
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // Same guards as everywhere else: a 200 carrying no usable answer is an error,
+  // not an empty measurement. See googleGenerate for why this matters.
+  if (!choice) throw new Error("xAI returned no answer (the response contained no choices).");
+  if (!text) {
+    throw new Error(
+      `xAI returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+interface XaiResponsesReply {
+  output?: {
+    type?: string;
+    // Present (value "commentary") on the throwaway "I'll look that up for
+    // you" message a search turn emits before its web_search_call items —
+    // same shape as Meta's MetaResponsesReply, and the same failure mode:
+    // concatenating it onto the real answer glues commentary text onto the
+    // front of what gets scanned for brand mentions.
+    phase?: string;
+    content?: {
+      type?: string;
+      text?: string;
+      annotations?: { type?: string; url?: string; title?: string }[];
+    }[];
+  }[];
+  /** Every URL the agent touched, cited in the answer or not. */
+  citations?: string[];
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * Sources from an xAI answer. Exported for tests.
+ *
+ * `annotations[].title` is NOT a page title — xAI puts the citation's LABEL
+ * there ("1", "2", …), so passing it through would store the string "1" as the
+ * title of every source and show that in the UI. Titles are dropped rather than
+ * faked; the URL is the part that carries meaning, and `domain` comes from
+ * parsing it.
+ *
+ * The top-level `citations` list is used only when the answer cited nothing
+ * inline — the same preference the Anthropic path applies to its retrieved-but-
+ * not-cited results. xAI's own docs say not every URL in it is referenced in the
+ * final answer, so it is the weaker signal of the two.
+ *
+ * A note on the TEXT this function's sources sit alongside, not on the sources
+ * themselves: xAI CAN write its inline citations directly into the answer text
+ * as markdown, `[[1]](url)` — double-bracketed, unlike the single-bracket
+ * `[label](url)` most tools emit. `response_text` stores that markdown as-is
+ * when present (no other adapter here needs to strip anything, since
+ * Anthropic/OpenAI/Google keep citation metadata separate from the visible
+ * text).
+ *
+ * "Can", not "always does" — checked live twice, 2026-08-14: a forced grok-4.6
+ * probe answer embedded the bracket markdown inline (captured JSON, see the
+ * commit that added this note), but a real dashboard run against grok-4.3 with
+ * the same forcing shape came back with 18 real sources and ZERO inline
+ * brackets in the visible text — citations arrived purely as separate
+ * annotation metadata that `xaiSources` above reads regardless. So the display
+ * concern below is a "sometimes", not an "every Grok answer" — worth knowing
+ * before assuming a fix is needed, not before knowing the format could appear.
+ *
+ * Two consequences on the occasions the brackets ARE present:
+ *   - Mention detection is NOT at risk: `lib/mentions.ts`'s `stripLinkSurfaces`
+ *     blanks any bare `https://...` run independently of bracket nesting, so a
+ *     citation URL whose domain happens to match a tracked brand does not leak
+ *     into the scanned text, even though its markdown-link regex (written for
+ *     single brackets) doesn't recognise xAI's link as a link. Verified against
+ *     an actual captured citation string, not assumed.
+ *   - Display is cosmetically affected: the dashboard renders `response_text`
+ *     as plain text (no markdown renderer in this app), so a user reading a raw
+ *     Grok answer that DID get inline brackets sees the literal
+ *     `[[1]](https://...)` characters rather than a clean sentence or a
+ *     rendered link. Not a correctness bug, not fixed here — worth a follow-up
+ *     only if this turns out to be common enough that real users notice it.
+ */
+export function xaiSources(reply: XaiResponsesReply): CitedSource[] {
+  const cited: CitedSource[] = [];
+  for (const item of reply.output ?? []) {
+    for (const c of item.content ?? []) {
+      for (const a of c.annotations ?? []) {
+        if (a.type && a.type !== "url_citation") continue;
+        const s = a.url ? safeSource(a.url, null, null) : null;
+        if (s) cited.push(s);
+      }
+    }
+  }
+  if (cited.length > 0) return dedupeSources(cited);
+
+  const fallback: CitedSource[] = [];
+  for (const url of reply.citations ?? []) {
+    const s = typeof url === "string" ? safeSource(url, null, null) : null;
+    if (s) fallback.push(s);
+  }
+  return dedupeSources(fallback);
+}
+
+/**
+ * Answer text from a Responses reply: final message items only, never
+ * reasoning, tool items, or search-turn commentary. This had no item-type
+ * filter at all until now, so any of those could get concatenated into the
+ * stored answer — the exact bug metaText was already fixed for below.
+ */
+function xaiText(reply: XaiResponsesReply): string {
+  let text = "";
+  for (const item of reply.output ?? []) {
+    if (item.type !== "message" || item.phase === "commentary") continue;
+    for (const c of item.content ?? []) {
+      if (c.type !== undefined && c.type !== "output_text") continue;
+      if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+    }
+  }
+  return text.trim();
+}
+
+// Ask for the browse rather than leaving it to the model, matching every other
+// grounded engine here (Anthropic's tool_choice, OpenAI's tool_choice, Gemini's
+// ALWAYS_SEARCH instruction). Left to choose, a model answers a question it
+// thinks it knows from memory and cites nothing, and its mention rate then
+// measures something different from the engines that were made to look.
+//
+// The SHAPE below is measured, not guessed. xAI documents the web_search tool
+// but not tool_choice for it, so the first draft of this used
+// `{type:"web_search"}` by analogy with OpenAI's Responses surface — which xAI
+// rejects outright with 422 "did not match any variant of untagged enum
+// ModelToolChoice". Every grounded run would have failed.
+//
+// Probed 2026-08-13 against grok-4.6 on /v1/responses. xAI validates the body
+// BEFORE it checks billing, so the status code separates a legal shape (403, on
+// a credit-less team) from an illegal one (422) without spending anything:
+//
+//   "required"                              403  legal
+//   {type:"tool", name:"web_search"}        403  legal   <- this one
+//   {function_name:"web_search"}            422  rejected
+//   {type:"web_search"}                     422  rejected
+//   {type:"function", function:{...}}       422  rejected
+//   search_parameters:{mode:"on"} (legacy)  410  "Live search is deprecated"
+//
+// Of the two legal forms, the named one is chosen deliberately: "required"
+// compels SOME tool, this compels THIS tool, and it is the exact shape the
+// Anthropic path already uses. That matters the moment a second tool is offered
+// here — with "required", Grok could satisfy the constraint by calling anything.
+//
+// Whether the model then actually browses, rather than accepting a legal
+// parameter and ignoring it, needed a funded key — checked 2026-08-14 against
+// grok-4.6 on /v1/responses, forced vs merely offered, source counts compared:
+//
+//   Round 1 — "What is the capital of France?" (answerable from memory)
+//     offered, no tool_choice   5 inline sources
+//     forced (this shape)       5 inline sources
+//
+//   Round 2 — "a headline from the last 48 hours" (NOT answerable from memory,
+//   so a real dated/sourced answer is unambiguous proof a search happened)
+//     offered, no tool_choice   1 inline source, real Aug-14-2026 headline
+//     forced (this shape)       1 inline source, a DIFFERENT real headline
+//
+// Both rounds: identical behaviour forced vs offered. grok-4.6 appears to
+// browse readily whenever the tool is merely available, at least when the
+// prompt itself asks it to search. That is NOT the same finding Anthropic and
+// Gemini gave (there, offering alone measured 0/2) — it may mean this model
+// needs less pushing, or it may mean two data points can't tell the difference
+// between "forcing works" and "this model always searches when it can". This
+// codebase's own standard for ranking behaviour needs more than a couple of
+// prompts (see the Perplexity PR's Wilson-interval discussion), so the honest
+// state is: forcing is accepted, never behaves worse, and its marginal effect
+// over merely offering is UNPROVEN at this sample size. Kept forced anyway —
+// it costs nothing to ask and matches the other providers' shape.
+const XAI_FORCE_SEARCH = { type: "tool", name: "web_search" } as const;
+
+// A grounded call's tool-calling turns count against the SAME output budget as
+// the answer — the identical bug fixed for Meta below (META_GROUNDED_MAX_TOKENS),
+// and Grok is a reasoning model on the same Responses surface, so tool turns
+// plus reasoning can exhaust 1200 tokens before any answer text is written.
+// Ungrounded calls never hit this path (no tools means no tool-calling turns),
+// so they keep the shared answer budget.
+const XAI_GROUNDED_MAX_TOKENS = 4000;
+
+async function xaiRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  const reply = await xaiFetch<XaiResponsesReply>("/responses", apiKey, {
+    model,
+    input: prompt,
+    max_output_tokens: webSearch
+      ? XAI_GROUNDED_MAX_TOKENS
+      : Math.max(ANSWER_MAX_TOKENS, XAI_MIN_MAX_TOKENS),
+    ...(webSearch
+      ? { tools: [{ type: "web_search" }], tool_choice: XAI_FORCE_SEARCH }
+      : {}),
+  });
+
+  const text = xaiText(reply);
+  const usage = reply.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+
+  if (!text) {
+    // A grounded ask that comes back empty is the dangerous case: stored, it
+    // scans for zero mentions and charts as "the brand wasn't named".
+    throw new Error("xAI returned an empty answer.");
+  }
+  return { text, tokens, sources: webSearch ? xaiSources(reply) : [] };
+}
+
+// ==================================================================
+// DeepSeek
+//
+// The only engine in the catalog that cannot browse, and the reason
+// ProviderSearch exists. DeepSeek's API documents `function` tools only —
+// caller-executed — so "grounding" would mean us running the search and handing
+// results back, which measures OUR search engine wearing DeepSeek's label. Web
+// search is a feature of their consumer app, not of the API. lib/models refuses
+// a grounded project on this provider (providerCanMeasure) before a call is
+// ever made; nothing here has to defend against it, but nothing here may
+// quietly answer one either.
+//
+// Raw fetch rather than the OpenAI SDK with a base URL, even though DeepSeek is
+// OpenAI-compatible enough for that to work. Two reasons, in order:
+//
+//   1. The SDK resolves its own fetch internally, so an SDK-backed adapter
+//      cannot be asserted at the wire level by this suite's mocked-fetch
+//      harness. Every other adapter here proves what it puts on the wire; one
+//      that can only be tested through its return value is the one where a
+//      wrong host or a stray search parameter would go unnoticed.
+//   2. DeepSeek's error semantics are its own — 402 is a spent prepaid balance,
+//      not a card problem — and mapping them needs its own error type.
+//
+// The cost is a retry loop that looks like googleFetch's and perplexityFetch's.
+// Those two are already near-identical for the same reason; per-provider
+// transports are the established shape in this file.
+// ==================================================================
+
+const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_TIMEOUT_MS = 60_000;
+const DEEPSEEK_MAX_ATTEMPTS = 4;
+const DEEPSEEK_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const DEEPSEEK_MAX_RETRY_WAIT_MS = 45_000;
+const DEEPSEEK_RETRY_BUDGET_MS = 90_000;
+
+export class DeepseekAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "DeepseekAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+interface DeepseekResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  error?: { message?: string } | string;
+}
+
+async function deepseekFetch(apiKey: string, body: unknown): Promise<DeepseekResponse> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < DEEPSEEK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(DEEPSEEK_API_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as DeepseekResponse;
+      const errBody = (await res.json().catch(() => ({}))) as DeepseekResponse;
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        `DeepSeek API error (${res.status}).`;
+      const derr = new DeepseekAPIError(res.status, message, retryAfterSeconds(res));
+      if (!DEEPSEEK_RETRYABLE.has(res.status)) throw derr;
+      lastErr = derr;
+    } catch (err) {
+      if (err instanceof DeepseekAPIError && !DEEPSEEK_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= DEEPSEEK_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof DeepseekAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > DEEPSEEK_MAX_RETRY_WAIT_MS || sleptMs + waitMs > DEEPSEEK_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("DeepSeek request failed.");
+}
+
+/** Utility-call helper, matching the other providers' chat helpers. */
+async function deepseekChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await deepseekFetch(apiKey, {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    // DeepSeek V4 has "thinking mode" ON by default, effort "high" per its own
+    // docs, and reasoning shares the SAME max_tokens as the visible answer --
+    // the identical failure shape as Gemini's thinking tokens (see
+    // GOOGLE_THINKING_HEADROOM), confirmed live 2026-08-14: the verifyKey ping
+    // (8 tokens) came back "empty answer (finish_reason: length)" — the entire
+    // budget was spent on hidden reasoning before a single visible token could
+    // be written. Disabled outright rather than padded with headroom the way
+    // Gemini's is: unlike Gemini, DeepSeek exposes a real off switch, and every
+    // call this adapter makes (a tiny ping, a structured classification, a
+    // company-listing answer) is a task that doesn't need chain-of-thought.
+    // Leaving it on would also make DeepSeek's cost and truncation risk
+    // unpredictable in a way no other engine here is, for no measured benefit.
+    thinking: { type: "disabled" },
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // A 200 carrying no usable answer is an error, not an empty measurement: it
+  // would be stored, scanned for zero mentions, and charted as "the brand
+  // wasn't named". Same guard as googleGenerate and perplexityGenerate.
+  if (!choice) {
+    throw new Error("DeepSeek returned no answer (the response contained no choices).");
+  }
+  if (!text) {
+    throw new Error(
+      `DeepSeek returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+async function deepseekRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+): Promise<QueryResult> {
+  // No webSearch parameter, and that is the point rather than an omission. A
+  // grounded project never reaches this function (providerCanMeasure refuses it
+  // at resolveRunKeyFor), and an ungrounded one has nothing to ask for. Sources
+  // are always empty because the model never looked anything up — recording a
+  // citation here would be inventing one.
+  const res = await deepseekChat(apiKey, model, undefined, prompt, ANSWER_MAX_TOKENS);
+  return { ...res, sources: [] };
+}
+
+// ==================================================================
+// Meta (Muse Spark, via the Meta Model API)
+//
+// Not the retired Llama API (llama.developer.meta.com, sunset 2026-07-06) --
+// a different, currently-active product Meta launched in its place. Raw fetch,
+// matching DeepSeek's and xAI's shape rather than the OpenAI SDK, for the same
+// reason: this suite asserts on the actual wire body, and an SDK-backed
+// adapter can only be checked through its return value.
+//
+// Two surfaces, mirroring xAI's split: /chat/completions for utility work,
+// /responses for monitored answers, since that is where Meta's own
+// search-grounding cookbook puts the web_search tool.
+//
+// reasoning_effort is set on EVERY call this adapter makes, never left unset.
+// Meta's own docs say the default "is still being finalized" -- an admitted
+// unknown, not a safe one to leave alone. That is the DeepSeek lesson applied
+// before a live call, not after one: DeepSeek's thinking mode defaulted to
+// "high" and reasoning shares the same token budget as the visible answer,
+// which turned an 8-token verifyKey ping into an empty answer. Muse Spark's
+// docs describe the identical budget-sharing behaviour ("reasoning_tokens are
+// part of completion_tokens"), so the same failure is available here on day
+// one if a default ever lands on something expensive. "minimal" for utility
+// calls (classification/suggestion have no use for chain-of-thought), "low"
+// for answers (some benefit for a real monitored question, without inviting
+// the failure mode a high default would risk).
+// ==================================================================
+
+const META_API_BASE = "https://api.meta.ai/v1";
+const META_TIMEOUT_MS = 60_000;
+const META_MAX_ATTEMPTS = 4;
+const META_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const META_MAX_RETRY_WAIT_MS = 45_000;
+const META_RETRY_BUDGET_MS = 90_000;
+
+export class MetaAPIError extends Error {
+  status: number;
+  /** From the Retry-After header on a 429, in seconds. */
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
+    super(message);
+    this.name = "MetaAPIError";
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+interface MetaChatResponse {
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  error?: { message?: string } | string;
+}
+
+async function metaFetch<T>(
+  path: "/chat/completions" | "/responses",
+  apiKey: string,
+  body: unknown,
+): Promise<T> {
+  let lastErr: unknown;
+  let sleptMs = 0;
+  for (let attempt = 0; attempt < META_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${META_API_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(META_TIMEOUT_MS),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const errBody = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string;
+      };
+      const message =
+        (typeof errBody.error === "string" ? errBody.error : errBody.error?.message) ??
+        `Meta API error (${res.status}).`;
+      const merr = new MetaAPIError(res.status, message, retryAfterSeconds(res));
+      if (!META_RETRYABLE.has(res.status)) throw merr;
+      lastErr = merr;
+    } catch (err) {
+      if (err instanceof MetaAPIError && !META_RETRYABLE.has(err.status)) throw err;
+      lastErr = err;
+    }
+    if (attempt >= META_MAX_ATTEMPTS - 1) break;
+
+    const advised = lastErr instanceof MetaAPIError ? lastErr.retryAfterSec : undefined;
+    const backoffMs = 400 * 2 ** attempt;
+    const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
+    if (waitMs > META_MAX_RETRY_WAIT_MS || sleptMs + waitMs > META_RETRY_BUDGET_MS) break;
+    await sleep(waitMs);
+    sleptMs += waitMs;
+  }
+  throw lastErr ?? new Error("Meta request failed.");
+}
+
+/** Utility-call helper, matching the other providers' chat helpers. */
+async function metaChat(
+  apiKey: string,
+  model: string,
+  system: string | undefined,
+  user: string,
+  maxTokens: number,
+  json = false,
+): Promise<ChatResult> {
+  const messages: { role: string; content: string }[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: user });
+
+  const data = await metaFetch<MetaChatResponse>("/chat/completions", apiKey, {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    // See the section header: never left unset. Every call this adapter makes
+    // for utility work is a structured-JSON judgment with no use for extended
+    // reasoning, so this is the cheapest tier rather than a guess at "safe".
+    reasoning_effort: "minimal",
+    ...(json ? { response_format: { type: "json_object" } } : {}),
+  });
+
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  const usage = data.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+
+  // A 200 carrying no usable answer is an error, not an empty measurement --
+  // same guard as every other adapter here, and the exact shape of failure
+  // reasoning_effort above exists to prevent (reasoning eating the budget
+  // before any visible token is written).
+  if (!choice) {
+    throw new Error("Meta returned no answer (the response contained no choices).");
+  }
+  if (!text) {
+    throw new Error(
+      `Meta returned an empty answer (finish_reason: ${choice.finish_reason ?? "unspecified"}).`,
+    );
+  }
+  return { text, tokens };
+}
+
+interface MetaResponsesReply {
+  output?: {
+    type?: string;
+    // Present (value "commentary") on the throwaway "I'll look that up for
+    // you" message a search turn emits before its web_search_call items;
+    // absent on the real final answer and on every message when search is
+    // off. Measured live 2026-08-15: a 2-search grounded call returned TWO
+    // message items, commentary first, real answer last -- concatenating
+    // both (the original bug here) stored the commentary sentence glued
+    // onto the front of the real answer.
+    phase?: string;
+    // On a web_search_call item: "completed" for a search that actually ran.
+    status?: string;
+    content?: {
+      type?: string;
+      text?: string;
+      annotations?: { type?: string; url?: string; title?: string }[];
+    }[];
+  }[];
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * Sources from a Meta answer. Exported for tests.
+ *
+ * Unlike xAI, Meta's own docs describe `annotations[].title` as the source's
+ * real page title, not a citation-number label. Measured live 2026-08-15
+ * across several grounded answers: presence is prompt-dependent, not
+ * missing. A plain "list the top 5..." prompt came back with empty
+ * annotations despite two completed web_search_call actions in the same
+ * reply, but two "what is the best X" / "how do I..." prompts through the
+ * real pilot harness both returned real citations -- one of them the
+ * project's own domain. Don't assume a Meta run has zero sources just
+ * because one earlier prompt shape didn't attach any.
+ */
+export function metaSources(reply: MetaResponsesReply): CitedSource[] {
+  const raw: CitedSource[] = [];
+  for (const item of reply.output ?? []) {
+    for (const c of item.content ?? []) {
+      for (const a of c.annotations ?? []) {
+        if (a.type && a.type !== "url_citation") continue;
+        const s = a.url ? safeSource(a.url, a.title ?? null, null) : null;
+        if (s) raw.push(s);
+      }
+    }
+  }
+  return dedupeSources(raw);
+}
+
+function metaText(reply: MetaResponsesReply): string {
+  let text = "";
+  for (const item of reply.output ?? []) {
+    if (item.type !== "message" || item.phase === "commentary") continue;
+    for (const c of item.content ?? []) {
+      if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+    }
+  }
+  return text.trim();
+}
+
+/** Did a completed web_search_call actually run? */
+function metaSearched(reply: MetaResponsesReply): boolean {
+  return (reply.output ?? []).some(
+    (item) => item.type === "web_search_call" && (item.status === undefined || item.status === "completed"),
+  );
+}
+
+// Probed live 2026-08-15, three real calls against Muse Spark: no tools, tools
+// offered with no tool_choice, then this shape. `tool_choice: {type:"web_search"}`
+// was rejected outright with HTTP 400 "`tool_choice` did not match any
+// supported type" -- not silently ignored, genuinely unsupported. Confirms
+// Meta's own docs ("the model decides autonomously") rather than just being
+// silent on the point the way Grok's were. Left permanently unset;
+// metaRunQuery only offers the tool.
+const META_FORCE_SEARCH: Record<string, unknown> | undefined = undefined;
+
+// A grounded call's tool-calling turns count against the SAME output budget
+// as the answer, same class of bug as the reasoning-token one above but far
+// bigger: measured live 2026-08-15 on an open-ended "best CDN" question, Muse
+// Spark ran one search plus THREE full open_page fetches before writing a
+// word of the answer, spending all 1200 tokens on tool orchestration and
+// leaving incomplete_details:{reason:"max_output_tokens"} with no message at
+// all -- every such prompt would refuse rather than measure anything.
+// search_context_size:"low" did not reduce the page-open count (tested, no
+// effect). 3000 tokens let the same prompt finish both the exploration and a
+// full final answer with ~774 tokens of headroom (2226 used); 4000 keeps
+// that margin under prompts that search more, still under 2 cents worst
+// case at Meta's own output rate. Ungrounded calls never hit this path (no
+// tools means no tool-calling turns), so they keep the shared budget.
+const META_GROUNDED_MAX_TOKENS = 4000;
+
+async function metaRunQuery(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  webSearch: boolean,
+): Promise<QueryResult> {
+  const reply = await metaFetch<MetaResponsesReply>("/responses", apiKey, {
+    model,
+    input: prompt,
+    max_output_tokens: webSearch ? META_GROUNDED_MAX_TOKENS : ANSWER_MAX_TOKENS,
+    // NOT `reasoning_effort` -- that flat field is the chat-completions shape.
+    // The Responses API rejects it outright with HTTP 400 "unknown parameter"
+    // (measured live 2026-08-15); the nested form below is what it actually
+    // reads back in the reply. Getting this wrong doesn't degrade the
+    // answer, it fails every single monitored Meta run.
+    reasoning: { effort: "low" },
+    ...(webSearch
+      ? {
+          tools: [{ type: "web_search" }],
+          ...(META_FORCE_SEARCH ? { tool_choice: META_FORCE_SEARCH } : {}),
+        }
+      : {}),
+  });
+
+  // Offered-only search: Meta can only offer web_search, never force it (see
+  // META_FORCE_SEARCH above), so the model may answer from memory instead of
+  // browsing. That answer is not a grounded measurement and must not be stored
+  // as one -- the same line providerCanMeasure draws for DeepSeek, drawn per
+  // reply here since forcing can't draw it up front.
+  if (webSearch && !metaSearched(reply)) {
+    throw new Error(
+      "Meta answered without searching the web, so the answer can't be recorded as search-grounded.",
+    );
+  }
+
+  const text = metaText(reply);
+  const usage = reply.usage;
+  const tokens =
+    usage?.total_tokens ?? (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+
+  if (!text) {
+    throw new Error("Meta returned an empty answer.");
+  }
+  return { text, tokens, sources: webSearch ? metaSources(reply) : [] };
 }
 
 // Prompt shape is the single biggest lever on whether a run measures anything.
@@ -1730,6 +2569,64 @@ export function humanError(err: unknown): string {
       );
     }
     if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof DeepseekAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    // DeepSeek runs on a prepaid balance and calls this one out by name in its
+    // docs. A good key simply stops working when the balance hits zero, so
+    // "Provider error (402)" would send someone hunting for a bad key.
+    if (err.status === 402) {
+      return "This DeepSeek key is out of balance. Top it up in the DeepSeek platform console.";
+    }
+    if (err.status === 429) {
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` DeepSeek asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `DeepSeek rejected the request: this key is over its rate limit.${wait} ` +
+        `Check your rate limits and balance in the DeepSeek platform console, or wait and run again.`
+      );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof MetaAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    if (err.status === 402) return "This Meta key has no credit left.";
+    if (err.status === 429) {
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` Meta asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return `Meta rejected the request: this key is over its rate limit.${wait} Wait and run again.`;
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
+    return err.message || `Provider error (${err.status}).`;
+  }
+  if (err instanceof XaiAPIError) {
+    if (err.status === 401 || err.status === 403) return "Invalid API key.";
+    // xAI bills from a prepaid credit balance rather than an invoice, so a key
+    // that authenticates fine still stops working when the balance runs out.
+    // "Provider error (402)" would send someone looking for a bug in the key.
+    if (err.status === 402) return "This xAI key has no credit left. Top it up in the xAI console.";
+    if (err.status === 429) {
+      // Same reasoning as the Gemini and Perplexity 429s: "rate limited" reads
+      // as "we went too fast" and invites an immediate retry that cannot work.
+      const wait =
+        err.retryAfterSec !== undefined && err.retryAfterSec > 0
+          ? ` xAI asked us to wait ${Math.ceil(err.retryAfterSec)}s.`
+          : "";
+      return (
+        `xAI rejected the request: this key is over its rate limit.${wait} ` +
+        `Check the key's limits and credit balance in the xAI console, or wait and run again.`
+      );
+    }
+    if (err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    if (err.status === 404) return "The requested model isn't available for this key.";
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof Error) {

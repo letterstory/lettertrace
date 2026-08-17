@@ -1,7 +1,17 @@
 // Shared domain + database row types for LetterTrace.
 // Column names mirror supabase/schema.sql exactly.
 
-export type Provider = "anthropic" | "openai" | "google" | "perplexity";
+// 'xai' names the vendor, not the model line, for the same reason the Gemini
+// engine is 'google': the id has to outlive the model it currently serves.
+// `isProvider` rejects "grok" explicitly so the two can't drift.
+export type Provider =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "perplexity"
+  | "xai"
+  | "deepseek"
+  | "meta";
 
 // LLM routers are credentials, not providers, so they get their own union and
 // stay out of `Provider` — which is what keeps `runs.provider` meaning "whose

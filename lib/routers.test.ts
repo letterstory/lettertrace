@@ -334,6 +334,39 @@ describe("coveredProviders", () => {
   });
 });
 
+// An engine whose API cannot browse is refused by resolveRunKeyFor for a
+// grounded project on ANY credential, so coverage must say so too — otherwise
+// onboarding pins a grounded project to it and the settings form shows no
+// warning until the first run fails.
+describe("coverage of an engine that can't ground", () => {
+  it("reports 'ungrounded' for a grounded project even with a direct key", () => {
+    const cov = engineCoverage("deepseek", { direct: ["deepseek"], routers: [], webSearch: true });
+    expect(cov.kind).toBe("ungrounded");
+    expect(cov.kind === "ungrounded" && cov.reason).toMatch(/turn off web search/i);
+  });
+
+  it("is plain direct coverage when the project isn't grounded", () => {
+    expect(
+      engineCoverage("deepseek", { direct: ["deepseek"], routers: [], webSearch: false }),
+    ).toEqual({ kind: "direct" });
+  });
+
+  it("outranks routers: no credential can make it grounded", () => {
+    const cov = engineCoverage("deepseek", {
+      direct: [],
+      routers: [{ router: "openrouter", searchVerified: [] }],
+      webSearch: true,
+    });
+    expect(cov.kind).toBe("ungrounded");
+  });
+
+  it("is left out of coveredProviders for a grounded project, kept for an ungrounded one", () => {
+    const creds = { direct: ["deepseek", "anthropic"] as Provider[], routers: [] };
+    expect(coveredProviders({ ...creds, webSearch: true })).toEqual(["anthropic"]);
+    expect(coveredProviders({ ...creds, webSearch: false })).toEqual(["deepseek", "anthropic"]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Routed Gemini (LET-176).
 //

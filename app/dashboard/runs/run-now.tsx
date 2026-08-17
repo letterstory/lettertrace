@@ -97,6 +97,19 @@ export function RunNow({
           .
         </p>
       )}
+      {/* The engine can't browse at all, so no key changes anything. The fix is
+          the project's own web-search setting, which is why this points at
+          Settings rather than at adding a credential. */}
+      {keySource === "ungrounded" && (
+        <p className="text-xs text-ink-faint">
+          {providerLabel} can&apos;t search the web, so it can&apos;t answer a project that asks
+          for live results. Turn off web search, or pick another engine, in{" "}
+          <Link href="/dashboard/settings" className="text-terracotta-dark hover:text-terracotta">
+            Settings
+          </Link>
+          .
+        </p>
+      )}
       {canRun && activePrompts === 0 && (
         <p className="text-xs text-ink-faint">
           Add active prompts in{" "}

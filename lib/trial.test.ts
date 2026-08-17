@@ -5,12 +5,18 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 // stays clean; resolveKey's own use of it is mocked per-test below.
 vi.mock("@/lib/data", () => ({
   getDecryptedKey: vi.fn(),
+  getDecryptedKeys: vi.fn(),
   getConfiguredProviders: vi.fn(),
   getDecryptedRouterKeys: vi.fn(),
 }));
 
-import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
-import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
+import {
+  getDecryptedKey,
+  getDecryptedKeys,
+  getConfiguredProviders,
+  getDecryptedRouterKeys,
+} from "@/lib/data";
+import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDER_LIST } from "@/lib/models";
 import type { Provider, RouterId } from "@/lib/types";
 import {
   resolveKey,
@@ -67,9 +73,15 @@ const TRIAL_VARS = [
   "TRIAL_OPENAI_API_KEY",
   "TRIAL_GOOGLE_API_KEY",
   "TRIAL_PERPLEXITY_API_KEY",
+  "TRIAL_XAI_API_KEY",
+  "TRIAL_DEEPSEEK_API_KEY",
+  "TRIAL_META_API_KEY",
   "TRIAL_ANTHROPIC_MODEL",
   "TRIAL_OPENAI_MODEL",
   "TRIAL_GOOGLE_MODEL",
+  "TRIAL_XAI_MODEL",
+  "TRIAL_DEEPSEEK_MODEL",
+  "TRIAL_META_MODEL",
   "TRIAL_RUN_LIMIT",
 ] as const;
 
@@ -83,6 +95,17 @@ beforeEach(() => {
   }
   process.env.TRIAL_RUN_LIMIT = "5";
   vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
+  // The batch lookup mirrors the per-provider mock, so one getDecryptedKey setup drives both resolvers.
+  vi.mocked(getDecryptedKeys)
+    .mockReset()
+    .mockImplementation(async (sb, uid) => {
+      const keys: Partial<Record<Provider, string>> = {};
+      for (const { id } of PROVIDER_LIST) {
+        const k = await getDecryptedKey(sb, uid, id);
+        if (k) keys[id] = k;
+      }
+      return keys;
+    });
   vi.mocked(getConfiguredProviders).mockReset().mockResolvedValue([]);
   vi.mocked(getDecryptedRouterKeys).mockReset().mockResolvedValue([]);
 });
@@ -92,6 +115,86 @@ afterEach(() => {
     if (saved[v] === undefined) delete process.env[v];
     else process.env[v] = saved[v];
   }
+});
+
+// providerOrder replaced a hand-written N x N table that the compiler could
+// only half-check: a new provider got its own row but nothing forced it INTO
+// the existing rows, so a key the user held could sit unused with no error.
+// These assert which key wins, so they catch a provider dropped from the
+// sequence as well as one misplaced in it.
+describe("auxiliary fallback order", () => {
+  const CATALOG = PROVIDER_LIST.map((i) => i.id);
+
+  /** The provider resolveKey settles on when the user holds keys for exactly `holders`. */
+  async function winner(preferred: Provider, holders: Provider[]): Promise<Provider | null> {
+    ownsKeysFor(...holders);
+    const k = await resolveKey(db(0), "user-1", preferred);
+    return k.source === "own" ? k.provider : null;
+  }
+
+  it("prefers the requested engine when its key exists", async () => {
+    for (const p of CATALOG) expect(await winner(p, CATALOG)).toBe(p);
+  });
+
+  it("otherwise walks the catalog in order, whichever engine was requested", async () => {
+    for (const preferred of CATALOG) {
+      const rest = CATALOG.filter((p) => p !== preferred);
+      // Peel the expected winner off the front each time; the next must be the next in catalog order.
+      for (let i = 0; i < rest.length; i++) {
+        expect(await winner(preferred, rest.slice(i))).toBe(rest[i]);
+      }
+    }
+  });
+
+  it("looks the user's keys up once, not once per provider", async () => {
+    await resolveKey(db(0), "user-1", "anthropic");
+    expect(getDecryptedKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it("actually falls back to a newly added provider", async () => {
+    // The bug the old table would have had: xai present as its own row but
+    // absent from the other four, so a user holding only an xAI key and asking
+    // for Claude would have been told they had no key at all.
+    ownsKeysFor("xai");
+    const k = await resolveKey(db(0), "user-1", "anthropic");
+    expect(k.source).toBe("own");
+    expect(k.provider).toBe("xai");
+    expect(k.apiKey).toBe("key-for-xai");
+    // and it still reports what was ASKED for, not what answered
+    expect(k.requested.provider).toBe("anthropic");
+  });
+});
+
+// An engine that cannot browse must be refused for a grounded project no
+// matter what credential the user holds. The gate lives ahead of every
+// credential branch precisely so a perfectly good key can't route around it.
+describe("an engine that can't ground", () => {
+  it("refuses a grounded project even when the user owns that provider's key", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-deepseek-own");
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: true });
+    expect(k.source).toBe("ungrounded");
+    expect(k.apiKey).toBeUndefined(); // never hands back a key it won't let you use
+    expect(engineKeyMessage(k)).toMatch(/can't search/i);
+  });
+
+  it("refuses before spending a trial key on it", async () => {
+    process.env.TRIAL_DEEPSEEK_API_KEY = "sk-deepseek-trial";
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: true });
+    expect(k.source).toBe("ungrounded");
+  });
+
+  it("serves the same engine happily when the project isn't grounded", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-deepseek-own");
+    const k = await runKeyFor(db(0), "user-1", "deepseek", undefined, { webSearch: false });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("sk-deepseek-own");
+  });
+
+  it("does not block engines that can browse", async () => {
+    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-own");
+    const k = await runKeyFor(db(0), "user-1", "anthropic", undefined, { webSearch: true });
+    expect(k.source).toBe("own");
+  });
 });
 
 describe("resolveKey", () => {

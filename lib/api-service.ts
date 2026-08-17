@@ -1151,10 +1151,9 @@ export interface BackgroundRunStart {
 
 export type TriggerOutcome =
   | { ok: true; result: RunResult | BackgroundRunStart }
-  // `invalid_engine` is the caller's request being malformed (a model the
-  // provider doesn't offer), distinct from `no_key` which is about billing —
-  // routes map them to 400 and 402 respectively.
-  | { ok: false; code: "not_found" | "no_key" | "invalid_engine"; message: string };
+  // `no_key` is billing (402); `invalid_engine` (bad override) and `ungrounded`
+  // (engine can't search, project asks for it) are the request/config (400).
+  | { ok: false; code: "not_found" | "no_key" | "invalid_engine" | "ungrounded"; message: string };
 
 /**
  * Execute a monitoring run for one of the user's projects.
@@ -1203,6 +1202,9 @@ export async function triggerRunForProject(
   const key = await resolveRunKeyFor(supabase, userId, override.provider, override.model, {
     webSearch: project.use_web_search,
   });
+  if (key.source === "ungrounded") {
+    return { ok: false, code: "ungrounded", message: engineKeyMessage(key) };
+  }
   if (key.source !== "own") {
     const providerLabel = PROVIDERS[key.requested.provider].label;
     return {

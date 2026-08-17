@@ -1,5 +1,10 @@
 import type { Provider, RouterId } from "./types";
-import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS } from "./models";
+import {
+  GOOGLE_AI_OVERVIEWS_MODEL,
+  PROVIDERS,
+  providerCanMeasure,
+  providerRefusalMessage,
+} from "./models";
 
 // ==================================================================
 // LLM routers (gateways).
@@ -325,12 +330,22 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
   },
 };
 
-/** OpenRouter's upstream-provider names, for the pinning above. */
+/**
+ * OpenRouter's upstream-provider names, for the pinning above.
+ *
+ * A name here is NOT a claim that any router serves the engine — `providers`
+ * on each RouterInfo is the only thing that decides that, and no router lists
+ * xai. This map is total over `Provider` because the pinning helper is, so an
+ * entry is required for every provider whether or not it is ever reached.
+ */
 const OPENROUTER_UPSTREAM: Record<Provider, string> = {
   anthropic: "anthropic",
   openai: "openai",
   google: "google-vertex",
   perplexity: "perplexity",
+  xai: "xai",
+  deepseek: "deepseek",
+  meta: "meta",
 };
 
 /** Display order for the settings cards and CLI listing: Merge leads. */
@@ -486,6 +501,8 @@ export type EngineCoverage =
   | { kind: "direct" }
   | { kind: "routed"; router: RouterId }
   | { kind: "unroutable"; router: RouterId; reason: string }
+  // The engine's API can't browse; a grounded project is refused on any credential.
+  | { kind: "ungrounded"; reason: string }
   | { kind: "none" };
 
 /**
@@ -501,6 +518,11 @@ export function engineCoverage(
   provider: Provider,
   opts: { direct: Provider[]; routers: RouterCoverage[]; webSearch: boolean },
 ): EngineCoverage {
+  if (!PROVIDERS[provider]) return { kind: "none" };
+  // Same gate, same position as resolveRunKeyFor: ahead of every credential.
+  if (!providerCanMeasure(provider, { webSearch: opts.webSearch })) {
+    return { kind: "ungrounded", reason: providerRefusalMessage(provider) };
+  }
   if (opts.direct.includes(provider)) return { kind: "direct" };
 
   const usable = opts.routers.find((rk) =>
@@ -540,8 +562,10 @@ export function coveredProviders(opts: {
   routers: RouterCoverage[];
   webSearch: boolean;
 }): Provider[] {
-  const routed = (Object.keys(PROVIDERS) as Provider[]).filter(
-    (p) => engineCoverage(p, opts).kind === "routed",
-  );
-  return Array.from(new Set([...opts.direct, ...routed]));
+  const covered = new Set<Provider>();
+  for (const p of [...opts.direct, ...(Object.keys(PROVIDERS) as Provider[])]) {
+    const kind = engineCoverage(p, opts).kind;
+    if (kind === "direct" || kind === "routed") covered.add(p);
+  }
+  return Array.from(covered);
 }

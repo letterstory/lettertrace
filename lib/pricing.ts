@@ -61,6 +61,38 @@ const RATES: Record<Provider, { models: Record<string, number>; fallback: number
   },
   google: { models: {}, fallback: 30 },
   perplexity: { models: {}, fallback: 30 },
+  // xAI prices in tiers — a lower rate under 200k tokens in the request, a
+  // higher one at or above it. These are the HIGH tier, per the err-high rule
+  // at the top of this file: the cheaper tier would let a long-context run
+  // overshoot the cap it was supposed to stop.
+  xai: {
+    models: {
+      "grok-4.6": 12,
+      "grok-4.3": 5,
+    },
+    fallback: 12,
+  },
+  // Published output rates are $0.87 (Pro) and $0.28 (Flash) per Mtok — an
+  // order of magnitude under everything else here. Rounded UP to whole dollars,
+  // and the fallback sits well above both, because DeepSeek has announced a
+  // significant price rise with no figure attached: under-charging silently is
+  // the failure this table exists to prevent.
+  deepseek: {
+    models: {
+      "deepseek-v4-pro": 1,
+      "deepseek-v4-flash": 1,
+    },
+    fallback: 5,
+  },
+  // Published output rate is $4.25/Mtok, rounded up. Fallback padded well above
+  // it since this is a brand-new product (public preview since April 2026) with
+  // no pricing track record yet to trust past its current published figure.
+  meta: {
+    models: {
+      "muse-spark-1.2": 5,
+    },
+    fallback: 8,
+  },
 };
 
 /**

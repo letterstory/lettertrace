@@ -21,8 +21,26 @@ describe("provider catalog", () => {
     expect(isProvider("openai")).toBe(true);
     expect(isProvider("google")).toBe(true);
     expect(isProvider("perplexity")).toBe(true);
+    expect(isProvider("xai")).toBe(true);
     expect(isProvider("gemini")).toBe(false); // "gemini" is a model line, not our provider id
+    expect(isProvider("grok")).toBe(false); // likewise: the provider id is the vendor, 'xai'
     expect(isProvider("mistral")).toBe(false);
+  });
+
+  // isProvider is derived from the catalog now, which means it answers whatever
+  // the object answers — including for keys every object inherits. `value in
+  // PROVIDERS` would narrow "toString" to Provider and hand it to code that
+  // indexes the catalog with it.
+  it("does not mistake inherited object properties for providers", () => {
+    expect(isProvider("toString")).toBe(false);
+    expect(isProvider("constructor")).toBe(false);
+    expect(isProvider("__proto__")).toBe(false);
+  });
+
+  it("recognizes every provider in the catalog", () => {
+    for (const info of PROVIDER_LIST) {
+      expect(isProvider(info.id)).toBe(true);
+    }
   });
 
   it("exposes google (Gemini) in the catalog", () => {

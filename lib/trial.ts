@@ -2,11 +2,19 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Project, Provider, RouteInfo } from "@/lib/types";
 import {
   getDecryptedKey,
+  getDecryptedKeys,
   getConfiguredProviders,
   getDecryptedRouterKeys,
   type DecryptedRouterKey,
 } from "@/lib/data";
-import { defaultModelFor, modelLabel, PROVIDERS } from "@/lib/models";
+import {
+  defaultModelFor,
+  modelLabel,
+  providerCanMeasure,
+  providerRefusalMessage,
+  PROVIDER_LIST,
+  PROVIDERS,
+} from "@/lib/models";
 import {
   ROUTERS,
   ROUTER_LIST,
@@ -55,6 +63,9 @@ const TRIAL_KEY_ENV: Record<Provider, string> = {
   openai: "TRIAL_OPENAI_API_KEY",
   google: "TRIAL_GOOGLE_API_KEY",
   perplexity: "TRIAL_PERPLEXITY_API_KEY",
+  xai: "TRIAL_XAI_API_KEY",
+  deepseek: "TRIAL_DEEPSEEK_API_KEY",
+  meta: "TRIAL_META_API_KEY",
 };
 
 const TRIAL_MODEL_ENV: Record<Provider, string> = {
@@ -62,12 +73,13 @@ const TRIAL_MODEL_ENV: Record<Provider, string> = {
   openai: "TRIAL_OPENAI_MODEL",
   google: "TRIAL_GOOGLE_MODEL",
   perplexity: "TRIAL_PERPLEXITY_MODEL",
+  xai: "TRIAL_XAI_MODEL",
+  deepseek: "TRIAL_DEEPSEEK_MODEL",
+  meta: "TRIAL_META_MODEL",
 };
 
-// Derived from the env map above rather than written out again, so a provider
-// added to the catalog can't be silently skipped here — omitting perplexity
-// from this list is what made a perplexity-only deployment report no trial.
-const PROVIDER_IDS = Object.keys(TRIAL_KEY_ENV) as Provider[];
+// Catalog order, from the catalog itself: this is also the fallback/default walk order.
+const PROVIDER_IDS: Provider[] = PROVIDER_LIST.map((p) => p.id);
 
 /** The operator's shared key for a provider, if configured. */
 export function trialKeyFor(provider: Provider): string | null {
@@ -154,7 +166,13 @@ export type KeySource =
   // measure it comparably — a distinct state from "no key", because the fix is
   // different (switch engine, turn off web search, or add a direct key) and
   // because running it anyway would produce data that looks fine and isn't.
-  | "unroutable";
+  | "unroutable"
+  // The engine itself can't ground: this project wants live-web answers and the
+  // provider's API has no search at all. Distinct from 'unroutable' because no
+  // credential can fix it — the fix is the project's grounding setting or a
+  // different engine, and saying "your router can't measure this" to someone
+  // holding a direct key would be nonsense. See providerCanMeasure.
+  | "ungrounded";
 
 export interface ResolvedKey {
   source: KeySource;
@@ -188,21 +206,15 @@ export interface ResolvedKey {
   available?: Provider[];
 }
 
-/** The provider new projects default to: one we can actually serve (has a trial key), else anthropic. */
+/** The provider new projects default to: the first in catalog order with a trial key, else anthropic. */
 export function pickDefaultProvider(): Provider {
-  if (trialKeyFor("anthropic")) return "anthropic";
-  if (trialKeyFor("openai")) return "openai";
-  if (trialKeyFor("google")) return "google";
-  if (trialKeyFor("perplexity")) return "perplexity";
-  return "anthropic";
+  return PROVIDER_IDS.find((p) => trialKeyFor(p)) ?? "anthropic";
 }
 
-const PROVIDER_ORDER: Record<Provider, Provider[]> = {
-  anthropic: ["anthropic", "openai", "google", "perplexity"],
-  openai: ["openai", "anthropic", "google", "perplexity"],
-  google: ["google", "anthropic", "openai", "perplexity"],
-  perplexity: ["perplexity", "anthropic", "openai", "google"],
-};
+/** Preference order for AUXILIARY work: the requested provider, then the rest in catalog order. */
+function providerOrder(preferred: Provider): Provider[] {
+  return [preferred, ...PROVIDER_IDS.filter((p) => p !== preferred)];
+}
 
 /**
  * Resolve a key for AUXILIARY work — prompt/competitor/topic suggestion — by
@@ -225,7 +237,7 @@ export async function resolveKey(
   preferred: Provider,
   preferredModel?: string,
 ): Promise<ResolvedKey> {
-  const order = PROVIDER_ORDER[preferred];
+  const order = providerOrder(preferred);
   const modelFor = (p: Provider) =>
     p === preferred && preferredModel ? preferredModel : defaultModelFor(p);
   const requested = { provider: preferred, model: modelFor(preferred) };
@@ -238,9 +250,12 @@ export async function resolveKey(
   //    which credential settles the bill, and a user holding a direct Claude key
   //    should get Claude rather than Claude-via-a-gateway. Web search never
   //    applies to utility work, so any router that reaches the engine will do.
-  const routerKeys = await getDecryptedRouterKeys(supabase, userId);
+  const [ownKeys, routerKeys] = await Promise.all([
+    getDecryptedKeys(supabase, userId),
+    getDecryptedRouterKeys(supabase, userId),
+  ]);
   for (const p of order) {
-    const own = await getDecryptedKey(supabase, userId, p);
+    const own = ownKeys[p];
     if (own) return { source: "own", apiKey: own, provider: p, model: modelFor(p), requested };
 
     const viaRouter = routerKeys.find((rk) => routerSupport(rk.router, p) !== null);
@@ -324,6 +339,16 @@ export async function resolveRunKeyFor(
 ): Promise<ResolvedKey> {
   const requested = { provider, model: model || defaultModelFor(provider) };
   const base = { provider, model: requested.model, requested };
+
+  // Before any credential question: can this engine even produce the kind of
+  // answer the project asked for? A provider whose API cannot browse must not
+  // serve a grounded project on ANY credential, so this outranks every branch
+  // below — finding a perfectly good key first and refusing afterwards would
+  // just be a slower way to reach the same answer, and an easy one to forget in
+  // one of the paths. See providerCanMeasure.
+  if (!providerCanMeasure(provider, { webSearch: opts.webSearch })) {
+    return { ...base, source: "ungrounded", refusal: providerRefusalMessage(provider) };
+  }
 
   const own = await getDecryptedKey(supabase, userId, provider);
 
@@ -469,8 +494,12 @@ export function engineKeyMessage(key: ResolvedKey): string {
   const providerLabel = PROVIDERS[key.requested.provider].label;
 
   // Composed by the resolver, which is the only place that still knows which
-  // router refused and why.
-  if (key.source === "unroutable" && key.refusal) return key.refusal;
+  // router refused and why. 'ungrounded' carries its refusal the same way — the
+  // reason differs (the engine can't search at all, rather than the credential
+  // not carrying its search) but both arrive pre-written and naming the fix.
+  if ((key.source === "unroutable" || key.source === "ungrounded") && key.refusal) {
+    return key.refusal;
+  }
 
   if (key.source === "exhausted") {
     // The spend ceiling and the run ceiling are different refusals. Someone

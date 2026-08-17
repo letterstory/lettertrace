@@ -12,8 +12,8 @@ Track topics · auto-generate the questions people actually ask AI · watch tren
 
 Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and monitoring AI mentions** (a.k.a. Answer Engine Optimization / Generative Engine Optimization). You describe your brand and a few topics; Lettertrace generates realistic prompts a person might ask ChatGPT or Claude, runs them against those models **with your own API key**, detects when your brand and your competitors get mentioned, and charts how your visibility, sentiment, and share of voice move over time.
 
-- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
-- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), and Perplexity Sonar. Add more providers easily.
+- 🔓 **Open source** (MIT) and **BYOK**, you bring your own Anthropic / OpenAI / Google / Perplexity / xAI / DeepSeek / Meta keys — or a single **LLM router** key ([Concentrate](https://concentrate.ai/)) instead. Either way they're encrypted at rest and never leave your infrastructure.
+- 🧠 **Multi-model**, query Claude (Anthropic), ChatGPT (OpenAI), Gemini and Google AI Overviews (both on your Google key), Perplexity Sonar, Grok (xAI), DeepSeek, and Meta (Muse Spark). Add more providers easily.
 - 🧩 **Topics → variations**, auto-generate the different questions people ask AI about each topic.
 - 📈 **Trends over time**, visibility, share of voice, prominence, and sentiment across runs.
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
@@ -40,12 +40,33 @@ For each answer the model returns, Lettertrace:
 2. **LLM enrichment**, for the entities that were mentioned, a structured call classifies **sentiment** and whether the answer **recommended** them.
 3. **Aggregation**, visibility (mention rate), **share of voice**, average prominence, and sentiment are computed per run and trended over time.
 
+### Not every engine can browse
+
+Answer engines differ in whether they can search the live web, and Lettertrace
+treats that as a property of the engine rather than something to paper over:
+
+| | Engines | With web search **on** |
+|---|---|---|
+| **Always searches** | Perplexity Sonar, Google AI Overviews | Grounded; the project toggle is ignored |
+| **Searches on request** | Claude, ChatGPT, Gemini, Grok | Grounded, and the browse is **forced** rather than offered |
+| **Searches on request, not forced** | Meta (Muse Spark) | The tool is offered (Meta rejects forcing); an answer in which the model didn't search is refused rather than stored as grounded |
+| **Cannot search** | DeepSeek | **The run is refused** |
+
+DeepSeek's API has no server-side browsing — its documented tools are
+caller-executed functions, and web search exists only in its consumer app.
+Running your prompts through it with web search on would answer from the model's
+memory and record that as a search-grounded measurement, so Lettertrace refuses
+instead and tells you the two fixes: turn web search off for that project, or
+pick another engine. With web search off, DeepSeek measures exactly what it is —
+what the model recalls about your brand — and that is a legitimate thing to
+track, just not the same number as a grounded run.
+
 ## Tech stack
 
 - **Next.js 14** (App Router, TypeScript) · **Tailwind CSS** · **Recharts**
 - **Supabase**, Postgres, Auth, and Row Level Security
 - **BYOK** provider keys encrypted with **AES-256-GCM** at rest
-- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding) and Perplexity Sonar (always search-grounded, real source URLs)
+- Anthropic (`@anthropic-ai/sdk`) + OpenAI (`openai`) SDK adapters, plus dependency-free REST adapters for Google Gemini (Gemini models + Google AI Overviews, via Google Search grounding), Perplexity Sonar (always search-grounded, real source URLs), xAI Grok (Responses-API server-side `web_search`, `url_citation` annotations), DeepSeek (memory-only — see below), and Meta Muse Spark (Responses-API-shaped `web_search`, offered not forced, `url_citation` annotations)
 
 ## Getting started
 
@@ -256,7 +277,7 @@ ROUTER_API_KEY_OPENROUTER=...  npx tsx scripts/probe-router.ts openrouter
 
 The distinction that matters is **forced** versus merely enabled, and it is worth testing rather than reading off a gateway's docs. Probed against Concentrate on 2026-07-30: asked "what is the capital of France?" — a question the model answers from memory — its Responses endpoint with a forced `tool_choice` still returned two cited sources, while the same request with the tool only offered returned none, and so did chat-completions with `web_search_options`. A router that permits searching but can't be made to search will drift against a direct key, since the model answers familiar questions from recall and cites nothing.
 
-**Gemini, Google AI Overviews and Perplexity still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label.
+**Gemini, Google AI Overviews, Perplexity and Grok still need their own keys.** Not because the models are unreachable through a router, but because their measurement paths don't survive normalization: Gemini's grounding arrives as Google-specific chunks behind a redirect host, AI Overviews is a Gemini call plus a forced-search system prompt of ours, and Perplexity's search is the product rather than a parameter. Routed, all three would return an answer that is a different measurement wearing the same label. Grok is absent from the router registry for a plainer reason — no gateway has been probed for it yet, and an entry there is a claim about what survives the trip, not a guess.
 
 Router keys are encrypted at rest exactly like provider keys, and resolution order is: your own provider key → your router key → the operator's trial key (if any) → nothing.
 
@@ -280,9 +301,9 @@ By default Lettertrace is bring-your-own-key: a user must add a key before runni
 
 Set in your environment:
 
-- `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY` / `TRIAL_GOOGLE_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
+- `TRIAL_<PROVIDER>_API_KEY` (`ANTHROPIC`, `OPENAI`, `GOOGLE`, `PERPLEXITY`, `XAI`, `DEEPSEEK`, `META`): the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
 - `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap).
-- `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL` / `TRIAL_GOOGLE_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
+- `TRIAL_<PROVIDER>_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model). Meta has no cheaper tier; its cost lever is the adapter's fixed `reasoning_effort`.
 - `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.

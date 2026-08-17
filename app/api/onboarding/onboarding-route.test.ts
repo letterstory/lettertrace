@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The route pulls in the Supabase server client (next/headers) and the trial
 // layer; we only care about the request validation that runs before any of it.
+const db = vi.hoisted(() => ({
+  from: (_table: string): unknown => {
+    throw new Error("validation should reject before touching the database");
+  },
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({
     auth: { getUser: async () => ({ data: { user: { id: "user-1" } } }) },
-    from: () => {
-      throw new Error("validation should reject before touching the database");
-    },
+    from: (table: string) => db.from(table),
   }),
 }));
 // lib/data uses React's cache(), which only exists in a server-component
@@ -39,7 +42,11 @@ function req(body: unknown) {
 
 const BASE = { brand_name: "Acme", name: "Acme", brand_domains: ["acme.com"] };
 
-beforeEach(() => vi.clearAllMocks());
+const throwingFrom = db.from;
+beforeEach(() => {
+  vi.clearAllMocks();
+  db.from = throwingFrom;
+});
 
 describe("POST /api/onboarding/complete — topic validation", () => {
   // The reported bug: both of these used to be silently dropped, the request
@@ -124,5 +131,49 @@ describe("POST /api/onboarding/complete, creating more organizations", () => {
     vi.mocked(getConfiguredProviders).mockResolvedValue([]);
     const res = await POST(req({ ...BASE, topics: [{ name: "", prompts: [] }] }));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/onboarding/complete, picking the default engine", () => {
+  const good = { ...BASE, topics: [{ name: "CDN", prompts: ["best cdn?"] }] };
+
+  /** Record the projects insert, then stop the request there. */
+  function captureInsert() {
+    let inserted: Record<string, unknown> | null = null;
+    db.from = (table: string) => {
+      if (table !== "projects") throw new Error(`unexpected table ${table}`);
+      return {
+        insert: (values: Record<string, unknown>) => {
+          inserted = values;
+          return { select: () => ({ single: async () => ({ data: null, error: { message: "stop" } }) }) };
+        },
+      };
+    };
+    return () => inserted;
+  }
+
+  it("starts on the engine the user's own key can run grounded", async () => {
+    vi.mocked(getConfiguredProviders).mockResolvedValue(["openai"]);
+    const inserted = captureInsert();
+    await POST(req(good));
+    expect(inserted()).toMatchObject({ default_provider: "openai" });
+  });
+
+  // DeepSeek can't ground, so it isn't grounded-runnable — but it is still the
+  // only engine this user holds a key for. Pinning the project to it lets the
+  // settings form and run page name the exact fix (turn off web search); the
+  // env default would just report "no key" for an engine they never chose.
+  it("still prefers the user's only key when that engine can't ground", async () => {
+    vi.mocked(getConfiguredProviders).mockResolvedValue(["deepseek"]);
+    const inserted = captureInsert();
+    await POST(req(good));
+    expect(inserted()).toMatchObject({ default_provider: "deepseek" });
+  });
+
+  it("falls back to the env default when the user holds no key at all", async () => {
+    vi.mocked(getConfiguredProviders).mockResolvedValue([]);
+    const inserted = captureInsert();
+    await POST(req(good));
+    expect(inserted()).toMatchObject({ default_provider: "anthropic" });
   });
 });

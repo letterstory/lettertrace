@@ -84,9 +84,9 @@ export async function POST(
       { ...options, context: apiActor(auth, "v1") },
     );
     if (!outcome.ok) {
-      // not_found -> 404, a bad engine override -> 400, no key -> 402 (billing).
+      // not_found -> 404, no key -> 402 (billing), anything else about the request/config -> 400.
       const status =
-        outcome.code === "not_found" ? 404 : outcome.code === "invalid_engine" ? 400 : 402;
+        outcome.code === "not_found" ? 404 : outcome.code === "no_key" ? 402 : 400;
       await logApiRequest(auth, request, "v1", {
         category: "run",
         action: "api.trigger_run",
