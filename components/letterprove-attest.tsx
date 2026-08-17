@@ -54,12 +54,48 @@ declare global {
   }
 }
 
-export function LetterproveAttest({ email }: { email?: string | null }) {
+/** Marks that this browser session has already reported its sign-in. */
+const SESSION_FLAG = "letterprove:reported";
+
+/**
+ * Which of the three calls this page load should make.
+ *
+ * `signup` and `login` are once-per-browser-session facts; `session` is a
+ * per-page-load one, and attest.js already counts that itself. So the first
+ * load of a session reports the sign-in and every load after it just
+ * re-identifies — otherwise a refresh would read as a second login, and the
+ * first-sign-in window would report a signup on every page of that session.
+ *
+ * Falls back to `identify` when storage is unavailable (private mode, blocked
+ * cookies). Under-reporting a login is a missing row; over-reporting one is a
+ * false claim, and this product is the wrong place to guess upward.
+ */
+function callForThisLoad(firstSignIn: boolean): "identify" | "login" | "signup" {
+  try {
+    if (window.sessionStorage.getItem(SESSION_FLAG)) return "identify";
+    window.sessionStorage.setItem(SESSION_FLAG, "1");
+    return firstSignIn ? "signup" : "login";
+  } catch {
+    return "identify";
+  }
+}
+
+export function LetterproveAttest({
+  email,
+  firstSignIn = false,
+}: {
+  email?: string | null;
+  firstSignIn?: boolean;
+}) {
   const key = process.env.NEXT_PUBLIC_LETTERPROVE_KEY;
   const origin = process.env.NEXT_PUBLIC_LETTERPROVE_ORIGIN ?? DEFAULT_ORIGIN;
 
   useEffect(() => {
     if (!key || !email) return;
+
+    // signup() and login() both call identify() internally, so the domain is
+    // established whichever branch runs.
+    const call = callForThisLoad(firstSignIn);
 
     // Already injected by an earlier mount this page load. `identify` is
     // idempotent per page load on Letterprove's side — it fires at most one
@@ -67,7 +103,7 @@ export function LetterproveAttest({ email }: { email?: string | null }) {
     // and keeps the domain established if this remounts.
     const existing = document.getElementById(SCRIPT_ID);
     if (existing) {
-      window.Letterprove?.identify(email);
+      window.Letterprove?.[call](email);
       return;
     }
 
@@ -81,7 +117,7 @@ export function LetterproveAttest({ email }: { email?: string | null }) {
     // offline client — and that has to be a no-op, not an error boundary.
     script.onload = () => {
       try {
-        window.Letterprove?.identify(email);
+        window.Letterprove?.[call](email);
       } catch {
         /* ignore */
       }
@@ -90,7 +126,7 @@ export function LetterproveAttest({ email }: { email?: string | null }) {
       /* ignore — no attestation this page load */
     };
     document.head.appendChild(script);
-  }, [key, email, origin]);
+  }, [key, email, origin, firstSignIn]);
 
   return null;
 }

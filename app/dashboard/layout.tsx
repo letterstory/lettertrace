@@ -6,6 +6,7 @@ import { SignOutButton } from "@/components/dashboard/signout";
 import { WhyFree } from "@/components/dashboard/why-free";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { LetterproveAttest } from "@/components/letterprove-attest";
+import { isFirstSignIn } from "@/lib/letterprove";
 import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
@@ -78,7 +79,7 @@ export default async function DashboardLayout({
           it reports on authenticated product usage, which only exists behind
           this boundary — and because `user` is already resolved above, so it
           costs no extra query. Only the domain of the address is ever sent. */}
-      <LetterproveAttest email={user.email} />
+      <LetterproveAttest email={user.email} firstSignIn={isFirstSignIn(user)} />
 
       <aside className="flex flex-col border-b border-ink/10 bg-paper md:h-screen md:w-[260px] md:shrink-0 md:border-b-0 md:border-r">
         <div className="flex flex-col gap-6 px-5 py-6 md:h-full">
