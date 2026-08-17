@@ -10,6 +10,7 @@ vi.mock("@/lib/data", () => ({
 }));
 
 import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
+import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
 import type { Provider, RouterId } from "@/lib/types";
 import {
   resolveKey,
@@ -348,6 +349,37 @@ describe("resolveRunKeyFor with a router credential", () => {
     });
     expect(nextRunMessage(k)).toContain("via Concentrate");
     expect(nextRunMessage(k)).toContain("Claude Opus 4.8");
+  });
+
+  // Google answers on two surfaces sharing the provider: AI Overviews (can't
+  // route) and the Gemini assistant (can). An account keeps a Google direct key
+  // for AI Overviews, and BYOK-first would pin Gemini to it too — so real Gemini
+  // is router-preferred, letting the two surfaces sit on different credentials.
+  it("routes real Gemini through a verified router even when a Google direct key exists", async () => {
+    ownsKeysFor("google");
+    hasRouter("concentrate", ["google"]);
+    const k = await runKeyFor(db(0), "user-1", "google", "gemini-flash-latest", { webSearch: true });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-concentrate");
+    expect(k.route?.router).toBe("concentrate");
+  });
+
+  it("keeps AI Overviews on the direct Google key (it can't route)", async () => {
+    ownsKeysFor("google");
+    hasRouter("concentrate", ["google"]);
+    const k = await runKeyFor(db(0), "user-1", "google", GOOGLE_AI_OVERVIEWS_MODEL, { webSearch: true });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-google");
+    expect(k.route).toBeUndefined();
+  });
+
+  it("degrades real Gemini to the direct key when the router isn't verified for Google", async () => {
+    ownsKeysFor("google");
+    hasRouter("concentrate", []); // Google grounding not confirmed on this key
+    const k = await runKeyFor(db(0), "user-1", "google", "gemini-flash-latest", { webSearch: true });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-google");
+    expect(k.route).toBeUndefined();
   });
 });
 

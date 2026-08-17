@@ -608,7 +608,20 @@ export function gatewaySources(
     if (a.type && a.type !== "url_citation") continue;
     const cite = a.url_citation;
     const s = cite?.url ? safeSource(cite.url, cite.title ?? null, cite.content ?? null) : null;
-    if (s) raw.push(s);
+    if (!s) continue;
+    // Gemini grounded through a gateway cites Google's redirect host, not the
+    // real domain (the domain rides in the title) — the same shape the direct
+    // Google path resolves in googleGroundingSources. Take the domain from the
+    // title; if it isn't a hostname, drop the row rather than attribute the
+    // citation to Google's redirect host (which can never match a brand and would
+    // skew the cited-domain leaderboard). Non-Google citations are untouched.
+    if (s.domain === GOOGLE_REDIRECT_HOST) {
+      const domain = domainFromTitle(s.title);
+      if (!domain) continue;
+      raw.push({ ...s, domain });
+    } else {
+      raw.push(s);
+    }
   }
   return dedupeSources(raw);
 }

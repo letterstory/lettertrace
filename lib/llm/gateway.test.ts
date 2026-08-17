@@ -79,4 +79,44 @@ describe("gatewaySources", () => {
     expect(gatewaySources(undefined)).toEqual([]);
     expect(gatewaySources([])).toEqual([]);
   });
+
+  // Gemini grounded through a gateway cites Google's redirect host; the real
+  // domain rides in the title. Attribution has to follow the title, or every
+  // Gemini citation collapses onto vertexaisearch.cloud.google.com.
+  it("resolves a Google grounding-redirect citation to the domain in its title", () => {
+    expect(
+      gatewaySources([
+        {
+          type: "url_citation",
+          url_citation: {
+            url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbCdEf",
+            title: "project-management.com",
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbCdEf",
+        domain: "project-management.com",
+        title: "project-management.com",
+        snippet: null,
+      },
+    ]);
+  });
+
+  it("drops a grounding-redirect citation whose title isn't a domain", () => {
+    // Falling back to the redirect host would record vertexaisearch as the cited
+    // domain — it can never match a brand and would skew the leaderboard.
+    expect(
+      gatewaySources([
+        {
+          type: "url_citation",
+          url_citation: {
+            url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/XyZ",
+            title: "Some article headline, not a domain",
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
 });

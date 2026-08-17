@@ -118,8 +118,16 @@ describe("OpenRouter request body", () => {
     expect(body.plugins).toBeUndefined();
   });
 
-  it("Concentrate needs no extra body", () => {
-    expect(ROUTERS.concentrate.extraBody).toBeUndefined();
+  it("Concentrate adds web_search_options only for grounded Google", () => {
+    // Gemini grounds through Concentrate's chat surface only when
+    // web_search_options is present; Claude and OpenAI carry their own forced
+    // search tool on their own shapes, so they get nothing extra.
+    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: true })).toEqual({
+      web_search_options: {},
+    });
+    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: false })).toEqual({});
+    expect(ROUTERS.concentrate.extraBody!("anthropic", { webSearch: true })).toEqual({});
+    expect(ROUTERS.concentrate.extraBody!("openai", { webSearch: true })).toEqual({});
   });
 });
 
