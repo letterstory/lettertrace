@@ -247,7 +247,13 @@ async function openaiChat(
   messages.push({ role: "user", content: user });
   const params = {
     model: plan ? plan.slug : model,
-    max_tokens: maxTokens,
+    // Not max_tokens: the gpt-5.6 family rejects it outright ("Unsupported
+    // parameter: 'max_tokens' ... Use 'max_completion_tokens' instead"), so the
+    // old field made every ungrounded 5.6 call a hard 400. Probed 2026-08-18:
+    // max_completion_tokens is accepted by gpt-4o, gpt-4o-mini and both 5.6
+    // models directly, and by Concentrate's chat surface for openai AND google
+    // slugs. (OpenRouter/Merge not re-probed; both mirror OpenAI's surface.)
+    max_completion_tokens: maxTokens,
     messages,
     ...(json ? { response_format: { type: "json_object" } } : {}),
     ...(plan?.extraBody ?? {}),
@@ -572,7 +578,10 @@ async function gatewayQuery(
   const client = new OpenAI({ apiKey, baseURL: plan.baseUrl, ...CLIENT_OPTS });
   const params = {
     model: plan.slug,
-    max_tokens: ANSWER_MAX_TOKENS,
+    // Same field as openaiChat, for the same reason: a routed gpt-5.6 call
+    // with max_tokens is a hard 400, and Concentrate accepts the newer field
+    // for every slug family probed (2026-08-18, openai + google).
+    max_completion_tokens: ANSWER_MAX_TOKENS,
     messages: [{ role: "user", content: prompt }],
     ...plan.extraBody,
   };
@@ -710,7 +719,21 @@ async function anthropicWebSearch(
 
 // OpenAI native web search via the Responses API. Uses raw fetch so it doesn't
 // depend on a newer SDK; retries a couple of transient failures. The browse is
-// forced via tool_choice (see below) — verified live for gpt-4o / gpt-4o-mini.
+// forced via tool_choice (see below) — verified live for gpt-4o / gpt-4o-mini,
+// and on 2026-08-18 for gpt-5.6-sol and gpt-5.6-luna, both direct and through
+// Concentrate's Responses mirror (see scripts/probe-openai-models.ts).
+//
+// Two things the 5.6 probes established that gpt-4o never showed:
+// - The 5.6 models run several search rounds plus reasoning per answer —
+//   30-60k total tokens per grounded query where gpt-4o spends ~500. That is
+//   a COST property, not a failure; it just makes trial metering and pricing
+//   assumptions written for gpt-4o an order of magnitude off.
+// - Citations are less reliable: a 5.6 answer can complete a forced browse
+//   (web_search_call items present) and still attach zero url_citation
+//   annotations, and the web_search_call items carry only the queries — no
+//   result URLs — so there is nothing to fall back to, unlike the Anthropic
+//   path's retrieved-but-not-cited results. Such an answer is still grounded;
+//   it is recorded with the sources it actually cited, possibly none.
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -721,8 +744,22 @@ async function openaiWebSearch(
   // below is unchanged, which is the point — a routed OpenAI measurement is the
   // same request as a direct one, forcing included.
   const url = plan ? `${plan.baseUrl}/responses` : "https://api.openai.com/v1/responses";
+
+  interface ResponsesBody {
+    status?: string;
+    incomplete_details?: { reason?: string };
+    output?: { content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
+    usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
+  }
+
+  // The transport retries; the parsing below does not. An answer that came back
+  // incomplete or empty is a deliverable the model produced and billed — on the
+  // 5.6 models a single grounded answer runs 30-60k tokens, so retrying a
+  // deterministic failure re-bills it for zero stored data (the same trap the
+  // node-fetch note on CLIENT_OPTS describes).
+  let j: ResponsesBody | undefined;
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 3 && !j; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -747,31 +784,45 @@ async function openaiWebSearch(
         if (res.status >= 500) { lastErr = err; continue; }
         throw err;
       }
-      const j = (await res.json()) as {
-        output?: { content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
-        usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
-      };
-      let text = "";
-      const raw: CitedSource[] = [];
-      for (const item of j.output ?? []) {
-        for (const c of item.content ?? []) {
-          if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
-          for (const a of c.annotations ?? []) {
-            const s = a?.url ? safeSource(a.url, a.title ?? null, null) : null;
-            if (s) raw.push(s);
-          }
-        }
-      }
-      const tokens =
-        j.usage?.total_tokens ??
-        (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
-      return { text: text.trim(), tokens, sources: dedupeSources(raw) };
+      j = (await res.json()) as ResponsesBody;
     } catch (err) {
       lastErr = err;
       if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
     }
   }
-  throw lastErr ?? new Error("OpenAI web search failed.");
+  if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
+
+  let text = "";
+  const raw: CitedSource[] = [];
+  for (const item of j.output ?? []) {
+    for (const c of item.content ?? []) {
+      if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
+      for (const a of c.annotations ?? []) {
+        const s = a?.url ? safeSource(a.url, a.title ?? null, null) : null;
+        if (s) raw.push(s);
+      }
+    }
+  }
+  const tokens =
+    j.usage?.total_tokens ??
+    (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
+
+  // A 200 that carries nothing measurable must fail loudly — the same stance
+  // as the Gemini and Perplexity adapters, for the same reason: a stored empty
+  // or truncated answer scans as "brand not mentioned" rather than "we never
+  // got an answer". The 5.6 models make both shapes real: reasoning draws from
+  // max_output_tokens, so a budget spent thinking and searching ends the
+  // response with status "incomplete", and what text survived is a fragment,
+  // not the answer.
+  if (j.status === "incomplete") {
+    throw new Error(
+      `OpenAI stopped before finishing the answer (${j.incomplete_details?.reason ?? "incomplete"}).`,
+    );
+  }
+  if (!text.trim()) {
+    throw new Error("OpenAI returned an empty answer.");
+  }
+  return { text: text.trim(), tokens, sources: dedupeSources(raw) };
 }
 
 // --- Google (Gemini) low-level chat + grounding ---------------------------

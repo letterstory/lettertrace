@@ -51,7 +51,10 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
     // moving the default is a deliberate cut-over, not a freshen. The 5.6
     // entries are what ChatGPT actually serves consumers today; nothing is
     // removed because a project pinned to a dropped id would fail its next
-    // run at resolveEngine.
+    // run at resolveEngine. Before moving the default (or pointing a monitored
+    // project at a model this catalog hasn't measured with), run
+    // scripts/probe-openai-models.ts — it checks the grounded and ungrounded
+    // paths a project will actually use, direct and routed.
     models: [
       { id: "gpt-4o", label: "GPT-4o", note: "Legacy flagship" },
       { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", note: "ChatGPT's paid default" },
