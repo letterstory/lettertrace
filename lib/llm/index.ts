@@ -1,7 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { Provider, RouteInfo, RouterId, Sentiment } from "@/lib/types";
-import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS, analysisModelFor } from "@/lib/models";
+import {
+  AI_OVERVIEWS_BACKING_MODEL,
+  GOOGLE_AI_OVERVIEWS_MODEL,
+  PROVIDERS,
+  analysisModelFor,
+} from "@/lib/models";
 import {
   ROUTERS,
   routerSlug,
@@ -771,7 +776,21 @@ async function openaiWebSearch(
   // instruction lettertrace uses on the DIRECT Gemini path as belt-and-
   // suspenders, keeping native Google grounding. OpenAI needs none — it's
   // hard-forced. (Not Exa: that's a third-party engine, non-representative.)
-  const geminiSearchInstruction = isGemini ? ALWAYS_SEARCH.replace(/^-\s*/, "") : undefined;
+  //
+  // The AI-Overviews surface routes here too (its google/* backing slug makes
+  // isGemini true), but it is not a plain Gemini answer: it needs the overview
+  // persona the direct path applies via AI_OVERVIEW_SYSTEM. That prompt already
+  // ends with ALWAYS_SEARCH, so it carries the search push as well — send it in
+  // full instead of the bare nudge, keeping the routed overview identical in
+  // voice and grounding to the direct one. Detected from the requested model,
+  // which stays `google-ai-overviews` (the surface) even though the slug is the
+  // backing Gemini model.
+  const isOverview = model === GOOGLE_AI_OVERVIEWS_MODEL;
+  const geminiSearchInstruction = isOverview
+    ? AI_OVERVIEW_SYSTEM
+    : isGemini
+      ? ALWAYS_SEARCH.replace(/^-\s*/, "")
+      : undefined;
 
   interface ResponsesBody {
     status?: string;
@@ -902,10 +921,8 @@ const GOOGLE_MAX_RETRY_WAIT_MS = 45_000;
 // allows 300s for every prompt in the run, so a single prompt must not be able
 // to eat it and starve the rest.
 const GOOGLE_RETRY_BUDGET_MS = 90_000;
-// The real Gemini model the "Google AI Overviews" engine runs on. AI Overviews
-// are served by a fast Gemini model over Google Search, so we back them with
-// Flash and always ground the answer in Search.
-const AI_OVERVIEWS_BACKING_MODEL = "gemini-flash-latest";
+// The Gemini model the AI-Overviews pseudo-model runs on is AI_OVERVIEWS_BACKING_MODEL
+// (lib/models), shared with the router slug map so direct and routed AIO hit one model.
 // Gemini "thinking" tokens are billed as output and drawn from the same budget
 // as the visible answer, so a small maxOutputTokens gets spent on thoughts and
 // the answer comes back truncated (finishReason MAX_TOKENS) — measured on

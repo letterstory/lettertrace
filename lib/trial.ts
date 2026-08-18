@@ -84,8 +84,8 @@ export function trialModelFor(provider: Provider, fallback: string): string {
 /** The operator's shared Concentrate (router) key for free-tier runs (env:
  *  TRIAL_CONCENTRATE_API_KEY). One capped gateway key can fund the whole free
  *  tier for every engine Concentrate serves — Claude, GPT, Gemini — instead of a
- *  direct key per provider. Engines it can't serve (AI Overviews, Perplexity)
- *  still use their per-provider TRIAL_*_API_KEY. */
+ *  direct key per provider. Engines it can't serve (Perplexity) still use their
+ *  per-provider TRIAL_*_API_KEY. */
 export function trialConcentrateKey(): string | null {
   const v = process.env.TRIAL_CONCENTRATE_API_KEY;
   return v && v.trim() ? v.trim() : null;
@@ -383,15 +383,17 @@ export async function resolveRunKeyFor(
         verified: rk.searchVerified,
       }) &&
       // Measuring the ENGINE isn't enough — a router with no slug for this exact
-      // model (e.g. the google-ai-overviews pseudo-model) would fail at planRoute.
-      // Keep those on the direct/trial path instead of selecting a route that dies.
+      // model would fail at planRoute. Keep those on the direct/trial path
+      // instead of selecting a route that dies. (Both Google surfaces resolve a
+      // slug now — the AI-Overviews pseudo-model to its backing Gemini model.)
       routerSlug(rk.router, provider, requested.model) !== null,
   );
 
-  // Router-preferred models (Google's non-Overviews surfaces) route through a
-  // capable router even when a direct key is present — the direct key stays
-  // reserved for the AI-Overviews surface it alone can serve. Everything else is
-  // BYOK-first: the direct key wins and the router is the fallback.
+  // Router-preferred models (both of Google's surfaces — Gemini and AI
+  // Overviews) route through a capable router even when a direct key is present:
+  // a single direct Google key can't absorb the fleet's grounded burst, so the
+  // pooled gateway carries it and the direct key is the fallback. Everything
+  // else is BYOK-first: the direct key wins and the router is the fallback.
   if (usable && prefersRouter(provider, requested.model)) {
     return { ...base, source: "own", apiKey: usable.apiKey, route: routeOf(usable) };
   }
@@ -402,8 +404,8 @@ export async function resolveRunKeyFor(
 
   // The operator's shared key, but only for the engine actually chosen. Prefer
   // the Concentrate trial key (routes through the gateway — one capped key,
-  // discount) for engines it can serve; AI Overviews / Perplexity fall to their
-  // per-provider direct trial key.
+  // discount) for engines it can serve (now including AI Overviews, on its
+  // backing Gemini slug); Perplexity falls to its per-provider direct trial key.
   const limit = trialRunLimit();
   const cap = trialSpendLimitMicros();
   const trialCred = trialCredFor(provider, requested.model, opts.webSearch);

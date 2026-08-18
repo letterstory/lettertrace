@@ -298,13 +298,15 @@ function EngineStatus({
   checks: Check[] | null;
 }) {
   // Engines that still need a direct key on this router: the base providers it
-  // doesn't serve, plus Google AI Overviews — a pseudo-model that never routes
-  // through any gateway (routerSlug is null for it), even when the router serves
-  // the Gemini assistant. Computed rather than hardcoded so it stays truthful as
-  // a router gains coverage (e.g. Concentrate now grounds Gemini).
+  // doesn't serve, plus Google AI Overviews UNLESS this router's Google grounding
+  // is verified. AI Overviews is grounded-always and rides the Gemini path on its
+  // backing slug, so it routes wherever a router carries Google's native search
+  // (Concentrate, once verified) and needs a direct key everywhere else (the
+  // routers whose Google search is "none", or an unverified key). Computed rather
+  // than hardcoded so it stays truthful as a router gains coverage.
   const needsOwnKey = [
     ...(Object.keys(PROVIDERS) as Provider[]).filter((p) => !served.includes(p)).map((p) => PROVIDERS[p].label),
-    "Google AI Overviews",
+    ...(searchVerified.includes("google") ? [] : ["Google AI Overviews"]),
   ];
   const needsOwnKeyList =
     needsOwnKey.length === 1

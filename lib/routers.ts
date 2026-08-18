@@ -1,5 +1,5 @@
 import type { Provider, RouterId } from "./types";
-import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS } from "./models";
+import { AI_OVERVIEWS_BACKING_MODEL, GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS } from "./models";
 
 // ==================================================================
 // LLM routers (gateways).
@@ -126,13 +126,15 @@ export interface RouterInfo {
 // Not because the models are unreachable — they are — but because some
 // measurement paths don't survive normalization. Perplexity's search is not a
 // parameter at all, it is the product, and its sources arrive in its own shape,
-// so it keeps requiring a direct key. Gemini's standard models DO ground through
-// Concentrate (web_search_options → native Google grounding; see its entry, and
-// gatewaySources for how the redirect-host domains are resolved), but the "Google
-// AI Overviews" engine is a pseudo-model — a real Gemini model plus a forced-
-// search system prompt that imitates the Overviews style, with no gateway
-// equivalent — so it too keeps a direct key (routerSlug refuses it).
-// `engineKeyMessage` says so plainly for the paths that still need a key.
+// so it keeps requiring a direct key. Google's surfaces DO ground through
+// Concentrate: its standard Gemini models via the Responses forced web-search
+// tool → native Google grounding (see its entry, and gatewaySources for how the
+// redirect-host domains are resolved), and the "Google AI Overviews" engine —
+// a pseudo-model that is a Gemini model plus a forced-search overview system
+// prompt — rides the same path on its backing Gemini slug (routerSlug resolves
+// it), with the overview prompt re-applied at call time. Only Concentrate does
+// this: the other routers reach Google but not its native grounding, so they
+// serve Google ungrounded-only and refuse the grounded surfaces.
 
 export const ROUTERS: Record<RouterId, RouterInfo> = {
   concentrate: {
@@ -178,8 +180,10 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         // at random (~1/4 of real prompts). Forced on the Responses tool it
         // grounds 12/12, native Google Search (vertexaisearch redirect host), and
         // reuses the Responses source parsing (annotations + action.sources).
-        // NOTE: the google-ai-overviews pseudo-model still can't route —
-        // routerSlug returns null for it — so its projects stay on a direct key.
+        // The google-ai-overviews pseudo-model rides this same path: routerSlug
+        // resolves it to the backing Gemini slug and openaiWebSearch re-applies
+        // the overview system prompt, so AIO routes here too (which offloads its
+        // grounded burst from a single direct key that 429-storms under load).
         shape: "openai-responses",
         search: "passthrough",
         // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
@@ -364,18 +368,26 @@ export function routerProviders(router: RouterId): Provider[] {
  * The router's slug for one of our catalog models, or null when the router
  * can't serve that provider.
  *
- * The AI Overviews pseudo-model is refused here rather than mapped: it is not a
- * model any router has, it is a Gemini call plus our own system prompt.
+ * The AI Overviews pseudo-model has no model of its own — it is a Gemini call
+ * plus our overview system prompt — so it resolves to the same backing Gemini
+ * model the direct path uses (AI_OVERVIEWS_BACKING_MODEL), letting a router that
+ * carries Google's native grounding serve it. This only answers the naming
+ * question ("which slug"); whether a router may actually MEASURE that grounded
+ * surface is routerCanMeasure's call, and only Concentrate passes Google search
+ * through — so through the other routers AIO gets a slug but is refused for the
+ * grounded run it always is. The run still records `google-ai-overviews`; the
+ * overview instructions are re-applied at call time (openaiWebSearch), so the
+ * routed answer matches the direct one in voice and grounding.
  */
 export function routerSlug(
   router: RouterId,
   provider: Provider,
   model: string,
 ): string | null {
-  if (model === GOOGLE_AI_OVERVIEWS_MODEL) return null;
   const support = routerSupport(router, provider);
   if (!support) return null;
-  return support.slugOverrides?.[model] ?? `${support.slugPrefix}/${model}`;
+  const slugModel = model === GOOGLE_AI_OVERVIEWS_MODEL ? AI_OVERVIEWS_BACKING_MODEL : model;
+  return support.slugOverrides?.[slugModel] ?? `${support.slugPrefix}/${slugModel}`;
 }
 
 /**
@@ -403,19 +415,18 @@ export function routerCanMeasure(
  * Should a capable router be PREFERRED over a direct key for this
  * (provider, model)? Default is no — BYOK wins, the router is the fallback.
  *
- * The one exception is Google's non-Overviews models. Google answers on two
- * surfaces that share the provider: AI Overviews (the google-ai-overviews
- * pseudo-model, which CAN'T route — routerSlug is null) and the Gemini
- * assistant (which can). An account needs a direct Google key for AI Overviews,
- * but with plain BYOK-first that same key would pin the Gemini surface to direct
- * too — so the two surfaces could never sit on different credentials. Reserving
- * the direct key for AI Overviews and preferring the router for real Gemini
- * models is what lets AI-Overviews-direct and Gemini-via-gateway coexist on one
- * account. The router is only actually used when it's verified (routerCanMeasure)
- * and has a slug, so this preference degrades safely to the direct key.
+ * The exception is Google, on BOTH its surfaces — the Gemini assistant and the
+ * AI-Overviews pseudo-model. A direct Google key can serve either, but a single
+ * key can't absorb the fleet's grounded burst across every org: the direct AIO
+ * path 429/503-storms under load, while Concentrate carries the same Google
+ * volume from a pooled backend. So both surfaces prefer a verified router and
+ * fall to the direct key only when none can measure Google's grounding. The
+ * router is used only when it's verified (routerCanMeasure) and has a slug
+ * (routerSlug now resolves AIO to its backing Gemini model), so this preference
+ * degrades safely to the direct key.
  */
-export function prefersRouter(provider: Provider, model: string): boolean {
-  return provider === "google" && model !== GOOGLE_AI_OVERVIEWS_MODEL;
+export function prefersRouter(provider: Provider, _model: string): boolean {
+  return provider === "google";
 }
 
 /**

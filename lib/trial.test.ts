@@ -352,10 +352,11 @@ describe("resolveRunKeyFor with a router credential", () => {
     expect(nextRunMessage(k)).toContain("Claude Opus 4.8");
   });
 
-  // Google answers on two surfaces sharing the provider: AI Overviews (can't
-  // route) and the Gemini assistant (can). An account keeps a Google direct key
-  // for AI Overviews, and BYOK-first would pin Gemini to it too — so real Gemini
-  // is router-preferred, letting the two surfaces sit on different credentials.
+  // Google answers on two surfaces sharing the provider — the Gemini assistant
+  // and AI Overviews — and both now prefer a verified router over a direct key,
+  // because a single direct Google key can't absorb the fleet's grounded burst.
+  // The direct key is the fallback for either surface when no router can measure
+  // Google's grounding.
   it("routes real Gemini through a verified router even when a Google direct key exists", async () => {
     ownsKeysFor("google");
     hasRouter("concentrate", ["google"]);
@@ -365,9 +366,21 @@ describe("resolveRunKeyFor with a router credential", () => {
     expect(k.route?.router).toBe("concentrate");
   });
 
-  it("keeps AI Overviews on the direct Google key (it can't route)", async () => {
+  it("routes AI Overviews through a verified router even when a Google direct key exists", async () => {
+    // AI Overviews now prefers a router that carries Google grounding, on its
+    // backing Gemini slug — offloading its grounded burst from a single direct
+    // key that 429-storms under fleet load. The direct key becomes the fallback.
     ownsKeysFor("google");
     hasRouter("concentrate", ["google"]);
+    const k = await runKeyFor(db(0), "user-1", "google", GOOGLE_AI_OVERVIEWS_MODEL, { webSearch: true });
+    expect(k.source).toBe("own");
+    expect(k.apiKey).toBe("key-for-concentrate");
+    expect(k.route?.router).toBe("concentrate");
+  });
+
+  it("degrades AI Overviews to the direct Google key when the router isn't verified for Google", async () => {
+    ownsKeysFor("google");
+    hasRouter("concentrate", []); // Google grounding not confirmed on this key
     const k = await runKeyFor(db(0), "user-1", "google", GOOGLE_AI_OVERVIEWS_MODEL, { webSearch: true });
     expect(k.source).toBe("own");
     expect(k.apiKey).toBe("key-for-google");
@@ -650,8 +663,9 @@ describe("the free-tier spend ceiling", () => {
 
 // The free tier can be funded by one shared Concentrate key instead of four
 // direct provider keys: it routes the engines Concentrate serves through the
-// gateway (one capped key, discount) and falls back to per-provider trial keys
-// for the engines it can't (AI Overviews, Perplexity).
+// gateway (one capped key, discount) — including AI Overviews, on its backing
+// Gemini slug — and falls back to per-provider trial keys for the ones it can't
+// (Perplexity).
 describe("free tier through a shared Concentrate key", () => {
   it("routes a served engine through Concentrate", async () => {
     process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
@@ -669,13 +683,17 @@ describe("free tier through a shared Concentrate key", () => {
     expect(k.route?.router).toBe("concentrate");
   });
 
-  it("falls back to a direct trial key for AI Overviews (Concentrate can't route it)", async () => {
+  it("routes AI Overviews through the shared Concentrate key (on its backing Gemini slug)", async () => {
+    // The trial Concentrate key is trusted for the grounding it statically
+    // supports (concentrateTrialServes), and Google grounding is passthrough — so
+    // AI Overviews rides the gateway on its backing slug like real Gemini, rather
+    // than falling to a per-provider direct trial key.
     process.env.TRIAL_CONCENTRATE_API_KEY = "sk-cn-trial";
     process.env.TRIAL_GOOGLE_API_KEY = "trial-google";
     const k = await runKeyFor(db(0), "user-1", "google", GOOGLE_AI_OVERVIEWS_MODEL, { webSearch: true });
     expect(k.source).toBe("trial");
-    expect(k.apiKey).toBe("trial-google");
-    expect(k.route).toBeUndefined();
+    expect(k.apiKey).toBe("sk-cn-trial");
+    expect(k.route?.router).toBe("concentrate");
   });
 
   it("falls back to a direct trial key for Perplexity (not in Concentrate's catalog)", async () => {
