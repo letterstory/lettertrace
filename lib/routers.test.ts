@@ -118,16 +118,20 @@ describe("OpenRouter request body", () => {
     expect(body.plugins).toBeUndefined();
   });
 
-  it("Concentrate adds web_search_options only for grounded Google", () => {
-    // Gemini grounds through Concentrate's chat surface only when
-    // web_search_options is present; Claude and OpenAI carry their own forced
-    // search tool on their own shapes, so they get nothing extra.
-    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: true })).toEqual({
-      web_search_options: {},
-    });
+  it("Concentrate adds nothing extra — every engine forces its own search tool", () => {
+    // Gemini used to rely on a `web_search_options` hint here; it now goes
+    // through the Responses API with a forced `web_search` tool (like OpenAI),
+    // so no provider needs extraBody.
+    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: true })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("google", { webSearch: false })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("anthropic", { webSearch: true })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("openai", { webSearch: true })).toEqual({});
+  });
+
+  it("Concentrate serves Gemini on the openai-responses shape", () => {
+    // The forced web_search tool lives on the Responses path; the old
+    // openai-chat shape only hinted and grounded at random.
+    expect(ROUTERS.concentrate.providers.google?.shape).toBe("openai-responses");
   });
 });
 
@@ -139,11 +143,17 @@ describe("routerSlug", () => {
     expect(routerSlug("concentrate", "openai", "gpt-4o")).toBe("openai/gpt-4o");
   });
 
-  it("refuses the AI Overviews pseudo-model", () => {
-    // It isn't a model any router has: it's a Gemini call plus our own system
-    // prompt. Mapping it to a slug would send the request somewhere real and
-    // return something that isn't an AI Overview.
-    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+  it("resolves the AI Overviews pseudo-model to its backing Gemini slug", () => {
+    // It isn't a model any router has: it's a Gemini call plus our overview
+    // system prompt. It routes on its backing model's slug (the adapter re-applies
+    // the overview prompt), so a router that carries Google grounding can serve
+    // it — the same slug Gemini Flash resolves to.
+    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe(
+      "google/gemini-2.5-flash",
+    );
+    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe(
+      routerSlug("concentrate", "google", "gemini-flash-latest"),
+    );
   });
 
   it("refuses an engine the router doesn't serve", () => {
@@ -381,11 +391,18 @@ describe("routed Gemini", () => {
     }
   });
 
-  it("never routes the AI Overviews pseudo-model", () => {
-    // It is our own construct, grounded in Google Search by definition — there
-    // is nothing on a router that could stand in for it.
-    expect(routerSlug("openrouter", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
-    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
-    expect(routerSlug("merge", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+  it("routes the AI Overviews pseudo-model only where Google grounding survives", () => {
+    // AI Overviews is grounded-always, riding the Gemini path on its backing
+    // slug. Every router resolves that slug (a naming question), but the surface
+    // can only be MEASURED where the router carries Google's native search — just
+    // Concentrate. On the others it gets a slug but is refused for the grounded
+    // run it always is, so it stays on a direct key.
+    for (const router of ["openrouter", "concentrate", "merge"] as const) {
+      expect(routerSlug(router, "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe("google/gemini-2.5-flash");
+    }
+    const grounded = { webSearch: true, verified: ["google"] as Provider[] };
+    expect(routerCanMeasure("concentrate", "google", grounded)).toBe(true);
+    expect(routerCanMeasure("openrouter", "google", grounded)).toBe(false);
+    expect(routerCanMeasure("merge", "google", grounded)).toBe(false);
   });
 });
