@@ -23,11 +23,17 @@ import { normalizeCompetitorList } from "@/lib/competitors";
 const ANSWER_MAX_TOKENS = 1200;
 const UTILITY_MAX_TOKENS = 1500;
 
-// Provider APIs occasionally drop a keep-alive connection mid-response
-// ("Premature close" / "socket hang up"), especially under Node's fetch. Both
-// SDKs retry such transient connection errors with backoff; we raise the count
-// above the default (2) and set an explicit ceiling so a call can't hang.
-const CLIENT_OPTS = { maxRetries: 4, timeout: 60_000 } as const;
+// Both SDKs at these versions (@anthropic-ai/sdk 0.30, openai 4.x) default to
+// node-fetch, which throws "Premature close" reading some providers' response
+// bodies — most consistently the Concentrate gateway's GROUNDED Claude/Gemini
+// replies (large, multi-round web-search answers). Concentrate delivers and
+// BILLS them with a 200; node-fetch just can't read them to completion, while
+// curl and Node's built-in undici fetch read the identical bytes fine. Retries
+// don't help: it's ~100% for those routes, not transient, so every attempt
+// fails AND re-bills (maxRetries × the answer cost, for zero stored data).
+// Routing the SDKs through undici (globalThis.fetch) tolerates the framing and
+// fixes it. Keep the raised retry count + explicit timeout for genuine drops.
+const CLIENT_OPTS = { maxRetries: 4, timeout: 60_000, fetch: globalThis.fetch } as const;
 
 interface BaseCall {
   provider: Provider;
