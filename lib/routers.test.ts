@@ -118,16 +118,20 @@ describe("OpenRouter request body", () => {
     expect(body.plugins).toBeUndefined();
   });
 
-  it("Concentrate adds web_search_options only for grounded Google", () => {
-    // Gemini grounds through Concentrate's chat surface only when
-    // web_search_options is present; Claude and OpenAI carry their own forced
-    // search tool on their own shapes, so they get nothing extra.
-    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: true })).toEqual({
-      web_search_options: {},
-    });
+  it("Concentrate adds nothing extra — every engine forces its own search tool", () => {
+    // Gemini used to rely on a `web_search_options` hint here; it now goes
+    // through the Responses API with a forced `web_search` tool (like OpenAI),
+    // so no provider needs extraBody.
+    expect(ROUTERS.concentrate.extraBody!("google", { webSearch: true })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("google", { webSearch: false })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("anthropic", { webSearch: true })).toEqual({});
     expect(ROUTERS.concentrate.extraBody!("openai", { webSearch: true })).toEqual({});
+  });
+
+  it("Concentrate serves Gemini on the openai-responses shape", () => {
+    // The forced web_search tool lives on the Responses path; the old
+    // openai-chat shape only hinted and grounded at random.
+    expect(ROUTERS.concentrate.providers.google?.shape).toBe("openai-responses");
   });
 });
 
