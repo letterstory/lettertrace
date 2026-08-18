@@ -764,6 +764,14 @@ async function openaiWebSearch(
   const isGemini = plan?.slug?.startsWith("google/") ?? false;
   const searchTool = isGemini ? { type: "web_search" } : { type: "web_search_preview" };
   const searchToolChoice: unknown = isGemini ? "required" : { type: "web_search_preview" };
+  // tool_choice "required" hard-forces OpenAI, but Concentrate maps our
+  // web_search tool to Gemini's {googleSearch:{}}, which is model-decides — so
+  // "required" doesn't strictly force a Gemini search (per Concentrate). It
+  // searches consistently in practice, but we add the same ALWAYS_SEARCH
+  // instruction lettertrace uses on the DIRECT Gemini path as belt-and-
+  // suspenders, keeping native Google grounding. OpenAI needs none — it's
+  // hard-forced. (Not Exa: that's a third-party engine, non-representative.)
+  const geminiSearchInstruction = isGemini ? ALWAYS_SEARCH.replace(/^-\s*/, "") : undefined;
 
   interface ResponsesBody {
     status?: string;
@@ -795,6 +803,9 @@ async function openaiWebSearch(
           // cites nothing. Verified through Concentrate for both OpenAI and
           // Gemini: forced returns sources even for a memory-answerable question.
           tool_choice: searchToolChoice,
+          // Gemini-only: the ALWAYS_SEARCH nudge (see geminiSearchInstruction),
+          // since tool_choice doesn't hard-force Gemini's native search.
+          ...(geminiSearchInstruction ? { instructions: geminiSearchInstruction } : {}),
           // Ask the Responses API to attach the searched result URLs to the
           // web_search_call item. The 5.6 models search every time (the browse
           // is forced) but attach inline url_citation annotations only ~70% of
