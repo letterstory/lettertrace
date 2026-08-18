@@ -143,11 +143,17 @@ describe("routerSlug", () => {
     expect(routerSlug("concentrate", "openai", "gpt-4o")).toBe("openai/gpt-4o");
   });
 
-  it("refuses the AI Overviews pseudo-model", () => {
-    // It isn't a model any router has: it's a Gemini call plus our own system
-    // prompt. Mapping it to a slug would send the request somewhere real and
-    // return something that isn't an AI Overview.
-    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+  it("resolves the AI Overviews pseudo-model to its backing Gemini slug", () => {
+    // It isn't a model any router has: it's a Gemini call plus our overview
+    // system prompt. It routes on its backing model's slug (the adapter re-applies
+    // the overview prompt), so a router that carries Google grounding can serve
+    // it — the same slug Gemini Flash resolves to.
+    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe(
+      "google/gemini-2.5-flash",
+    );
+    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe(
+      routerSlug("concentrate", "google", "gemini-flash-latest"),
+    );
   });
 
   it("refuses an engine the router doesn't serve", () => {
@@ -385,11 +391,18 @@ describe("routed Gemini", () => {
     }
   });
 
-  it("never routes the AI Overviews pseudo-model", () => {
-    // It is our own construct, grounded in Google Search by definition — there
-    // is nothing on a router that could stand in for it.
-    expect(routerSlug("openrouter", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
-    expect(routerSlug("concentrate", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
-    expect(routerSlug("merge", "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBeNull();
+  it("routes the AI Overviews pseudo-model only where Google grounding survives", () => {
+    // AI Overviews is grounded-always, riding the Gemini path on its backing
+    // slug. Every router resolves that slug (a naming question), but the surface
+    // can only be MEASURED where the router carries Google's native search — just
+    // Concentrate. On the others it gets a slug but is refused for the grounded
+    // run it always is, so it stays on a direct key.
+    for (const router of ["openrouter", "concentrate", "merge"] as const) {
+      expect(routerSlug(router, "google", GOOGLE_AI_OVERVIEWS_MODEL)).toBe("google/gemini-2.5-flash");
+    }
+    const grounded = { webSearch: true, verified: ["google"] as Provider[] };
+    expect(routerCanMeasure("concentrate", "google", grounded)).toBe(true);
+    expect(routerCanMeasure("openrouter", "google", grounded)).toBe(false);
+    expect(routerCanMeasure("merge", "google", grounded)).toBe(false);
   });
 });
