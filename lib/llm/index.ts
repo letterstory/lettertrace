@@ -22,6 +22,16 @@ import { normalizeCompetitorList } from "@/lib/competitors";
 
 const ANSWER_MAX_TOKENS = 1200;
 const UTILITY_MAX_TOKENS = 1500;
+// OpenAI's Responses grounded path needs its own, much larger output budget.
+// max_output_tokens there caps reasoning + search + answer TOGETHER, and the
+// gpt-5.6 (reasoning) models spend thousands of tokens thinking and searching
+// before writing anything — at ANSWER_MAX_TOKENS (1200) they exhaust the budget
+// mid-reasoning and return status "incomplete" on real (non-trivial) prompts,
+// which fails the run. Verified: 1200 fails 4/4 real prompts; 4000-8000 all
+// complete and ground richly (8-12 inline citations + dozens of searched
+// sources). Non-reasoning gpt-4o is unaffected (it completes well under 1200),
+// and the model stops when done, so the higher cap is headroom, not a floor.
+const OPENAI_SEARCH_MAX_OUTPUT_TOKENS = 8000;
 
 // Both SDKs at these versions (@anthropic-ai/sdk 0.30, openai 4.x) default to
 // node-fetch, which throws "Premature close" reading some providers' response
@@ -786,7 +796,9 @@ async function openaiWebSearch(
           // scripts/probe-router.ts + the Concentrate response shape.
           include: ["web_search_call.action.sources"],
           input: prompt,
-          max_output_tokens: ANSWER_MAX_TOKENS,
+          // Big budget: reasoning + search + answer share this cap, and gpt-5.6
+          // returns "incomplete" at ANSWER_MAX_TOKENS (see the constant's note).
+          max_output_tokens: OPENAI_SEARCH_MAX_OUTPUT_TOKENS,
           ...plan?.extraBody,
         }),
       });
