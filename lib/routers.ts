@@ -147,12 +147,11 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
     anthropicBaseUrl: "https://api.concentrate.ai",
     // Concentrate's API reference documents bearer auth for the whole API.
     anthropicAuth: "bearer",
-    // Gemini grounds through the chat surface only when web_search_options is
-    // present — Concentrate forwards it to Google's native grounding. Claude and
-    // OpenAI carry their own forced search tool on their own shapes (anthropic /
-    // openai-responses), so they need nothing extra here.
-    extraBody: (provider, { webSearch }) =>
-      provider === "google" && webSearch ? { web_search_options: {} } : {},
+    // Every engine forces its own web search tool on its own shape (anthropic /
+    // openai-responses) — Gemini included, now that it goes through the Responses
+    // API with a forced `web_search` tool rather than the chat-completions
+    // `web_search_options` hint it used to ignore — so nothing extra is needed.
+    extraBody: () => ({}),
     providers: {
       anthropic: {
         shape: "anthropic",
@@ -171,18 +170,17 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
         slugPrefix: "openai",
       },
       google: {
-        // Grounded and measurable via web_search_options. The 2026-08-02 probe
-        // saw only ungrounded answers, but as of 2026-08-17 Concentrate forwards
-        // Gemini's native Google-Search grounding: the router's extraBody adds
-        // `web_search_options: {}`, and the reply carries url_citation annotations
-        // backed by Google's vertexaisearch redirect host. It grounds
-        // consistently — even a memory-answerable question ("capital of France")
-        // searched — so no forcing lever is needed. The real domain rides in the
-        // annotation title, which gatewaySources resolves (the same shape the
-        // direct Google path handles). NOTE: the google-ai-overviews pseudo-model
-        // still can't route — routerSlug returns null for it — so its projects
-        // stay on a direct key.
-        shape: "openai-chat",
+        // Gemini goes through the SAME Responses API + forced web-search tool as
+        // OpenAI (shape "openai-responses"), just with Concentrate's `web_search`
+        // tool + tool_choice "required" instead of `web_search_preview` (openai-
+        // WebSearch branches on the google/* slug). The old chat-completions
+        // `web_search_options` path only HINTED — Gemini ignored it and grounded
+        // at random (~1/4 of real prompts). Forced on the Responses tool it
+        // grounds 12/12, native Google Search (vertexaisearch redirect host), and
+        // reuses the Responses source parsing (annotations + action.sources).
+        // NOTE: the google-ai-overviews pseudo-model still can't route —
+        // routerSlug returns null for it — so its projects stay on a direct key.
+        shape: "openai-responses",
         search: "passthrough",
         // Our catalog carries Google's rolling ALIASES (gemini-flash-latest),
         // which no router resolves — every model needs an explicit slug, and

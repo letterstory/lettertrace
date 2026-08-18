@@ -520,9 +520,9 @@ export async function runQuery(
 ): Promise<QueryResult> {
   const webSearch = opts.webSearch ?? false;
 
-  // A routed answer. Only anthropic/openai get here — the router registry serves
-  // no others, and lib/trial refuses the combination before a run starts — so
-  // this sits above the Google/Perplexity branches rather than inside them.
+  // A routed answer (anthropic / openai / gemini through the router) — the
+  // registry serves no others, and lib/trial refuses the combination before a
+  // run starts — so this sits above the Google/Perplexity direct branches.
   if (opts.route) {
     const plan = planRoute(opts.route, opts.provider, opts.model, { webSearch });
     if (plan.shape === "anthropic") {
@@ -531,8 +531,9 @@ export async function runQuery(
         : anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS, plan)
             .then((res) => ({ ...res, sources: [] }));
     }
-    // A router mirroring the Responses API takes the direct OpenAI path
-    // wholesale, forced tool_choice and all, so the measurement is the same one.
+    // The Responses API path with a forced web-search tool: OpenAI, and Gemini
+    // via Concentrate (openaiWebSearch picks the right tool per slug). Same
+    // forced measurement in both cases.
     if (plan.shape === "openai-responses" && webSearch) {
       return openaiWebSearch(opts.apiKey, opts.model, opts.prompt, plan);
     }
@@ -751,10 +752,18 @@ async function openaiWebSearch(
   prompt: string,
   plan?: RoutePlan,
 ): Promise<QueryResult> {
-  // A router that mirrors the Responses API answers on its own host; the body
-  // below is unchanged, which is the point — a routed OpenAI measurement is the
-  // same request as a direct one, forcing included.
+  // Serves two surfaces through the same Responses API + forced web search:
+  // direct/routed OpenAI, and Gemini via Concentrate (its google/* slug). A
+  // routed measurement is the same request as a direct one, forcing included.
   const url = plan ? `${plan.baseUrl}/responses` : "https://api.openai.com/v1/responses";
+
+  // OpenAI's Responses search tool is `web_search_preview`. Concentrate's
+  // unified tool — what Gemini needs — is `web_search`, forced with tool_choice
+  // "required". Gemini's other path (chat-completions `web_search_options`) only
+  // HINTS, so it grounded at random (~1/4); on this forced tool it grounds 12/12.
+  const isGemini = plan?.slug?.startsWith("google/") ?? false;
+  const searchTool = isGemini ? { type: "web_search" } : { type: "web_search_preview" };
+  const searchToolChoice: unknown = isGemini ? "required" : { type: "web_search_preview" };
 
   interface ResponsesBody {
     status?: string;
@@ -781,12 +790,11 @@ async function openaiWebSearch(
         headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
           model: plan ? plan.slug : model,
-          tools: [{ type: "web_search_preview" }],
-          // Force the browse; left to choose, the model often answers from
-          // memory and cites nothing. Verified to survive routing: through
-          // Concentrate this returns sources even for a question the model can
-          // answer from recall, where the same request unforced returns none.
-          tool_choice: { type: "web_search_preview" },
+          tools: [searchTool],
+          // Force the browse; left to choose, the model answers from memory and
+          // cites nothing. Verified through Concentrate for both OpenAI and
+          // Gemini: forced returns sources even for a memory-answerable question.
+          tool_choice: searchToolChoice,
           // Ask the Responses API to attach the searched result URLs to the
           // web_search_call item. The 5.6 models search every time (the browse
           // is forced) but attach inline url_citation annotations only ~70% of
