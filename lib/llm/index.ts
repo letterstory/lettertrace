@@ -728,12 +728,13 @@ async function anthropicWebSearch(
 //   30-60k total tokens per grounded query where gpt-4o spends ~500. That is
 //   a COST property, not a failure; it just makes trial metering and pricing
 //   assumptions written for gpt-4o an order of magnitude off.
-// - Citations are less reliable: a 5.6 answer can complete a forced browse
-//   (web_search_call items present) and still attach zero url_citation
-//   annotations, and the web_search_call items carry only the queries — no
-//   result URLs — so there is nothing to fall back to, unlike the Anthropic
-//   path's retrieved-but-not-cited results. Such an answer is still grounded;
-//   it is recorded with the sources it actually cited, possibly none.
+// - Inline citations are less reliable: a 5.6 answer completes a forced browse
+//   (web_search_call present) yet attaches zero url_citation annotations ~30%
+//   of the time. Requesting `include: web_search_call.action.sources` exposes
+//   the URLs the browse actually visited, so we fall back to those — mirroring
+//   the Anthropic path's retrieved-but-not-cited results. That turns a
+//   searched-but-uncited answer from a false "ungrounded" (a real, billed
+//   browse discarded) into the grounded measurement it is.
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -748,7 +749,11 @@ async function openaiWebSearch(
   interface ResponsesBody {
     status?: string;
     incomplete_details?: { reason?: string };
-    output?: { content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
+    output?: {
+      type?: string;
+      action?: { sources?: { url?: string; title?: string }[] };
+      content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[];
+    }[];
     usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
   }
 
@@ -772,6 +777,14 @@ async function openaiWebSearch(
           // Concentrate this returns sources even for a question the model can
           // answer from recall, where the same request unforced returns none.
           tool_choice: { type: "web_search_preview" },
+          // Ask the Responses API to attach the searched result URLs to the
+          // web_search_call item. The 5.6 models search every time (the browse
+          // is forced) but attach inline url_citation annotations only ~70% of
+          // the time; without this include there is nothing to fall back to, so
+          // ~30% of grounded answers record ZERO sources and fail as
+          // "ungrounded" — a real, billed browse discarded. Verified via
+          // scripts/probe-router.ts + the Concentrate response shape.
+          include: ["web_search_call.action.sources"],
           input: prompt,
           max_output_tokens: ANSWER_MAX_TOKENS,
           ...plan?.extraBody,
@@ -793,13 +806,23 @@ async function openaiWebSearch(
   if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
 
   let text = "";
-  const raw: CitedSource[] = [];
+  const cited: CitedSource[] = [];
+  const searched: CitedSource[] = [];
   for (const item of j.output ?? []) {
+    // action.sources (present thanks to the `include` above) are the URLs the
+    // forced browse actually visited — the fallback for a searched-but-uncited
+    // answer, mirroring the Anthropic path's retrieved-but-not-cited results.
+    if (item.type === "web_search_call") {
+      for (const s of item.action?.sources ?? []) {
+        const src = s?.url ? safeSource(s.url, s.title ?? null, null) : null;
+        if (src) searched.push(src);
+      }
+    }
     for (const c of item.content ?? []) {
       if (typeof c.text === "string") text += (text ? "\n" : "") + c.text;
       for (const a of c.annotations ?? []) {
         const s = a?.url ? safeSource(a.url, a.title ?? null, null) : null;
-        if (s) raw.push(s);
+        if (s) cited.push(s);
       }
     }
   }
@@ -822,7 +845,11 @@ async function openaiWebSearch(
   if (!text.trim()) {
     throw new Error("OpenAI returned an empty answer.");
   }
-  return { text: text.trim(), tokens, sources: dedupeSources(raw) };
+  // Prefer inline citations (what the answer actually used); fall back to the
+  // searched sources when the model browsed but attached none, so a real search
+  // isn't recorded as ungrounded.
+  const sources = dedupeSources(cited.length > 0 ? cited : searched);
+  return { text: text.trim(), tokens, sources };
 }
 
 // --- Google (Gemini) low-level chat + grounding ---------------------------
