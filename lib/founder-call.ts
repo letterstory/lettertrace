@@ -54,6 +54,9 @@ export function founderCallUrl(): string | null {
  */
 export const FOUNDER_CALL_SOURCE = "lettertrace-dashboard";
 
+/** Same link on the marketing page — a booking from there is a different funnel. */
+export const FOUNDER_CALL_LANDING_SOURCE = "lettertrace-landing";
+
 export function taggedBookingUrl(base: string, source = FOUNDER_CALL_SOURCE): string {
 	try {
 		const url = new URL(base);
