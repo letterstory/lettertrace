@@ -1,6 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
 import crypto from "node:crypto";
-import { ConfigurationError, encryptSecret, decryptSecret, keyHint } from "@/lib/crypto";
+import {
+  ConfigurationError,
+  encryptSecret,
+  decryptSecret,
+  keyHint,
+  generateShareToken,
+  sha256Hex,
+} from "@/lib/crypto";
 
 const VALID = crypto.randomBytes(32).toString("base64");
 const original = process.env.ENCRYPTION_KEY;
@@ -54,5 +61,21 @@ describe("keyHint", () => {
     const hint = keyHint("sk-ant-api03-abcdefghijklmnop4a9c");
     expect(hint).not.toContain("abcdefghijklmnop");
     expect(hint).toContain("4a9c");
+  });
+});
+
+describe("generateShareToken", () => {
+  it("is prefixed and unique across calls", () => {
+    const a = generateShareToken();
+    const b = generateShareToken();
+    expect(a).toMatch(/^lt_share_[A-Za-z0-9_-]{32,}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("hashes deterministically and ignores surrounding whitespace", () => {
+    const token = generateShareToken();
+    expect(sha256Hex(token)).toBe(sha256Hex(`  ${token}\n`));
+    expect(sha256Hex(token)).toMatch(/^[0-9a-f]{64}$/);
+    expect(sha256Hex(token)).not.toBe(sha256Hex(generateShareToken()));
   });
 });

@@ -291,6 +291,16 @@ While a user has free runs left and no key of their own, monitoring runs and var
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
 
+## Sharing a run
+
+Any run's full report can be shared with someone who has no LetterTrace account — useful for handing a prospect or teammate a real result without asking them to sign up. Click **Share** on a run's page to get a link; anyone who has it can view that run's report (visibility, share of voice, sentiment, the competitor breakdown, every answer and its cited sources) with no login. Nothing is redacted — if the run measured competitors, the link shows that too.
+
+- The link expires automatically after **7 days**. That's fixed, not configurable.
+- Clicking **Share** again **replaces** the existing link for that run — the old one stops working immediately. That's the only way to end a link early; there's no separate revoke.
+- The public page is `noindex`, and has no sign-up prompt and no way to manage the link — it's a plain, read-only view, and the recipient has nowhere authenticated to go from it.
+
+Where it lives: `share_links` (one row per run, holding only a SHA-256 hash of the token — see `supabase/schema.sql`), `lib/share-links.ts` (mint/rotate + resolve), and `app/share/[token]/page.tsx` (the public view, read through the service-role client since the viewer has no session to apply Row Level Security to).
+
 ## Operator alerts (optional)
 
 Set `ADMIN_ALERT_EMAIL` and one address is emailed whenever someone creates an
@@ -693,6 +703,7 @@ app/                     Next.js App Router
   login/                 Auth (email + password, Google, GitHub)
   auth/callback/         OAuth + email-confirmation code exchange
   dashboard/             Overview, topics, competitors, runs, settings
+  share/[token]/         Public, no-login view of one shared run
   api/                   Route handlers (keys, project, topics, prompts, competitors, runs, cron)
 components/              UI primitives, logo, dashboard nav + charts
 docs/
@@ -706,7 +717,8 @@ lib/
   engine.ts              Run orchestration (query → detect → analyze → store)
   mentions.ts            Deterministic mention detection
   metrics.ts             Visibility / share-of-voice / sentiment aggregation
-  crypto.ts              AES-256-GCM for BYOK keys
+  crypto.ts              AES-256-GCM for BYOK keys, token generation + hashing
+  share-links.ts         Mint/rotate + resolve a run's public share link
   provider-keys.ts       Verify → encrypt → store, shared by the dashboard + CLI
   routers.ts             LLM router registry: engines served, how search travels
   router-keys.ts         Verify → probe grounding → encrypt → store
