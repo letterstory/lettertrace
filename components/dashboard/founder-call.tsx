@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CalendarCheck, X } from "lucide-react";
+import { ArrowRight, CalendarCheck, X } from "lucide-react";
 import { Button } from "@/components/ui";
 import { FOUNDER_CALL_DELAY_MS } from "@/lib/founder-call";
 
@@ -84,6 +84,10 @@ function FounderCallDialog({ url, onClose }: { url: string; onClose: () => void 
 		>
 			<div className="absolute inset-0 bg-ink/40 backdrop-blur-sm animate-fade-up" onClick={onClose} />
 
+			{/* Composed from the marketing page's own vocabulary — mono eyebrow,
+			    serif heading, terracotta glyph in a rounded square, arrow on the
+			    primary action — so the first thing a new user is asked inside the
+			    product looks like the site that sold it to them. */}
 			<div className="relative w-full max-w-md overflow-hidden rounded border border-ink/10 bg-paper shadow-lift animate-fade-up">
 				<button
 					type="button"
@@ -94,27 +98,39 @@ function FounderCallDialog({ url, onClose }: { url: string; onClose: () => void 
 					<X className="h-4 w-4" />
 				</button>
 
-				<div className="px-6 pb-6 pt-7">
-					<span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal/10 text-teal">
-						<CalendarCheck className="h-5 w-5" />
-					</span>
+				<div className="p-6">
+					{/* Glyph leads the eyebrow rather than sitting opposite it: the top
+					    right corner belongs to the close button, and the two collided
+					    there. `pr-8` keeps the row clear of it at narrow widths. */}
+					<div className="flex items-center gap-3 pr-8">
+						<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-ink/[0.04] text-terracotta-dark">
+							<CalendarCheck className="h-5 w-5" />
+						</span>
+						<p className="mono-eyebrow">getting started</p>
+					</div>
 
-					<h2 id="founder-call-title" className="mt-4 text-lg font-semibold tracking-tight text-ink">
+					<h2
+						id="founder-call-title"
+						className="mt-4 text-2xl font-semibold tracking-tight text-ink"
+					>
 						Want a hand getting set up?
 					</h2>
 
-					<p className="mt-2 text-sm leading-relaxed text-ink-soft">
-						Book time with Mathew, our founder. He&apos;ll walk you through setting up your
-						brand and topics, and what to watch for once results start coming in. No pitch —
-						it&apos;s the fastest way to get something useful out of Lettertrace.
+					<p className="mt-3 text-sm leading-relaxed text-ink-faint">
+						Book time with Mathew, our founder. He&apos;ll walk you through your brand and
+						topics, and what to watch for once results start coming in.
 					</p>
 
-					<div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-						<Button variant="ghost" size="sm" onClick={onClose}>
-							Not right now
-						</Button>
-						<Button variant="primary" size="sm" onClick={book}>
+					{/* Stacked rather than side by side, so the two options are not read
+					    as equal weight. Booking is the reason the dialog exists; declining
+					    stays one click away but does not compete for the same line. */}
+					<div className="mt-7 flex flex-col gap-1">
+						<Button size="lg" onClick={book} className="w-full">
 							Pick a time
+							<ArrowRight className="h-4 w-4" />
+						</Button>
+						<Button variant="ghost" size="sm" onClick={onClose} className="w-full">
+							Not right now
 						</Button>
 					</div>
 				</div>
