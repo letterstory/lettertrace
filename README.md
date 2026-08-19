@@ -186,8 +186,10 @@ docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
 | `CRON_SECRET` | Only if you wire up scheduled runs (below) |
 
 Everything else in [`.env.example`](./.env.example) is optional: the `TRIAL_*`
-keys exist to hand out free runs on your own provider account, and the
-`ADMIN_*` / `RESEND_API_KEY` values only enable operator alerts.
+keys exist to hand out free runs on your own provider account, the `ADMIN_*` /
+`RESEND_API_KEY` values only enable operator alerts, and `FOUNDER_CALL_URL`
+offers new signups a setup call at a booking link of your choosing. Leave that
+last one unset — as `.env.example` does — and no such offer exists.
 
 Unlike a typical Next.js image, the `NEXT_PUBLIC_*` values here are read **at
 runtime**, not baked in at build time — so the published image works against any

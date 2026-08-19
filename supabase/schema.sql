@@ -44,6 +44,16 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists trial_tokens_used bigint not null default 0;
 
+-- When the founder-call offer was shown to this user. Null means never.
+--
+-- Server-side rather than localStorage for the same reason admin_alerted_at is:
+-- the offer must go out exactly once per person, not once per browser. A user
+-- who signs in on a phone and a laptop, or clears site data, would otherwise be
+-- asked again — and a repeated "want help getting started?" reads as broken
+-- rather than attentive. See FounderCallOffer in components/dashboard.
+alter table public.profiles
+  add column if not exists founder_call_prompted_at timestamptz;
+
 -- Atomic increment, self-scoped to the caller via auth.uid() (so a user can
 -- only ever add to their own tally). Called by the trial run/generate routes.
 create or replace function public.increment_trial_tokens(amount bigint)
