@@ -3,27 +3,30 @@
 This codebase uses OnePatch for telemetry. Query it at app.onepatch.dev/mcp;
 manual at docs.onepatch.dev.
 
-**As of 2026-08-18 this application exports no OpenTelemetry.** There is no
-`@opentelemetry/*` dependency, no `instrumentation.ts`, and no OTLP exporter.
-Every signal in the OnePatch store for this org is derived from GitHub webhooks
-— deploys, workflow runs, pushes and merges. So a question of the form "is
-lettertrace up", "which route is slow", "what is the error rate", or "did that
-deploy break anything" currently has no data behind it, and the answer is
-"unknown", not "fine".
+**Since 2026-08-19 this application exports OpenTelemetry traces, metrics and
+logs over OTLP/HTTP.** `instrumentation.ts` starts the SDK; `lib/otel/` holds
+the wiring and the hand-instrumentation helpers.
 
-That gap is the reason this section leads. Everything below describes the
-system as it is deployed, and marks what each part would emit once it is
-instrumented, so the map is ready when the data is.
+**It exports nothing unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.** No
+endpoint, no SDK, no outbound connection — the same default OPS_TELEMETRY
+takes, and for the same reason: this repository is public and ships a prebuilt
+image, so a self-hosted install reports to nobody until its operator says so.
+The consequence for reading this store is worth stating plainly: **an absence
+of spans is only evidence of an outage on a deployment where the endpoint is
+known to be set.** On this org's Vercel Production deployment it is.
 
-## What monitoring does exist today
+## What monitoring also exists
 
-Three in-house surfaces, none of which reach OnePatch and none of which are a
-substitute for traces:
+Three in-house surfaces. The first now feeds the exported log stream; the other
+two remain product features and do not reach OnePatch:
 
 - **`lib/ops.ts`** — operational events (provider failures, run outcomes)
   bucketed by `(kind, signature, hour)` into Supabase. Never throws, never
   blocks, never records content. Read back through `lib/ops-report.ts` and the
-  admin screens.
+  admin screens. **`recordOps` now also emits an OTel log record**, so the same
+  already-scrubbed signature reaches OnePatch — see Logs below. The two
+  destinations are gated separately: the Supabase bucket on `OPS_TELEMETRY`,
+  the log record on the exporter being configured.
 - **`lib/activity.ts` / `lib/logs.ts`** — the per-user activity log shown on the
   dashboard Logs screen and served by `/api/v1/logs` and MCP. A product feature
   that happens to be auditable, not an operations log.
@@ -40,13 +43,21 @@ them see the Vercel cron runs that do the actual work.
 
 - **Deployed by:** Vercel, from `master`. Environments: `Production` (and
   per-PR Preview builds).
-- **Environments:** Vercel reports the deploy environment as `Production`
-  (capitalised). Nothing sets `deployment.environment.name` yet, so the `env`
-  column on OnePatch spans/logs is empty for this service.
-- **Wiring:** none. No SDK, no exporter, no `service.name`, no
-  `service.version`. Instrumenting it would want `service.version` set to the
-  deploying commit sha so a regression can be grouped by version rather than
-  guessed from a timeline.
+- **Environments:** Vercel reports the *deploy* environment as `Production`
+  (capitalised) in the CI/CD stream. The app's own resource attribute is set by
+  `@vercel/otel` from `VERCEL_ENV` and is **lowercase** — `env = 'production'`
+  on spans, metrics and logs, `'preview'` on a PR build. Two different
+  spellings of the same idea; use the lowercase one when filtering telemetry
+  and the capitalised one only against `cicd.environment`.
+- **Wiring:** `instrumentation.ts` → `lib/otel/register.ts`, on `@vercel/otel`
+  over the OTLP/HTTP proto exporters. Node runtime only (the edge runtime
+  cannot run the Node SDK, so the exporters sit behind a dynamic import).
+  - `service.name` — `OTEL_SERVICE_NAME`, defaulting to `lettertrace`.
+  - `service.version` — **the deploying commit sha** (`VERCEL_GIT_COMMIT_SHA`),
+    overriding `@vercel/otel`'s default of the Vercel deployment id. So "did
+    that change do it?" is a `GROUP BY service.version`, not a timeline guess.
+  - Outbound `fetch` is instrumented by default, which covers Supabase and
+    every provider call as client spans and propagates W3C trace context.
 - **Incoming (server):** Next.js App Router route handlers under `app/api/**` —
   the dashboard's own CRUD (`/api/runs`, `/api/topics`, `/api/prompts`,
   `/api/competitors`, `/api/keys`), the public programmatic API under
@@ -63,18 +74,73 @@ them see the Vercel cron runs that do the actual work.
   through undici (`#129`). Provider calls are BYOK, per-tenant keys decrypted
   at use.
 
-**Spans** — none emitted. The boundaries worth a span when this is
-instrumented: the route handler, the cron run, each provider call in
-`lib/engine.ts` (attributes: provider, model, whether search grounding was on;
-never prompt or answer text), and the Supabase calls.
+**Spans.** Next.js emits the request spans itself once the SDK is registered —
+`GET /api/v1/runs/[id]/route` and friends, named by **route template** rather
+than by URL, so they are already low-cardinality. Three hand-placed spans sit
+underneath them, and they are the ones that describe the work:
 
-**Metrics** — none emitted.
+| span | where | scope | attributes |
+|---|---|---|---|
+| `cron.run` | `app/api/cron/run/route.ts` | one scheduler tick, parenting every run it starts | `cron.projects.scheduled` / `.processed` / `.skipped` / `.failed`, `cron.runs.swept` |
+| `run.execute` | `lib/engine.ts` (`resumeRun`) | one monitoring run, parenting its provider calls | `run.id`, `run.provider`, `run.model`, `run.route`, `run.channel`, `run.status`, `run.responses`, `run.prompts`, `run.tokens` |
+| `llm.query` | `lib/llm/index.ts` (`runQuery`) | one answer-engine call | `llm.provider`, `llm.model`, `llm.web_search`, `llm.route`, `llm.tokens`, `llm.sources` |
 
-**Logs** — none exported to OnePatch.
+`run.route` / `llm.route` is the router id (`concentrate`) or the literal
+`direct` for a direct provider key — the split that made #136 diagnosable.
+A failed call sets span status Error and records the exception.
 
-**Content rule:** whatever gets instrumented inherits `lib/ops.ts`'s third
-rule — provider and model may be recorded, prompt text, answers, brand names
-and customer domains may not. This is a public repository.
+**Metrics.** Emitted every 15s (short enough that a long cron run reports more
+than once before Vercel freezes the function).
+
+| metric | type | unit | attributes |
+|---|---|---|---|
+| `lettertrace.provider.request.duration` | histogram | ms | `llm.provider`, `llm.model`, `llm.web_search`, `llm.route`, `llm.outcome` |
+| `lettertrace.provider.tokens` | counter | `{token}` | same |
+| `lettertrace.run.duration` | histogram | ms | `run.provider`, `run.model`, `run.route`, `run.channel`, `run.status` |
+| `lettertrace.run.responses` | counter | `{response}` | same |
+
+`llm.outcome` is `success` or `error` and is recorded on **both** — a failed
+call still costs time, so an engine that has stopped answering appears as a
+rate rather than as an absence. The two histograms land in `otel.histograms`,
+the two counters in `otel.metrics` as `sum`.
+
+**Logs.** Every `recordOps` / `recordOpsError` call in the app also emits an
+OTel log record: body `<kind>: <signature>`, severity from the ops level, and
+the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
+`ops.provider`, …). The signature is the one `signatureOf()` already scrubbed,
+so ids and numbers are collapsed and no content rides along. `run.failed` and
+`error` records are the error stream worth alerting on.
+
+**Content rule — carried through.** Provider, model, route, counts, durations
+and outcomes are recorded. Prompt text, answers, brand names and customer
+domains are not, on any span attribute, metric attribute or log body. Span
+status messages carry the error *class*, never its message. This is a public
+repository and an operator's data, and the rule is the same one `lib/ops.ts`
+has always stated.
+
+## Configuration
+
+Four standard OTLP variables, read by the exporters themselves — so pointing
+this app at a different backend is a deployment change, never a code change.
+Set them in Vercel (Production, and Preview if you want PR builds reporting);
+they are deliberately absent from the repository.
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT   root URL — the exporter appends /v1/traces,
+                              /v1/metrics and /v1/logs itself
+OTEL_EXPORTER_OTLP_HEADERS    Authorization=Bearer <ingest token>
+OTEL_EXPORTER_OTLP_PROTOCOL   http/protobuf
+OTEL_SERVICE_NAME             lettertrace
+```
+
+Two things that cost time when they are wrong: the endpoint takes **no
+`/v1/...` suffix** (a 404 on export means one was added), and the headers value
+contains a space, so it needs quoting anywhere a shell will read it. A 401 on
+export means the token, not the wiring.
+
+`experimental.instrumentationHook` in `next.config.mjs` is what makes Next 14
+load `instrumentation.ts` at all — it became the default in Next 15, and
+removing it before that upgrade silently stops all export.
 
 ## RUM
 

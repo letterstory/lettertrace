@@ -15,6 +15,7 @@ import {
   type SearchSupport,
 } from "@/lib/routers";
 import { normalizeCompetitorList } from "@/lib/competitors";
+import { recordProviderCall, withSpan } from "@/lib/otel";
 
 // ------------------------------------------------------------------
 // Provider adapters. Every call here uses the *user's own* API key (BYOK).
@@ -521,6 +522,37 @@ export async function probeRouterSearch(
  * search service — so it stays fully self-hostable.
  */
 export async function runQuery(
+  opts: BaseCall & { prompt: string; webSearch?: boolean },
+): Promise<QueryResult> {
+  // Attributes describe the CALL, never its content: which engine, which
+  // model, which route, and whether grounding was asked for. No prompt, no
+  // answer, no brand, no domain — see lib/otel/index.ts.
+  const attrs = {
+    "llm.provider": opts.provider,
+    "llm.model": opts.model,
+    "llm.web_search": opts.webSearch ?? false,
+    "llm.route": opts.route?.router ?? "direct",
+  };
+  const startedMs = Date.now();
+  return withSpan("llm.query", attrs, async (span) => {
+    let tokens = 0;
+    let outcome = "error";
+    try {
+      const result = await runQueryUnmeasured(opts);
+      tokens = result.tokens;
+      outcome = "success";
+      span.setAttributes({ "llm.tokens": result.tokens, "llm.sources": result.sources.length });
+      return result;
+    } finally {
+      // A failed call still costs time and is the thing worth alerting on, so
+      // it is recorded with the same attributes plus its outcome — an engine
+      // that has stopped answering shows up as a rate, not as an absence.
+      recordProviderCall(Date.now() - startedMs, tokens, { ...attrs, "llm.outcome": outcome });
+    }
+  });
+}
+
+async function runQueryUnmeasured(
   opts: BaseCall & { prompt: string; webSearch?: boolean },
 ): Promise<QueryResult> {
   const webSearch = opts.webSearch ?? false;
