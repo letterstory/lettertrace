@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FOUNDER_CALL_WINDOW_DAYS, shouldOfferFounderCall, withinSignupWindow } from "./founder-call";
+import { FOUNDER_CALL_WINDOW_DAYS, shouldOfferFounderCall, taggedBookingUrl, withinSignupWindow } from "./founder-call";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 const days = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
 
-const URL = "https://the-letter-company.cal.com/mathew";
+const CAL_LINK = "https://the-letter-company.cal.com/mathew";
 
 describe("withinSignupWindow", () => {
 	it("accepts an account created moments ago", () => {
@@ -43,7 +43,7 @@ describe("withinSignupWindow", () => {
 });
 
 describe("shouldOfferFounderCall", () => {
-	const base = { url: URL, createdAt: days(0), promptedAt: null, now: NOW };
+	const base = { url: CAL_LINK, createdAt: days(0), promptedAt: null, now: NOW };
 
 	it("offers to a new user who has never been asked", () => {
 		expect(shouldOfferFounderCall(base)).toBe(true);
@@ -74,5 +74,36 @@ describe("shouldOfferFounderCall", () => {
 
 	it("does not offer to an established user, asked or not", () => {
 		expect(shouldOfferFounderCall({ ...base, createdAt: days(30) })).toBe(false);
+	});
+});
+
+describe("taggedBookingUrl", () => {
+	it("tags the booking so it can be attributed to this dialog", () => {
+		const u = new URL(taggedBookingUrl("https://the-letter-company.cal.com/mathew"));
+		expect(u.searchParams.get("metadata[source]")).toBe("lettertrace-dashboard");
+		expect(u.origin + u.pathname).toBe("https://the-letter-company.cal.com/mathew");
+	});
+
+	// Pointing FOUNDER_CALL_URL at a link that already carries parameters — a
+	// specific duration, say — must not silently drop them.
+	it("keeps parameters the configured link already had", () => {
+		const u = new URL(taggedBookingUrl("https://cal.com/x/y?duration=20&month=2026-09"));
+		expect(u.searchParams.get("duration")).toBe("20");
+		expect(u.searchParams.get("month")).toBe("2026-09");
+		expect(u.searchParams.get("metadata[source]")).toBe("lettertrace-dashboard");
+	});
+
+	it("does not stack duplicates if the tag is already present", () => {
+		const once = taggedBookingUrl("https://cal.com/x/y");
+		expect(taggedBookingUrl(once)).toBe(once);
+	});
+
+	/**
+	 * A booking link that works is worth more than attribution, so a value that
+	 * is not a URL is handed back untouched rather than mangled or dropped —
+	 * misconfiguration should degrade to "no tracking", never to "no booking".
+	 */
+	it("returns an unparseable value untouched rather than breaking the link", () => {
+		expect(taggedBookingUrl("not a url")).toBe("not a url");
 	});
 });

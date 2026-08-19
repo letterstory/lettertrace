@@ -33,6 +33,38 @@ export function founderCallUrl(): string | null {
 }
 
 /**
+ * Tags the booking link so a booking that came from this dialog can be told
+ * apart from one that came from a DM, the site, or a conference badge.
+ *
+ * Cal.com reads `metadata[key]=value` off the URL, stores it on the booking row
+ * and passes it through to webhooks. It is invisible to the person booking,
+ * which is what makes it honest attribution rather than a message: it records
+ * where the click came from and does not put words in their mouth.
+ *
+ * What this CANNOT do is change what the invite says. A Cal event's title,
+ * description and duration live on the event type, not the URL — so making the
+ * meeting read "Lettertrace setup call" is a change on Cal's side, not here.
+ * Because the link is an env var, swapping to a dedicated event type needs no
+ * deploy.
+ *
+ * Any query string already on the configured URL is preserved, so pointing
+ * FOUNDER_CALL_URL at a link that carries its own parameters keeps working.
+ * An unparseable URL is returned untouched rather than dropped — a booking link
+ * that works is worth more than attribution.
+ */
+export const FOUNDER_CALL_SOURCE = "lettertrace-dashboard";
+
+export function taggedBookingUrl(base: string, source = FOUNDER_CALL_SOURCE): string {
+	try {
+		const url = new URL(base);
+		url.searchParams.set("metadata[source]", source);
+		return url.toString();
+	} catch {
+		return base;
+	}
+}
+
+/**
  * Is this account new enough to be offered a founder call?
  *
  * Returns false for an unparseable or missing timestamp rather than defaulting

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, CalendarCheck, X } from "lucide-react";
 import { Button } from "@/components/ui";
-import { FOUNDER_CALL_DELAY_MS } from "@/lib/founder-call";
+import { FOUNDER_CALL_DELAY_MS, taggedBookingUrl } from "@/lib/founder-call";
 
 /**
  * Offers a setup call with the founder, once, half a minute after a new user
@@ -69,7 +69,7 @@ function FounderCallDialog({ url, onClose }: { url: string; onClose: () => void 
 	const book = useCallback(() => {
 		// noopener/noreferrer on an untrusted-by-default external target, and a
 		// new tab so a half-finished onboarding form is not thrown away.
-		window.open(url, "_blank", "noopener,noreferrer");
+		window.open(taggedBookingUrl(url), "_blank", "noopener,noreferrer");
 		onClose();
 	}, [url, onClose]);
 
@@ -118,7 +118,7 @@ function FounderCallDialog({ url, onClose }: { url: string; onClose: () => void 
 
 					<p className="mt-3 text-sm leading-relaxed text-ink-faint">
 						Book time with Mathew, our founder. He&apos;ll walk you through your brand and
-						topics, and what to watch for once results start coming in.
+						topics, and what to watch out for once results start coming in.
 					</p>
 
 					{/* Stacked rather than side by side, so the two options are not read
