@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { executeRun, sweepAbandonedRuns } from "@/lib/engine";
 import { resolveRunKey } from "@/lib/trial";
+import { withSpan } from "@/lib/otel";
+import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -42,6 +44,13 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // One span over the whole tick, parenting every run it starts. The counts it
+  // carries are the ones that explain a quiet day: due, skipped for want of a
+  // key, and actually run.
+  return withSpan("cron.run", {}, (span) => sweepAndRun(span));
+}
+
+async function sweepAndRun(span: Span) {
   const supabase = createServiceClient();
 
   // Before anything else, and unconditionally: a stranded row is stranded
@@ -116,6 +125,14 @@ async function handle(request: Request) {
       });
     }
   }
+
+  span.setAttributes({
+    "cron.projects.scheduled": projects.length,
+    "cron.projects.processed": results.length,
+    "cron.projects.skipped": results.filter((r) => r.status === "skipped").length,
+    "cron.projects.failed": results.filter((r) => r.status === "failed").length,
+    "cron.runs.swept": sweptRunIds.length,
+  });
 
   return NextResponse.json({ processed: results, sweptRuns: sweptRunIds });
 }
