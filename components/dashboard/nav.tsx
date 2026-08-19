@@ -47,7 +47,7 @@ export function DashboardNav() {
               href="https://phantomstory.com"
               target="_blank"
               rel="noreferrer"
-              className="group flex items-center gap-3 rounded px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:bg-ink/5"
+              className="group relative flex items-center gap-3 rounded px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:bg-ink/5"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -57,10 +57,13 @@ export function DashboardNav() {
                 className="h-4 w-4 shrink-0 grayscale transition group-hover:grayscale-0"
               />
               <span>Phantoms</span>
-              {/* -mr-2 tucks the arrow nearly against the item's right edge:
-                  the row's px-3 otherwise reads as the arrow floating. */}
+              {/* Desktop: pinned past the row's own edge, into the aside's
+                  padding, so it reads as aligned to the sidebar itself — inside
+                  the row it could never get closer than 20px to the border.
+                  Mobile: the wrapped pills are content-width, so a pinned arrow
+                  would overlap the next item; it stays inline there. */}
               <ArrowUpRight
-                className="ml-auto -mr-2 h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft"
+                className="ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft md:absolute md:-right-2.5 md:top-1/2 md:ml-0 md:-translate-y-1/2"
                 aria-hidden
               />
             </a>
