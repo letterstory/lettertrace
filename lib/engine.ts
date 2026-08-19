@@ -16,6 +16,7 @@ import { spendMicros } from "@/lib/pricing";
 import { recordOps, recordOpsError } from "@/lib/ops";
 import { logActivity } from "@/lib/activity";
 import { selectAll } from "@/lib/paging";
+import { recordRun, withSpan } from "@/lib/otel";
 
 /**
  * Who/what asked for a run, forwarded to the activity log so every run — from
@@ -323,7 +324,44 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
 }
 
 /** Execute a prepared run's jobs and settle the run row. */
-export async function resumeRun(prepared: PreparedRun, params: ExecuteRunParams): Promise<RunResult> {
+export async function resumeRun(
+  prepared: PreparedRun,
+  params: ExecuteRunParams,
+): Promise<RunResult> {
+  // The span that parents every provider call in this run, so one trace
+  // answers "what did the 08:00 cron actually do, and where did it spend its
+  // time". Run id is an attribute, never part of the span name.
+  const attrs = {
+    "run.provider": params.provider,
+    "run.model": params.model,
+    "run.route": params.route?.router ?? "direct",
+    "run.channel": params.context?.channel ?? "system",
+  };
+  const startedMs = Date.now();
+  return withSpan("run.execute", { ...attrs, "run.id": prepared.runId }, async (span) => {
+    let status = "failed";
+    let responses = 0;
+    try {
+      const result = await resumeRunMeasured(prepared, params);
+      status = result.status;
+      responses = result.totalResponses;
+      span.setAttributes({
+        "run.status": result.status,
+        "run.responses": result.totalResponses,
+        "run.prompts": prepared.jobs.length,
+        "run.tokens": result.tokensUsed,
+      });
+      return result;
+    } finally {
+      recordRun(Date.now() - startedMs, responses, { ...attrs, "run.status": status });
+    }
+  });
+}
+
+async function resumeRunMeasured(
+  prepared: PreparedRun,
+  params: ExecuteRunParams,
+): Promise<RunResult> {
   const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
   const { runId, jobs, competitors, attribution, startedMs } = prepared;
 

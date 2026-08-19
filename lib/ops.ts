@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { fireAndForget } from "@/lib/notify";
+import { emitOpsLog } from "@/lib/otel";
 
 /**
  * Operational telemetry: what this deployment is doing, and what is failing.
@@ -89,9 +90,22 @@ export function recordOps(
   kind: string,
   opts: { level?: OpsLevel; signature?: string; sample?: OpsSample } = {},
 ): void {
-  fireAndForget(
-    write(kind, opts.level ?? "info", signatureOf(opts.signature ?? kind), opts.sample ?? {}),
-  );
+  const level = opts.level ?? "info";
+  const signature = signatureOf(opts.signature ?? kind);
+
+  // Two destinations, one call site. The Supabase bucket below is the admin
+  // screens' data and is gated on OPS_TELEMETRY; the log record is the
+  // exported operations stream and is gated on an exporter being configured at
+  // all (lib/otel/register.ts). Both read the SAME already-scrubbed signature,
+  // so neither can leak content the other wouldn't.
+  emitOpsLog(kind, level, signature, {
+    "ops.level": level,
+    ...Object.fromEntries(
+      Object.entries(opts.sample ?? {}).map(([k, v]) => [`ops.${k}`, v ?? ""]),
+    ),
+  });
+
+  fireAndForget(write(kind, level, signature, opts.sample ?? {}));
 }
 
 /**
