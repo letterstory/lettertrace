@@ -7,6 +7,8 @@ import { WhyFree } from "@/components/dashboard/why-free";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { LetterproveAttest } from "@/components/letterprove-attest";
 import { isFirstSignIn } from "@/lib/letterprove";
+import { FounderCallOffer } from "@/components/dashboard/founder-call";
+import { founderCallUrl, shouldOfferFounderCall, withinSignupWindow } from "@/lib/founder-call";
 import { RunReadyBanner } from "@/components/dashboard/run-ready-banner";
 import { ThemeToggle } from "@/components/theme";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
@@ -56,6 +58,28 @@ export default async function DashboardLayout({
     }
   }
 
+  // Founder-call offer, for new signups only and only once ever. Both guards
+  // short-circuit before any query: unset URL means the feature does not exist
+  // (self-hosted images ship without it), and the signup window means an
+  // established account costs nothing to skip.
+  const callUrl = founderCallUrl();
+  let offerFounderCall = false;
+  if (callUrl && withinSignupWindow(user.created_at)) {
+    const { data: offerState } = await supabase
+      .from("profiles")
+      .select("founder_call_prompted_at")
+      .eq("id", user.id)
+      .maybeSingle();
+    offerFounderCall = shouldOfferFounderCall({
+      url: callUrl,
+      createdAt: user.created_at,
+      // A failed read yields undefined, which is deliberately NOT treated as
+      // "never asked" — see shouldOfferFounderCall.
+      promptedAt: (offerState as { founder_call_prompted_at: string | null } | null)
+        ?.founder_call_prompted_at,
+    });
+  }
+
   // Trial banner state: only when a trial is offered and the user is relying on
   // shared keys. Key resolution prefers the user's own key from EITHER
   // provider, so any own key at all means they're never on the trial.
@@ -80,6 +104,10 @@ export default async function DashboardLayout({
           this boundary — and because `user` is already resolved above, so it
           costs no extra query. Only the domain of the address is ever sent. */}
       <LetterproveAttest email={user.email} firstSignIn={isFirstSignIn(user)} />
+
+      {/* Mounted in the layout, not a page, so the 30s countdown survives
+          navigating between dashboard routes. */}
+      {offerFounderCall && callUrl && <FounderCallOffer url={callUrl} />}
 
       <aside className="flex flex-col border-b border-ink/10 bg-paper md:h-screen md:w-[260px] md:shrink-0 md:border-b-0 md:border-r">
         <div className="flex flex-col gap-6 px-5 py-6 md:h-full">
