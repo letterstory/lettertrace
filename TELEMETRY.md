@@ -13,7 +13,10 @@ takes, and for the same reason: this repository is public and ships a prebuilt
 image, so a self-hosted install reports to nobody until its operator says so.
 The consequence for reading this store is worth stating plainly: **an absence
 of spans is only evidence of an outage on a deployment where the endpoint is
-known to be set.** On this org's Vercel Production deployment it is.
+known to be set.** On this org's Vercel Production deployment it is **not set
+yet** — the four variables under [Configuration](#configuration) are the last
+step of shipping this, and until someone adds them in Vercel, merging changes
+nothing observable. Delete this paragraph once they are set.
 
 ## What monitoring also exists
 
@@ -173,11 +176,15 @@ Pinned expression:
 toString(attrs.`cicd.trigger`) = 'deployment_status' AND toString(attrs.`cicd.environment`) = 'Production'
 ```
 
-Sanity check over 90 days: 1 match, against 8 total CI/CD events — the one real
-Production deploy (`c288b80`, 2026-08-18 18:57 UTC) and none of the six CI
-events or the duplicate commit status.
+Sanity check, re-run 2026-08-19 over 90 days: 8 matches against 106 CI/CD
+events. The busy day since this was pinned is what confirmed the `environment`
+clause rather than merely justifying it — the stream now also carries **11
+`deployment_status` rows for `Preview`**, one per PR build, and the pin excludes
+every one of them. Without that clause a Preview build would read as a
+Production ship, which is the failure mode the choice was made against; on
+2026-08-18 there were no Preview rows yet to demonstrate it.
 
-**Confidence: high, 2026-08-18.** No escalation PR is needed; the platform
+**Confidence: high, re-verified 2026-08-19.** No escalation PR is needed; the platform
 already reports deploys through GitHub, which is the strongest signal this
 doctrine asks for. Caveats worth knowing: Vercel sends no deploy duration, so
 "how long does a deploy take" is unanswerable from this stream, and the actor on
