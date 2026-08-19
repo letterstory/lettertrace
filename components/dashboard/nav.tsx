@@ -57,8 +57,10 @@ export function DashboardNav() {
                 className="h-4 w-4 shrink-0 grayscale transition group-hover:grayscale-0"
               />
               <span>Phantoms</span>
+              {/* -mr-2 tucks the arrow nearly against the item's right edge:
+                  the row's px-3 otherwise reads as the arrow floating. */}
               <ArrowUpRight
-                className="ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft"
+                className="ml-auto -mr-2 h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft"
                 aria-hidden
               />
             </a>
