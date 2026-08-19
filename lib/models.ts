@@ -1,11 +1,20 @@
 import type { Provider } from "./types";
 
-// Google AI Overviews is exposed as a distinct answer engine, but it runs on
-// the same Google (Gemini) key: it is a pseudo-model under the `google`
-// provider that always grounds in Google Search and answers in the terse,
-// synthesized style Google shows at the top of a results page. The adapter
-// (lib/llm) maps this id onto a real Gemini model for the actual API call.
+// Google AI Overviews is exposed as a distinct answer engine: it is a
+// pseudo-model under the `google` provider that always grounds in Google Search
+// and answers in the terse, synthesized style Google shows at the top of a
+// results page. The adapter (lib/llm) maps this id onto a real Gemini model for
+// the actual API call — the backing model below. It runs on a direct Google key
+// OR through a router that carries Google's native grounding (Concentrate); the
+// run still records `google-ai-overviews` as the surface either way.
 export const GOOGLE_AI_OVERVIEWS_MODEL = "google-ai-overviews";
+
+// The real Gemini model the "Google AI Overviews" engine runs on. AI Overviews
+// are served by a fast Gemini model over Google Search, so we back them with
+// Flash and always ground the answer in Search. Shared here (not buried in the
+// adapter) because the router slug map has to resolve the pseudo-model to this
+// same backing model, so a direct AIO call and a routed one hit one model.
+export const AI_OVERVIEWS_BACKING_MODEL = "gemini-flash-latest";
 
 export interface ModelOption {
   id: string;
