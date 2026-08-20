@@ -1,3 +1,5 @@
+import type { Schedule } from "@/lib/types";
+
 // Tiny className combiner (no external deps). Filters falsy, joins with spaces.
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -106,3 +108,12 @@ export function formatDate(iso: string | null): string {
 export function article(word: string): "a" | "an" {
   return /^[aeiou]/i.test(word.trim()) ? "an" : "a";
 }
+
+/** The one wording of each schedule option, shared by every surface that
+ *  offers the setting (Settings form, Runs page) so the same choice can't be
+ *  called two different things. */
+export const SCHEDULE_LABELS: Record<Schedule, string> = {
+  off: "Manual only",
+  daily: "Daily",
+  weekly: "Weekly",
+};

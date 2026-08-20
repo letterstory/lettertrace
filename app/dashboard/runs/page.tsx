@@ -16,6 +16,7 @@ import {
   EmptyState,
 } from "@/components/ui";
 import { RunNow } from "./run-now";
+import { ScheduleControl } from "./schedule-control";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +107,15 @@ export default async function RunsPage() {
             providerLabel={PROVIDERS[project.default_provider].label}
           />
         }
+      />
+
+      {/* The schedule lives on the project settings form too, but this page is
+          where people go to make runs happen — it's where "how do I run this
+          daily?" gets asked. */}
+      <ScheduleControl
+        schedule={project.schedule}
+        keySource={key.source}
+        providerLabel={PROVIDERS[project.default_provider].label}
       />
 
       {runs.length === 0 ? (
