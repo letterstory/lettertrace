@@ -129,6 +129,15 @@ export interface Topic {
   created_at: string;
 }
 
+/**
+ * How broad a question is — the specificity ladder. A young brand appears in
+ * niche questions long before general ones, so where on the ladder mentions
+ * start is the brand's measured authority (its "visibility frontier"). Null on
+ * prompts written before the ladder existed, and on manual prompts the user
+ * hasn't classified.
+ */
+export type Specificity = "general" | "mid" | "niche";
+
 export interface Prompt {
   id: string;
   project_id: string;
@@ -138,6 +147,7 @@ export interface Prompt {
   is_active: boolean;
   /** The page this prompt was written to surface, when the caller mapped one. */
   target_url: string | null;
+  specificity: Specificity | null;
   created_at: string;
 }
 

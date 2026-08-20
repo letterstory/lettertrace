@@ -37,7 +37,7 @@ import {
 } from "@/lib/metrics";
 import { modelLabel, PROVIDERS } from "@/lib/models";
 import { formatDate, pct, timeAgo } from "@/lib/utils";
-import type { Mention, Provider, Run, Source, Topic } from "@/lib/types";
+import type { Mention, Provider, Run, Source, Specificity, Topic } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -252,21 +252,33 @@ export default async function DashboardPage() {
     new Set([...trendIds, ...Array.from(engineLatest.values(), (r) => r.id)]),
   );
 
-  const [mentionsResult, latestResponsesResult, topicsList, latestSourcesResult] = await Promise.all([
-    // NOTE: capped at 1000 rows by PostgREST; fine for ~20 runs of mention rows
-    // (only detected entities produce rows). Revisit if trend depth grows.
-    supabase.from("mentions").select("*").in("run_id", mentionIds),
-    supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
-    supabase.from("topics").select("*").eq("project_id", project.id),
-    supabase
-      .from("sources")
-      .select("response_id, url, is_owned")
-      .eq("run_id", latestRun.id),
-  ]);
+  const [mentionsResult, latestResponsesResult, topicsList, latestSourcesResult, promptTierResult] =
+    await Promise.all([
+      // NOTE: capped at 1000 rows by PostgREST; fine for ~20 runs of mention rows
+      // (only detected entities produce rows). Revisit if trend depth grows.
+      supabase.from("mentions").select("*").in("run_id", mentionIds),
+      supabase
+        .from("responses")
+        .select("id, topic_id, prompt_id")
+        .eq("run_id", latestRun.id),
+      supabase.from("topics").select("*").eq("project_id", project.id),
+      supabase
+        .from("sources")
+        .select("response_id, url, is_owned")
+        .eq("run_id", latestRun.id),
+      // Ladder tiers, for the frontier readout below.
+      supabase
+        .from("prompts")
+        .select("id, specificity")
+        .eq("project_id", project.id)
+        .not("specificity", "is", null),
+    ]);
 
   const allMentions = (mentionsResult.data as Mention[] | null) ?? [];
   const latestResponses =
-    (latestResponsesResult.data as { topic_id: string | null }[] | null) ?? [];
+    (latestResponsesResult.data as
+      | { id: string; topic_id: string | null; prompt_id: string | null }[]
+      | null) ?? [];
 
   const mentionsByRun = new Map<string, Mention[]>();
   for (const m of allMentions) {
@@ -354,6 +366,50 @@ export default async function DashboardPage() {
     rollupRows.length > 0
       ? rollupRows.reduce((sum, r) => sum + r.visibility, 0) / rollupRows.length
       : null;
+
+  // The visibility frontier: brand mention rate per ladder tier, latest run.
+  // Where mentions START on the general→niche ladder is the brand's measured
+  // authority — a 0% on general questions next to a 40% on niche ones is a
+  // young brand doing fine, not a product that isn't working.
+  const tierByPrompt = new Map(
+    (
+      (promptTierResult.data as { id: string; specificity: Specificity }[] | null) ?? []
+    ).map((p) => [p.id, p.specificity]),
+  );
+  const mentionedResponseIds = new Set(
+    latestMentions
+      .filter((m) => m.entity_type === "brand" && m.mentioned)
+      .map((m) => m.response_id),
+  );
+  const TIER_ORDER: Specificity[] = ["general", "mid", "niche"];
+  const TIER_LABELS: Record<Specificity, string> = {
+    general: "General",
+    mid: "Mid",
+    niche: "Niche",
+  };
+  const tierStats = TIER_ORDER.map((tier) => {
+    const rows = latestResponses.filter(
+      (r) => r.prompt_id && tierByPrompt.get(r.prompt_id) === tier,
+    );
+    const mentioned = rows.filter((r) => mentionedResponseIds.has(r.id)).length;
+    return {
+      tier,
+      total: rows.length,
+      mentioned,
+      rate: rows.length > 0 ? mentioned / rows.length : 0,
+    };
+  });
+  const measuredTiers = tierStats.filter((t) => t.total > 0);
+  // Most general tier with any mention — TIER_ORDER runs broad to narrow.
+  const frontier = tierStats.find((t) => t.mentioned > 0)?.tier ?? null;
+  const frontierNote =
+    frontier === "general"
+      ? "You appear in the broadest questions about your space."
+      : frontier === "mid"
+        ? "You appear in segment-level questions, not yet in the broadest ones — that top tier is the gap to close."
+        : frontier === "niche"
+          ? "You appear in niche questions only. That's where young brands start; broadening comes as authority grows."
+          : "No tier shows mentions yet. Generate more niche questions to find where you first appear.";
 
   // Share-of-voice leaderboard (brand + competitors, desc by share).
   const shareEntities: EntityStat[] = [...stats].sort(
@@ -483,6 +539,44 @@ export default async function DashboardPage() {
                     {/* Stale engines stay listed but leave the rollup — an
                         engine last measured a month ago isn't "overall" truth. */}
                     {row.stale && " · not in average"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* The visibility frontier — only once at least two tiers have answers
+          in the latest run, i.e. the ladder actually got measured. */}
+      {measuredTiers.length >= 2 && (
+        <Card>
+          <CardBody>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-ink">Visibility frontier</h3>
+                <p className="mt-0.5 max-w-xl text-sm text-ink-soft">{frontierNote}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {tierStats.map((t) => (
+                <div
+                  key={t.tier}
+                  className={`rounded border p-3.5 ${
+                    t.tier === frontier ? "border-terracotta/40" : "border-ink/10"
+                  }`}
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+                    {TIER_LABELS[t.tier]} questions
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-ink">
+                    {t.total > 0 ? pct(t.rate) : "—"}
+                  </p>
+                  <p className="mt-1 text-xs text-ink-faint">
+                    {t.total > 0
+                      ? `${t.mentioned} of ${t.total} answers named you`
+                      : "no tagged questions ran"}
+                    {t.tier === frontier && " · your frontier"}
                   </p>
                 </div>
               ))}
