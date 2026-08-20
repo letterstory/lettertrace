@@ -407,7 +407,12 @@ describe("perplexity JSON utility calls", () => {
       topicName: "cdn",
       count: 3,
     });
-    expect(res.variations).toEqual(["a", "b", "c"]);
+    // Bare strings are the pre-ladder shape; they parse as untagged questions.
+    expect(res.variations).toEqual([
+      { text: "a", specificity: null },
+      { text: "b", specificity: null },
+      { text: "c", specificity: null },
+    ]);
   });
 
   it("classifies sentiment and attributes rows to the right entity", async () => {

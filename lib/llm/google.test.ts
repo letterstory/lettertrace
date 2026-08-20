@@ -212,7 +212,11 @@ describe("google JSON utility calls", () => {
     expect(sentBody().generationConfig.responseMimeType).toBe("application/json");
     // Gemini answers a JSON+grounding request with 200 and no candidates at all.
     expect(sentBody().tools).toBeUndefined();
-    expect(res.variations).toEqual(["a", "b"]);
+    // Bare strings are the pre-ladder shape; they parse as untagged questions.
+    expect(res.variations).toEqual([
+      { text: "a", specificity: null },
+      { text: "b", specificity: null },
+    ]);
   });
 
   it("parses a JSON object wrapper as well as a bare array", async () => {
@@ -224,7 +228,34 @@ describe("google JSON utility calls", () => {
       topicName: "CDNs",
       count: 3,
     });
-    expect(res.variations).toEqual(["a", "b", "c"]);
+    expect(res.variations).toEqual([
+      { text: "a", specificity: null },
+      { text: "b", specificity: null },
+      { text: "c", specificity: null },
+    ]);
+  });
+
+  it("keeps valid ladder tiers and drops invented ones", async () => {
+    mockFetch(
+      jsonResponse(
+        ok(
+          '{"questions":[{"question":"a","specificity":"niche"},{"question":"b","specificity":"ultra"},{"question":"","specificity":"mid"}]}',
+        ),
+      ),
+    );
+    const res = await generateVariations({
+      provider: "google",
+      model: "gemini-flash-latest",
+      apiKey: KEY,
+      topicName: "CDNs",
+      count: 3,
+    });
+    // "ultra" isn't a tier — the question survives, the label doesn't. The
+    // empty question is dropped entirely.
+    expect(res.variations).toEqual([
+      { text: "a", specificity: "niche" },
+      { text: "b", specificity: null },
+    ]);
   });
 
   it("parses competitor suggestions", async () => {
