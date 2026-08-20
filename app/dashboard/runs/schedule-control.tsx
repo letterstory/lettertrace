@@ -54,9 +54,10 @@ export function ScheduleControl({
   }
 
   const scheduled = schedule !== "off";
-  // Trial users can press "Run monitor now", so canRun doesn't capture this —
-  // only an own key lets the cron actually run the project.
-  const willFire = keySource === "own";
+  // The cron runs own-key projects, and trial projects while the allowance
+  // lasts ("cadence from the onset"). Everything else it skips — that's the
+  // state worth shouting about.
+  const willFire = keySource === "own" || keySource === "trial";
 
   return (
     <Card>
@@ -71,9 +72,22 @@ export function ScheduleControl({
                 hand, and build a trend over time.
               </p>
             )}
-            {scheduled && willFire && (
+            {scheduled && keySource === "own" && (
               <p className="text-xs text-ink-faint">
                 Runs {schedule} around 8:00 UTC on your own key.
+              </p>
+            )}
+            {scheduled && keySource === "trial" && (
+              <p className="text-xs text-ink-faint">
+                Runs {schedule} around 8:00 UTC on complimentary tokens while
+                they last. Add your {providerLabel} key in{" "}
+                <Link
+                  href="/dashboard/settings"
+                  className="text-terracotta-dark hover:text-terracotta"
+                >
+                  Settings
+                </Link>{" "}
+                to keep it going after that.
               </p>
             )}
             {/* The schedule is set but the cron will skip it. Without this line
@@ -81,15 +95,19 @@ export function ScheduleControl({
                 in its own JSON response and a span attribute. */}
             {scheduled && !willFire && (
               <p className="text-xs text-terracotta">
-                Scheduled runs use your own key, so this {SCHEDULE_LABELS[schedule].toLowerCase()}{" "}
-                schedule won&apos;t run yet. Add your {providerLabel} key in{" "}
+                This {SCHEDULE_LABELS[schedule].toLowerCase()} schedule
+                won&apos;t run
+                {keySource === "exhausted"
+                  ? ": your free runs are used up. "
+                  : ": no usable key for your answer engine. "}
+                Add your {providerLabel} key in{" "}
                 <Link
                   href="/dashboard/settings"
                   className="text-terracotta-dark underline hover:text-terracotta"
                 >
                   Settings
                 </Link>{" "}
-                to turn it on.
+                to turn it {keySource === "exhausted" ? "back on" : "on"}.
               </p>
             )}
             {error && <p className="text-xs text-terracotta">{error}</p>}

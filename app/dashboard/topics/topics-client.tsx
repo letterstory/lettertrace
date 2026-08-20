@@ -13,7 +13,7 @@ import {
   Select,
   Spinner,
 } from "@/components/ui";
-import { Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { NeedsKeyNotice } from "@/components/dashboard/needs-key-notice";
 import { article } from "@/lib/utils";
 
@@ -107,6 +107,9 @@ export function TopicsClient({ topics, prompts, hasKey, providerLabel }: Props) 
         <NeedsKeyNotice providerLabel={providerLabel} action="auto-generate variations" />
       )}
 
+      {/* Re-analyze */}
+      <ReanalyzeSection hasKey={hasKey} providerLabel={providerLabel} />
+
       {/* Topics list */}
       {topics.length === 0 ? (
         <p className="px-1 text-sm text-ink-faint">
@@ -126,6 +129,156 @@ export function TopicsClient({ topics, prompts, hasKey, providerLabel }: Props) 
         </div>
       )}
     </div>
+  );
+}
+
+interface TopicSuggestion {
+  name: string;
+  prompts: string[];
+}
+
+/** Re-run the onboarding site analysis on demand. Suggestions are drafts: each
+ *  is accepted (one request creates the topic + its questions) or ignored, so
+ *  a bad model day costs nothing. */
+function ReanalyzeSection({
+  hasKey,
+  providerLabel,
+}: {
+  hasKey: boolean;
+  providerLabel: string;
+}) {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<TopicSuggestion[] | null>(null);
+  const [scraped, setScraped] = useState(true);
+  const [addingName, setAddingName] = useState<string | null>(null);
+
+  async function reanalyze() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/project/reanalyze", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? "Could not re-analyze the site.");
+        return;
+      }
+      setSuggestions(body?.suggestions ?? []);
+      setScraped(Boolean(body?.scraped));
+    } catch {
+      setError("Something went wrong. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function accept(s: TopicSuggestion) {
+    setAddingName(s.name);
+    setError(null);
+    try {
+      const res = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: s.name, prompts: s.prompts, source: "ai" }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? "Could not add the topic.");
+        return;
+      }
+      setSuggestions((prev) => (prev ?? []).filter((x) => x.name !== s.name));
+      router.refresh();
+    } catch {
+      setError("Something went wrong. Try again.");
+    } finally {
+      setAddingName(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-ink">Re-analyze your site</h3>
+            <p className="mt-0.5 text-sm text-ink-soft">
+              Re-read your site and workspace description, and draft topics you
+              aren&apos;t tracking yet. Nothing is added until you accept it.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            onClick={reanalyze}
+            disabled={!hasKey || loading}
+            title={!hasKey ? `Add ${article(providerLabel)} ${providerLabel} key in Settings to enable` : undefined}
+          >
+            {loading ? <Spinner /> : <RefreshCw className="h-4 w-4" />}
+            {loading ? "Analyzing…" : "Re-analyze"}
+          </Button>
+        </div>
+
+        {error && <p className="text-sm text-terracotta-dark">{error}</p>}
+
+        {suggestions && suggestions.length === 0 && !error && (
+          <p className="text-sm text-ink-faint">
+            Nothing new to suggest — your current topics already cover what the
+            analysis found.
+          </p>
+        )}
+
+        {suggestions && suggestions.length > 0 && (
+          <div className="space-y-3">
+            {!scraped && (
+              <p className="text-xs text-ink-faint">
+                Your site couldn&apos;t be read, so these drafts come from your
+                workspace description alone.
+              </p>
+            )}
+            {suggestions.map((s) => (
+              <div
+                key={s.name}
+                className="rounded border border-ink/10 bg-paper-shade/40 p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink">{s.name}</p>
+                    <ul className="mt-1.5 space-y-1">
+                      {s.prompts.map((p) => (
+                        <li key={p} className="text-sm text-ink-soft">
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => accept(s)}
+                      disabled={addingName !== null}
+                    >
+                      {addingName === s.name ? <Spinner /> : <Plus className="h-4 w-4" />}
+                      Add topic
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setSuggestions((prev) => (prev ?? []).filter((x) => x.name !== s.name))
+                      }
+                      disabled={addingName !== null}
+                      aria-label={`Dismiss suggestion ${s.name}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -152,7 +305,36 @@ function TopicCard({
 
   const [deletingTopic, setDeletingTopic] = useState(false);
 
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState(topic.description ?? "");
+  const [savingDesc, setSavingDesc] = useState(false);
+  const [descError, setDescError] = useState<string | null>(null);
+
   const activeCount = prompts.filter((p) => p.is_active).length;
+
+  async function handleSaveDescription(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingDesc(true);
+    setDescError(null);
+    try {
+      const res = await fetch(`/api/topics/${topic.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: descDraft.trim() || null }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDescError(body?.error ?? "Could not save the context.");
+        return;
+      }
+      setEditingDesc(false);
+      router.refresh();
+    } catch {
+      setDescError("Something went wrong. Try again.");
+    } finally {
+      setSavingDesc(false);
+    }
+  }
 
   async function handleGenerate() {
     setGenerating(true);
@@ -218,11 +400,53 @@ function TopicCard({
       <CardBody className="space-y-5">
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="text-lg font-semibold text-ink">{topic.name}</h3>
-            {topic.description && (
-              <p className="mt-1 text-sm text-ink-soft">{topic.description}</p>
+            {/* The description steers question generation, so it's editable in
+                place — it used to be settable only at creation, which is the
+                one moment the user least knows what to write in it. */}
+            {editingDesc ? (
+              <form onSubmit={handleSaveDescription} className="mt-1.5 flex max-w-xl items-center gap-2">
+                <Input
+                  value={descDraft}
+                  onChange={(e) => setDescDraft(e.target.value)}
+                  placeholder="Context to steer the questions, e.g. who buys this and why"
+                  maxLength={300}
+                  disabled={savingDesc}
+                  autoFocus
+                  aria-label={`Context for topic ${topic.name}`}
+                />
+                <Button type="submit" size="sm" disabled={savingDesc}>
+                  {savingDesc ? <Spinner /> : <Check className="h-4 w-4" />}
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={savingDesc}
+                  onClick={() => {
+                    setEditingDesc(false);
+                    setDescDraft(topic.description ?? "");
+                    setDescError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditingDesc(true)}
+                className="group mt-1 flex items-center gap-1.5 text-left"
+              >
+                <span className={topic.description ? "text-sm text-ink-soft" : "text-sm text-ink-faint"}>
+                  {topic.description ?? "Add context to steer the generated questions"}
+                </span>
+                <Pencil className="h-3.5 w-3.5 shrink-0 text-ink-faint opacity-0 transition group-hover:opacity-100" />
+              </button>
             )}
+            {descError && <p className="mt-1 text-sm text-terracotta-dark">{descError}</p>}
             <p className="mt-2 text-xs text-ink-faint">
               {prompts.length} {prompts.length === 1 ? "prompt" : "prompts"}
               {prompts.length > 0 && ` · ${activeCount} active`}

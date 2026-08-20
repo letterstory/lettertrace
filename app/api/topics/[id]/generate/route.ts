@@ -78,6 +78,9 @@ export async function POST(
       apiKey: key.apiKey!,
       topicName: topic.name,
       topicDescription: topic.description,
+      // The Settings blurb has promised this field "helps generate better
+      // monitoring prompts" since before it was true. Now it's true.
+      brandDescription: project.description,
       count,
     });
 

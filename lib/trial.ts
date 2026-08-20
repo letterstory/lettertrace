@@ -42,7 +42,10 @@ import { formatUsd, trialSpendLimitMicros } from "@/lib/pricing";
 // spend, but the gate is runs.
 // ------------------------------------------------------------------
 
-const DEFAULT_TRIAL_RUN_LIMIT = 5;
+// Raised 5 → 15 in the Aug 2026 visibility overhaul (the "2–4× the cap" call):
+// the trial now funds multi-engine runs and the start of a monitoring cadence,
+// so the old allowance was ~1.5 clicks of the new first-run experience.
+const DEFAULT_TRIAL_RUN_LIMIT = 15;
 
 /** The configurable per-user free-run allowance (env: TRIAL_RUN_LIMIT). */
 export function trialRunLimit(): number {
@@ -122,6 +125,18 @@ function trialCredFor(
  *  one per-provider direct key. */
 export function trialEnabled(): boolean {
   return !!trialConcentrateKey() || PROVIDER_IDS.some((p) => trialKeyFor(p));
+}
+
+/**
+ * The engines the trial can fund, for a project's grounding setting. This is
+ * what "run on every engine" means for an account that hasn't brought a key:
+ * the answer depends only on the operator's env (which trial keys exist, what
+ * the Concentrate key can serve) — allowance is checked separately, per run.
+ */
+export function trialCoveredProviders(webSearch: boolean): Provider[] {
+  return PROVIDER_IDS.filter(
+    (p) => trialCredFor(p, trialModelFor(p, defaultModelFor(p)), webSearch) !== null,
+  );
 }
 
 /** How many free trial runs this user has already consumed. */
@@ -638,4 +653,57 @@ export async function consumeTrialRun(supabase: SupabaseClient): Promise<boolean
   });
   if (error) return false;
   return data === true;
+}
+
+// ---------------------------------------------------------------------------
+// Service-role variants, for the scheduler.
+//
+// The self-scoped RPCs above key on auth.uid(), which a service-role request
+// doesn't have — that gap is why scheduled runs used to be own-key only. The
+// cron runs trial-funded projects now ("cadence from the onset"), so it needs
+// the same atomic gate and meters, addressed by user id. The *_for functions
+// are execute-restricted to service_role in the schema; called with any other
+// client they simply error, and every helper below degrades to the safe
+// answer ("no run granted" / "nothing recorded") rather than throwing — so a
+// deployment whose database hasn't applied the migration behaves exactly as
+// before: trial projects are skipped, not crashed.
+// ---------------------------------------------------------------------------
+
+/** consumeTrialRun for the scheduler: same atomic check-and-take, by user id. */
+export async function consumeTrialRunFor(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc("consume_trial_run_for", {
+    uid: userId,
+    max_runs: trialRunLimit(),
+  });
+  if (error) return false;
+  return data === true;
+}
+
+/** recordTrialUsage for the scheduler. */
+export async function recordTrialUsageFor(
+  supabase: SupabaseClient,
+  userId: string,
+  tokens: number,
+): Promise<void> {
+  if (!tokens || tokens <= 0) return;
+  await supabase.rpc("increment_trial_tokens_for", {
+    uid: userId,
+    amount: Math.round(tokens),
+  });
+}
+
+/** recordTrialSpend for the scheduler. */
+export async function recordTrialSpendFor(
+  supabase: SupabaseClient,
+  userId: string,
+  micros: number,
+): Promise<void> {
+  if (!micros || micros <= 0) return;
+  await supabase.rpc("increment_trial_spend_for", {
+    uid: userId,
+    amount: Math.round(micros),
+  });
 }

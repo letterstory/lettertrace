@@ -1519,11 +1519,19 @@ export async function generateVariations(
   opts: BaseCall & {
     topicName: string;
     topicDescription?: string | null;
+    /** What the monitored company does (projects.description). Context only —
+     *  the questions must still never name the brand; this steers them toward
+     *  the buyers and use cases the company actually serves. */
+    brandDescription?: string | null;
     count: number;
   },
 ): Promise<{ variations: string[]; tokens: number }> {
   const user = `Topic: ${opts.topicName}${
     opts.topicDescription ? `\nContext: ${opts.topicDescription}` : ""
+  }${
+    opts.brandDescription
+      ? `\nThe company being monitored (context only — NEVER name it in the questions): ${opts.brandDescription}`
+      : ""
   }
 
 Generate ${opts.count} distinct questions a person might ask an AI assistant related to this topic. Return a JSON array of ${opts.count} strings.`;
@@ -1686,15 +1694,31 @@ export interface SiteSuggestion {
 
 /** From scraped site text, infer what the company does and suggest topics + prompts. */
 export async function suggestFromSite(
-  opts: BaseCall & { brandName: string; siteText: string },
+  opts: BaseCall & {
+    brandName: string;
+    siteText: string;
+    /** Operator-provided context (projects.description). Onboarding has only
+     *  the site; re-analysis has both, and this is often the better signal —
+     *  it's what the user SAID the company does, not what a marketing page
+     *  implies. Also the only signal when the site can't be read. */
+    description?: string | null;
+    /** Topics already tracked, so re-analysis proposes what's missing instead
+     *  of re-deriving the same three topics every time. */
+    existingTopics?: string[];
+  },
 ): Promise<SiteSuggestion & { tokens: number }> {
+  const siteText = opts.siteText.slice(0, 6000);
   const user = `Company: ${opts.brandName}
-
+${opts.description ? `\nWhat the company says it does: ${opts.description}\n` : ""}
 Website text:
 """
-${opts.siteText.slice(0, 6000)}
+${siteText || "(the site could not be read — work from the company name and description above)"}
 """
-
+${
+  opts.existingTopics?.length
+    ? `\nTopics already being monitored (do NOT repeat these or close variants of them — propose what's missing):\n${opts.existingTopics.map((t) => `- ${t}`).join("\n")}\n`
+    : ""
+}
 Return a JSON object of this shape:
 {
   "description": "one concise sentence describing what the company does",

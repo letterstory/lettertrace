@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { executeRun, sweepAbandonedRuns } from "@/lib/engine";
-import { resolveRunKey } from "@/lib/trial";
+import {
+  resolveRunKey,
+  consumeTrialRunFor,
+  recordTrialUsageFor,
+  recordTrialSpendFor,
+  runBudgetMicros,
+} from "@/lib/trial";
 import { withSpan } from "@/lib/otel";
 import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
@@ -83,17 +89,29 @@ async function sweepAndRun(span: Span) {
       // with "no key" as the only trace. The resolver also knows whether the
       // project's grounding survives the route.
       //
-      // Scheduled runs stay strictly self-funded: `source` is 'own' for both a
-      // direct key and a router key, and anything else — including a trial with
-      // free runs left — is skipped, so an unattended schedule can never spend
-      // the operator's allowance.
+      // Scheduled runs execute on the user's own key, or on the trial while
+      // its allowance lasts — "cadence from the onset": onboarding starts
+      // every project on a daily schedule, and the trial funds the beginning.
+      // The same atomic gate as manual runs applies, via the service-scoped
+      // RPC (auth.uid() doesn't exist here); when the allowance is out — or
+      // the RPC isn't applied to this database yet — the consume returns
+      // false and the project is skipped, exactly as it always was.
       const key = await resolveRunKey(supabase, project.user_id, project);
-      if (key.source !== "own" || !key.apiKey) {
+      const usable =
+        (key.source === "own" || key.source === "trial") && Boolean(key.apiKey);
+      if (!usable) {
         results.push({
           projectId: project.id,
           status: "skipped",
           reason: key.source === "own" ? "no key" : key.source,
         });
+        continue;
+      }
+      if (
+        key.source === "trial" &&
+        !(await consumeTrialRunFor(supabase, project.user_id))
+      ) {
+        results.push({ projectId: project.id, status: "skipped", reason: "exhausted" });
         continue;
       }
 
@@ -102,8 +120,9 @@ async function sweepAndRun(span: Span) {
         project,
         provider: key.provider,
         model: key.model,
-        apiKey: key.apiKey,
+        apiKey: key.apiKey!,
         route: key.route,
+        budgetMicros: runBudgetMicros(key),
         context: {
           channel: "cron",
           actorType: "cron",
@@ -111,6 +130,10 @@ async function sweepAndRun(span: Span) {
           actorLabel: "Scheduler",
         },
       });
+      if (key.source === "trial") {
+        await recordTrialUsageFor(supabase, project.user_id, result.tokensUsed);
+        await recordTrialSpendFor(supabase, project.user_id, result.spendMicros);
+      }
       results.push({
         projectId: project.id,
         status: result.status,

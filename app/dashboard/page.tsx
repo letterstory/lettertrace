@@ -17,7 +17,12 @@ import {
   SectionHeading,
   StatCard,
 } from "@/components/ui";
-import { ShareBars, SentimentDonut, TrendChart } from "@/components/dashboard/charts-lazy";
+import {
+  ShareBars,
+  SentimentDonut,
+  TrendChart,
+  EngineTrendChart,
+} from "@/components/dashboard/charts-lazy";
 import { MeasurementNote } from "@/components/dashboard/measurement-note";
 import { Onboarding } from "./onboarding";
 import { createClient } from "@/lib/supabase/server";
@@ -30,9 +35,9 @@ import {
   computeTopicStats,
   type EntityStat,
 } from "@/lib/metrics";
-import { modelLabel } from "@/lib/models";
+import { modelLabel, PROVIDERS } from "@/lib/models";
 import { formatDate, pct, timeAgo } from "@/lib/utils";
-import type { Mention, Run, Source, Topic } from "@/lib/types";
+import type { Mention, Provider, Run, Source, Topic } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -222,18 +227,35 @@ export default async function DashboardPage() {
   // --------------------------------------------------------------
   const latestRun = runs[0];
 
-  // One batched fetch covers the latest run AND the 10-run trend: all mentions
+  // Runs can span answer engines now. The latest run per engine feeds the
+  // by-engine card and the overall rollup; the trend goes per-engine (and
+  // deeper) the moment a second engine appears, because ten mixed runs is only
+  // ~three points per line.
+  const engineLatest = new Map<Provider, Run>();
+  for (const run of runs) {
+    if (!engineLatest.has(run.provider as Provider)) {
+      engineLatest.set(run.provider as Provider, run);
+    }
+  }
+  const multiEngine = engineLatest.size > 1;
+
+  // One batched fetch covers the latest run AND the trend: all mentions
   // for those runs in a single IN query, grouped in memory, replacing ~2
   // queries per historical run. Per-run answer counts come straight from
   // runs.completed_count (set by the engine), so no response rows are fetched
   // for counting — responses are only read for the latest run's topic split.
-  const trendRuns = runs.slice(0, 10);
+  const trendRuns = runs.slice(0, multiEngine ? 20 : 10);
   const trendIds = trendRuns.map((r) => r.id);
+  // Each engine's latest run may sit outside the trend window; its mentions
+  // are still needed for the by-engine card.
+  const mentionIds = Array.from(
+    new Set([...trendIds, ...Array.from(engineLatest.values(), (r) => r.id)]),
+  );
 
   const [mentionsResult, latestResponsesResult, topicsList, latestSourcesResult] = await Promise.all([
-    // NOTE: capped at 1000 rows by PostgREST; fine for 10 runs of mention rows
+    // NOTE: capped at 1000 rows by PostgREST; fine for ~20 runs of mention rows
     // (only detected entities produce rows). Revisit if trend depth grows.
-    supabase.from("mentions").select("*").in("run_id", trendIds),
+    supabase.from("mentions").select("*").in("run_id", mentionIds),
     supabase.from("responses").select("topic_id").eq("run_id", latestRun.id),
     supabase.from("topics").select("*").eq("project_id", project.id),
     supabase
@@ -273,7 +295,10 @@ export default async function DashboardPage() {
     totalResponses,
   );
 
-  // Trend across the last 10 completed runs (chronological).
+  // Trend across recent completed runs (chronological). Single-engine keeps
+  // the visibility + share pair; once runs span engines each run becomes a
+  // point on its own engine's visibility line — a blended line would zigzag
+  // between numbers that aren't comparable.
   const trendData = trendRuns
     .slice()
     .reverse()
@@ -288,6 +313,47 @@ export default async function DashboardPage() {
         share: Math.round(s.brandShareOfVoice * 100),
       };
     });
+  const engineSeries = Array.from(engineLatest.keys(), (p) => ({
+    key: p,
+    label: PROVIDERS[p]?.label ?? p,
+  }));
+  const engineTrendData = trendRuns
+    .slice()
+    .reverse()
+    .map((run) => {
+      const s = computeRunSummary(
+        mentionsByRun.get(run.id) ?? [],
+        responseCountByRun.get(run.id) ?? 0,
+      );
+      return {
+        date: formatDate(run.created_at),
+        [run.provider]: Math.round(s.brandMentionRate * 100),
+      };
+    });
+
+  // Latest run per engine → the by-engine card and the overall rollup.
+  // Rollup per the design doc: a simple mean across engines, each counted
+  // equally ("average across N engines" — explainable beats clever), with an
+  // engine dropping out of the rollup once its latest run is older than 30
+  // days. Stale engines stay visible in the card, tagged with their age.
+  const STALE_MS = 30 * 24 * 60 * 60 * 1000;
+  const engineRows = Array.from(engineLatest.entries(), ([provider, run]) => {
+    const s = computeRunSummary(mentionsByRun.get(run.id) ?? [], run.completed_count);
+    return {
+      provider,
+      label: PROVIDERS[provider]?.label ?? provider,
+      model: modelLabel(run.provider, run.model),
+      visibility: s.brandMentionRate,
+      share: s.brandShareOfVoice,
+      ranAt: run.created_at,
+      stale: Date.now() - new Date(run.created_at).getTime() > STALE_MS,
+    };
+  }).sort((a, b) => b.visibility - a.visibility);
+  const rollupRows = engineRows.filter((r) => !r.stale);
+  const overallVisibility =
+    rollupRows.length > 0
+      ? rollupRows.reduce((sum, r) => sum + r.visibility, 0) / rollupRows.length
+      : null;
 
   // Share-of-voice leaderboard (brand + competitors, desc by share).
   const shareEntities: EntityStat[] = [...stats].sort(
@@ -382,6 +448,49 @@ export default async function DashboardPage() {
         competitorsTracked={competitors}
       />
 
+      {/* Visibility by engine + the overall rollup. Only once a second engine
+          has data — for a single engine the headline stats already say it. */}
+      {multiEngine && (
+        <Card>
+          <CardBody>
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-ink">Overall AI visibility</h3>
+                <p className="mt-0.5 text-sm text-ink-soft">
+                  {overallVisibility !== null
+                    ? `Average across ${rollupRows.length} engine${rollupRows.length === 1 ? "" : "s"}, latest run each.`
+                    : "No engine has run in the last 30 days."}
+                </p>
+              </div>
+              {overallVisibility !== null && (
+                <span className="text-3xl font-semibold tracking-tight text-ink">
+                  {pct(overallVisibility)}
+                </span>
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {engineRows.map((row) => (
+                <div key={row.provider} className="rounded border border-ink/10 p-3.5">
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+                    {row.label}
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-ink">{pct(row.visibility)}</p>
+                  <p className="mt-1 text-xs text-ink-soft">
+                    share of voice {pct(row.share)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-ink-faint">
+                    {row.model} · {timeAgo(row.ranAt)}
+                    {/* Stale engines stay listed but leave the rollup — an
+                        engine last measured a month ago isn't "overall" truth. */}
+                    {row.stale && " · not in average"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {/* Trend + sentiment donut */}
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -390,11 +499,17 @@ export default async function DashboardPage() {
               <div>
                 <h3 className="text-lg font-semibold text-ink">Visibility over time</h3>
                 <p className="mt-0.5 text-sm text-ink-soft">
-                  Brand visibility and share of voice across recent runs.
+                  {multiEngine
+                    ? "Brand visibility across recent runs, one line per answer engine."
+                    : "Brand visibility and share of voice across recent runs."}
                 </p>
               </div>
             </div>
-            <TrendChart data={trendData} />
+            {multiEngine ? (
+              <EngineTrendChart data={engineTrendData} series={engineSeries} />
+            ) : (
+              <TrendChart data={trendData} />
+            )}
           </CardBody>
         </Card>
 
