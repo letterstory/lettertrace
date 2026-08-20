@@ -22,8 +22,20 @@ vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => String(e) }));
 vi.mock("@/lib/trial", () => ({
   pickDefaultProvider: () => "anthropic",
   resolveRunKey: vi.fn(),
+  resolveRunKeyFor: vi.fn(async () => ({
+    source: "none",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    requested: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  })),
   recordTrialUsage: vi.fn(),
+  recordTrialSpend: vi.fn(),
   consumeTrialRun: vi.fn(),
+  runBudgetMicros: () => null,
+  // No trial in these tests: zero usage, but zero covered engines too.
+  getTrialUsage: vi.fn(async () => ({ runs: 0, spendMicros: 0 })),
+  trialRunLimit: () => 15,
+  trialCoveredProviders: () => [],
 }));
 vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
 

@@ -127,6 +127,57 @@ begin
 end;
 $$;
 
+-- Scheduler variants of the three trial meters, addressed by user id instead
+-- of auth.uid(). The cron runs trial-funded scheduled projects ("cadence from
+-- the onset"), and a service-role request has no auth.uid() to self-scope on.
+-- Execute is revoked from every client-facing role: only service_role may call
+-- these, so no user can ever touch another user's allowance through them.
+-- Safe to re-run.
+create or replace function public.consume_trial_run_for(uid uuid, max_runs integer)
+returns boolean
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+    set trial_runs_used = trial_runs_used + 1
+    where id = uid
+      and trial_runs_used < greatest(max_runs, 0);
+  return found;
+end;
+$$;
+revoke execute on function public.consume_trial_run_for(uuid, integer)
+  from public, anon, authenticated;
+grant execute on function public.consume_trial_run_for(uuid, integer) to service_role;
+
+create or replace function public.increment_trial_tokens_for(uid uuid, amount bigint)
+returns bigint
+language sql
+security definer set search_path = public
+as $$
+  update public.profiles
+    set trial_tokens_used = trial_tokens_used + greatest(amount, 0)
+    where id = uid
+    returning trial_tokens_used;
+$$;
+revoke execute on function public.increment_trial_tokens_for(uuid, bigint)
+  from public, anon, authenticated;
+grant execute on function public.increment_trial_tokens_for(uuid, bigint) to service_role;
+
+create or replace function public.increment_trial_spend_for(uid uuid, amount bigint)
+returns bigint
+language sql
+security definer set search_path = public
+as $$
+  update public.profiles
+    set trial_spend_micros = trial_spend_micros + greatest(amount, 0)
+    where id = uid
+    returning trial_spend_micros;
+$$;
+revoke execute on function public.increment_trial_spend_for(uuid, bigint)
+  from public, anon, authenticated;
+grant execute on function public.increment_trial_spend_for(uuid, bigint) to service_role;
+
 -- ---------- provider_keys (BYOK, encrypted) -------------------------
 create table if not exists public.provider_keys (
   id uuid primary key default gen_random_uuid(),

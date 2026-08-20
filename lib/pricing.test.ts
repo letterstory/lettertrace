@@ -105,8 +105,9 @@ describe("spend", () => {
 });
 
 describe("the ceiling", () => {
-  it("defaults to $5", () => {
-    expect(trialSpendLimitMicros()).toBe(5_000_000);
+  it("defaults to $15", () => {
+    // Raised from $5 in the visibility overhaul, alongside the run allowance.
+    expect(trialSpendLimitMicros()).toBe(15_000_000);
   });
 
   it("is configurable", () => {
@@ -116,7 +117,7 @@ describe("the ceiling", () => {
 
   it("treats zero as a real setting, not as unset", () => {
     // "0" is how an operator turns the free tier off entirely. Reading it as
-    // missing would hand out the $5 default to exactly the deployment that
+    // missing would hand out the $15 default to exactly the deployment that
     // asked for none.
     process.env.TRIAL_SPEND_LIMIT_USD = "0";
     expect(trialSpendLimitMicros()).toBe(0);
@@ -124,7 +125,7 @@ describe("the ceiling", () => {
 
   it("falls back to the default on a malformed value", () => {
     process.env.TRIAL_SPEND_LIMIT_USD = "five dollars";
-    expect(trialSpendLimitMicros()).toBe(5_000_000);
+    expect(trialSpendLimitMicros()).toBe(15_000_000);
   });
 
   it("formats as money for the refusal message", () => {

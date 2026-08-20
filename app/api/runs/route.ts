@@ -3,9 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
-import { PROVIDERS } from "@/lib/models";
+import { PROVIDERS, isProvider, resolveEngine } from "@/lib/models";
 import {
   resolveRunKey,
+  resolveRunKeyFor,
   consumeTrialRun,
   recordTrialUsage,
   recordTrialSpend,
@@ -17,7 +18,10 @@ export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 // POST /api/runs, execute a monitoring run now for the signed-in user's project.
-export async function POST() {
+// Optional body { provider } runs this one run on another engine (that
+// provider's default model) without touching the project — the loop behind
+// "Run on all engines". No body preserves the original behavior exactly.
+export async function POST(request: Request) {
   const supabase = createClient();
 
   const {
@@ -32,8 +36,40 @@ export async function POST() {
     return NextResponse.json({ error: "Create a project first" }, { status: 400 });
   }
 
-  const providerLabel = PROVIDERS[project.default_provider].label;
-  const key = await resolveRunKey(supabase, user.id, project);
+  let overrideProvider: string | null = null;
+  try {
+    const body = (await request.json()) as { provider?: unknown } | null;
+    if (typeof body?.provider === "string" && body.provider.length > 0) {
+      overrideProvider = body.provider;
+    }
+  } catch {
+    // No/invalid body: run the project default, as this endpoint always has.
+  }
+
+  if (overrideProvider !== null && !isProvider(overrideProvider)) {
+    return NextResponse.json(
+      { error: `Unknown provider "${overrideProvider}". Use one of: ${Object.keys(PROVIDERS).join(", ")}.` },
+      { status: 400 },
+    );
+  }
+  // Same validate-then-resolve order as the v1 trigger: an override naming an
+  // engine the catalog doesn't offer must fail before a run row can exist.
+  const engine = overrideProvider
+    ? resolveEngine(overrideProvider, undefined)
+    : resolveEngine(project.default_provider, project.default_model);
+  if (!engine.ok) {
+    return NextResponse.json({ error: engine.message }, { status: 400 });
+  }
+  const providerLabel = PROVIDERS[engine.provider].label;
+  // An override resolves like any run for that engine, trial included: the
+  // trial funds multi-engine runs (each one atomically consumes a free run
+  // below, so a 3-engine sweep costs 3 of the allowance — that's the deal the
+  // raised cap exists to cover).
+  const key = overrideProvider
+    ? await resolveRunKeyFor(supabase, user.id, engine.provider, engine.model, {
+        webSearch: project.use_web_search,
+      })
+    : await resolveRunKey(supabase, user.id, project);
 
   // The selected engine has no key. Refusing beats running: the alternative is
   // storing another assistant's answers under this project's trend line.

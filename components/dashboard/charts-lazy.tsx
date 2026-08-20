@@ -15,6 +15,14 @@ export const TrendChart = dynamic(() => import("./charts").then((m) => m.TrendCh
   loading: () => <ChartSkeleton height={280} />,
 });
 
+export const EngineTrendChart = dynamic(
+  () => import("./charts").then((m) => m.EngineTrendChart),
+  {
+    ssr: false,
+    loading: () => <ChartSkeleton height={280} />,
+  },
+);
+
 export const ShareBars = dynamic(() => import("./charts").then((m) => m.ShareBars), {
   ssr: false,
   loading: () => <ChartSkeleton height={180} />,
