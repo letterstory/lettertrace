@@ -13,10 +13,19 @@ takes, and for the same reason: this repository is public and ships a prebuilt
 image, so a self-hosted install reports to nobody until its operator says so.
 The consequence for reading this store is worth stating plainly: **an absence
 of spans is only evidence of an outage on a deployment where the endpoint is
-known to be set.** On this org's Vercel Production deployment it is **not set
-yet** — the four variables under [Configuration](#configuration) are the last
-step of shipping this, and until someone adds them in Vercel, merging changes
-nothing observable. Delete this paragraph once they are set.
+known to be set.**
+
+On this org's Vercel **Production** deployment it *is* set, and has been since
+**15:43 UTC on 2026-08-19** — traces, metrics and logs have flowed continuously
+since. **Preview is not configured**, so PR builds still report nothing; that is
+a deliberate gap, not a fault, but it does mean a change cannot be observed
+until it reaches Production.
+
+One property of this deployment shapes how you read the stream, and it is not a
+bug: the app is serverless, so it emits only while a function instance is alive.
+Idle stretches produce real gaps — over the first 18 hours of export, twenty
+gaps longer than 5 minutes, the longest 12.5 minutes. A short silence is the app
+being idle, not the app being down.
 
 ## What monitoring also exists
 
@@ -91,6 +100,21 @@ underneath them, and they are the ones that describe the work:
 `run.route` / `llm.route` is the router id (`concentrate`) or the literal
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
+
+Two things the live stream makes clear that the design didn't:
+
+- **The outbound `fetch` spans are named with the full URL**, query string
+  included — `@vercel/otel`'s default. So a Supabase PostgREST call arrives as
+  `fetch GET https://<ref>.supabase.co/rest/v1/api_keys?select=id,user_id&key_hash=eq.<sha256>`.
+  Two consequences. `name` is effectively unique per call, so never group or
+  chart outbound traffic by it — group by host. And row ids, the Supabase
+  project ref and API-key *hashes* ride along in span names; none of that is
+  content under the rule below, but it is more identifier than the hand-placed
+  spans carry, and it is worth a deliberate decision rather than a default.
+- **A provider 429 does not fail the fetch span.** The rate-limited call still
+  records span status Unset at the HTTP layer; only `llm.query` sets status
+  Error. So engine health is an `llm.query` question — a dependency error rate
+  computed from client spans reads zero straight through a rate-limit storm.
 
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
