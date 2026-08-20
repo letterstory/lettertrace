@@ -373,6 +373,17 @@ create table if not exists public.prompts (
 alter table public.prompts
   add column if not exists target_url text;
 
+-- The specificity ladder: how broad the question is. Where on the ladder a
+-- brand's mentions start is its measured authority (the "visibility
+-- frontier"). Nullable: prompts from before the ladder, and manual prompts
+-- the user hasn't classified, stay untagged. Safe to re-run.
+alter table public.prompts
+  add column if not exists specificity text;
+alter table public.prompts drop constraint if exists prompts_specificity_check;
+alter table public.prompts
+  add constraint prompts_specificity_check
+  check (specificity is null or specificity in ('general', 'mid', 'niche'));
+
 -- ---------- runs -----------------------------------------------------
 create table if not exists public.runs (
   id uuid primary key default gen_random_uuid(),

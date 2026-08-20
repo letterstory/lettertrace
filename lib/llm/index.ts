@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import type { Provider, RouteInfo, RouterId, Sentiment } from "@/lib/types";
+import type { Provider, RouteInfo, RouterId, Sentiment, Specificity } from "@/lib/types";
 import {
   AI_OVERVIEWS_BACKING_MODEL,
   GOOGLE_AI_OVERVIEWS_MODEL,
@@ -1512,7 +1512,14 @@ Rules:
 - Keep the remaining questions in a buyer's own words ("What's the best X for Y?", "Who are the main players in X?") so the set reflects real usage, but keep them the minority.
 - Do NOT name any specific brand in the questions unless the brand is part of the topic itself.
 - Vary buyer intent and seniority, not just the wording.
-- Return ONLY a JSON array of strings. No commentary.`;
+- Spread the questions across a specificity ladder and label each one:
+  "general" = the broad category question anyone might ask ("List the top 5 payroll companies by name.")
+  "mid" = qualified by a segment or use case ("Which providers handle payroll for a 20-person startup? Just company names.")
+  "niche" = a specific buyer situation, narrow enough that smaller or newer companies can realistically be named ("Name payroll vendors that support contractor payouts to Brazil for a seed-stage startup.")
+  Aim for a roughly even mix of the three tiers. The named-companies rule applies at every tier.
+- Return ONLY a JSON array of objects shaped {"question": string, "specificity": "general" | "mid" | "niche"}. No commentary.`;
+
+const SPECIFICITY_VALUES = new Set(["general", "mid", "niche"]);
 
 /** Generate natural prompt variations for a topic. */
 export async function generateVariations(
@@ -1525,7 +1532,10 @@ export async function generateVariations(
     brandDescription?: string | null;
     count: number;
   },
-): Promise<{ variations: string[]; tokens: number }> {
+): Promise<{
+  variations: { text: string; specificity: Specificity | null }[];
+  tokens: number;
+}> {
   const user = `Topic: ${opts.topicName}${
     opts.topicDescription ? `\nContext: ${opts.topicDescription}` : ""
   }${
@@ -1544,8 +1554,9 @@ Generate ${opts.count} distinct questions a person might ask an AI assistant rel
     shape === "anthropic"
       ? VARIATION_SYSTEM
       : shape === "openai-chat" || shape === "openai-responses"
-        ? VARIATION_SYSTEM + "\nReturn a JSON object shaped { \"questions\": string[] }."
-        : VARIATION_SYSTEM + "\nReturn a JSON array of strings.";
+        ? VARIATION_SYSTEM +
+          '\nReturn a JSON object shaped { "questions": [{ "question": string, "specificity": string }] }.'
+        : VARIATION_SYSTEM + "\nReturn a JSON array of the objects described above.";
 
   const res = await utilityChat(opts, opts.model, system, user, UTILITY_MAX_TOKENS, true);
 
@@ -1554,9 +1565,28 @@ Generate ${opts.count} distinct questions a person might ask an AI assistant rel
     parsed = (parsed as { questions?: unknown }).questions ?? [];
   }
   const arr = Array.isArray(parsed) ? parsed : [];
+  // Tolerate the pre-ladder shape (bare strings): a model that ignores the
+  // labeling instruction still produces usable questions — they just land
+  // untagged, exactly like manual prompts.
   const variations = arr
-    .map((q) => (typeof q === "string" ? q.trim() : ""))
-    .filter((q) => q.length > 0)
+    .map((q): { text: string; specificity: Specificity | null } | null => {
+      if (typeof q === "string") {
+        const text = q.trim();
+        return text ? { text, specificity: null } : null;
+      }
+      if (q && typeof q === "object") {
+        const o = q as { question?: unknown; specificity?: unknown };
+        const text = typeof o.question === "string" ? o.question.trim() : "";
+        if (!text) return null;
+        const tier =
+          typeof o.specificity === "string" && SPECIFICITY_VALUES.has(o.specificity)
+            ? (o.specificity as Specificity)
+            : null;
+        return { text, specificity: tier };
+      }
+      return null;
+    })
+    .filter((v): v is { text: string; specificity: Specificity | null } => v !== null)
     .slice(0, opts.count);
   return { variations, tokens: res.tokens };
 }

@@ -579,10 +579,21 @@ function PromptRow({ prompt }: { prompt: Prompt }) {
         <p className={prompt.is_active ? "text-sm text-ink" : "text-sm text-ink-faint line-through"}>
           {prompt.text}
         </p>
-        <div className="mt-1">
+        <div className="mt-1 flex items-center gap-1.5">
           <Badge tone={prompt.source === "ai" ? "teal" : "butter"}>
             {prompt.source === "ai" ? "AI" : "Manual"}
           </Badge>
+          {/* Ladder tier, when the generator assigned one. Where on the ladder
+              mentions start is the brand's frontier — see the overview card. */}
+          {prompt.specificity && (
+            <Badge tone="neutral">
+              {prompt.specificity === "general"
+                ? "General"
+                : prompt.specificity === "mid"
+                  ? "Mid"
+                  : "Niche"}
+            </Badge>
+          )}
         </div>
       </div>
       <Button
