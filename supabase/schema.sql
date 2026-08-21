@@ -1243,3 +1243,54 @@ create policy "web_mentions_owner" on public.web_mentions
 drop policy if exists "search_keys_owner" on public.search_keys;
 create policy "search_keys_owner" on public.search_keys
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---------- share_links (public, time-expiring run reports) ---------
+-- Lets a signed-in owner mint an anonymous, no-login link to one run's full
+-- report (sales/demo use case: send a prospect a real result with no
+-- account). Only a SHA-256 hash is stored (lib/crypto.ts
+-- generateShareToken()); the plaintext token is shown once, at creation --
+-- same contract as api_keys.key_hash above. run_id is unique: sharing a
+-- run again ROTATES its existing link (upsert on conflict (run_id)) rather
+-- than creating a second one. There is no separate revoke in v1, so
+-- rotation via re-share is the only way to kill a link early -- see
+-- lib/share-links.ts.
+create table if not exists public.share_links (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid not null unique references public.runs (id) on delete cascade,
+  created_by uuid not null references auth.users (id) on delete cascade,
+  token_hash text not null unique,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists share_links_token_hash_idx on public.share_links (token_hash);
+
+alter table public.share_links enable row level security;
+
+-- The public viewer never queries this table under RLS: an anonymous
+-- request resolves its token exclusively through the service-role client
+-- (lib/supabase/service.ts), which bypasses RLS entirely. No anon policy is
+-- added here -- this schema never grants the anon role a read via RLS.
+--
+-- created_by = auth.uid() alone is NOT enough: it lets a signed-in caller
+-- insert a row naming a run_id they don't own (with their own created_by),
+-- minting themselves a public link to a stranger's report -- PostgREST has
+-- no other gate in front of this table. run_id must independently resolve
+-- to a run behind one of the caller's own projects, same one-hop-ownership
+-- shape as runs_owner/responses_owner above.
+drop policy if exists "share_links_owner" on public.share_links;
+create policy "share_links_owner" on public.share_links
+  for all using (
+    created_by = auth.uid()
+    and run_id in (
+      select id from public.runs
+      where project_id in (select id from public.projects where user_id = auth.uid())
+    )
+  )
+  with check (
+    created_by = auth.uid()
+    and run_id in (
+      select id from public.runs
+      where project_id in (select id from public.projects where user_id = auth.uid())
+    )
+  );
