@@ -204,7 +204,13 @@ export default async function SharedRunPage({ params }: { params: { token: strin
           description={`${modelLabel(run.provider, run.model)} · ${run.completed_count} / ${run.prompt_count} answers · ${timeAgo(run.created_at)}`}
           action={<Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>}
         />
-        {run.error && <p className="text-sm text-terracotta">{run.error}</p>}
+        {/* run.error is never rendered here, unlike the owner's dashboard view:
+            it can carry trial/budget text ("this account reached its free-usage
+            limit...") EVEN ON A COMPLETED RUN (see lib/engine.ts), plus raw
+            provider error strings -- none of it is the recipient's business. */}
+        {run.status === "failed" && (
+          <p className="text-sm text-terracotta">This run did not complete successfully.</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

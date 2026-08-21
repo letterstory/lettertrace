@@ -55,7 +55,7 @@ At [supabase.com](https://supabase.com), create a project. From **Settings → A
 
 - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
 - `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (only needed for scheduled runs)
+- `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (needed for scheduled runs and public share links)
 
 ### 2. Apply the database schema
 
@@ -180,7 +180,7 @@ docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Everything |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Everything |
-| `SUPABASE_SERVICE_ROLE_KEY` | Scheduled runs, admin surfaces |
+| `SUPABASE_SERVICE_ROLE_KEY` | Scheduled runs, admin surfaces, public share links |
 | `ENCRYPTION_KEY` | Storing BYOK provider keys (32 bytes, base64) |
 | `NEXT_PUBLIC_SITE_URL` | Correct auth redirects and OG metadata — set it to the URL users actually visit |
 | `CRON_SECRET` | Only if you wire up scheduled runs (below) |
@@ -300,6 +300,10 @@ Any run's full report can be shared with someone who has no LetterTrace account 
 - The public page is `noindex`, and has no sign-up prompt and no way to manage the link — it's a plain, read-only view, and the recipient has nowhere authenticated to go from it.
 
 Where it lives: `share_links` (one row per run, holding only a SHA-256 hash of the token — see `supabase/schema.sql`), `lib/share-links.ts` (mint/rotate + resolve), and `app/share/[token]/page.tsx` (the public view, read through the service-role client since the viewer has no session to apply Row Level Security to).
+
+Requires `SUPABASE_SERVICE_ROLE_KEY` (see [Configure environment](#3-configure-environment)) — without it, minting a link is refused up front with a clear error rather than handing out a link that would 500 for every recipient.
+
+> After upgrading, re-run `supabase/schema.sql`. It adds the `share_links` table and its Row Level Security policy (safe to re-run).
 
 ## Operator alerts (optional)
 

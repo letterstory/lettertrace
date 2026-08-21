@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/lib/crypto";
 import { createShareLink, resolveShareToken, SHARE_LINK_TTL_MS } from "@/lib/share-links";
 import { getOwnedProject } from "@/lib/api-service";
@@ -51,8 +51,31 @@ function fakeSupabase(opts: {
 }
 
 describe("createShareLink", () => {
+  const originalServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
   beforeEach(() => {
     vi.mocked(getOwnedProject).mockReset();
+    // Every test below exercises the ownership/minting logic, not the
+    // configuration guard -- stub the key present unless a test says
+    // otherwise, matching how the deployment is expected to be configured.
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+  });
+
+  afterEach(() => {
+    if (originalServiceRoleKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRoleKey;
+  });
+
+  it("returns not_configured when SUPABASE_SERVICE_ROLE_KEY is unset, without touching the database", async () => {
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const client = fakeSupabase({ runRow: { id: "run-1", project_id: "project-1" } });
+    const fromSpy = vi.spyOn(client, "from");
+
+    const outcome = await createShareLink(client as never, "user-1", "run-1");
+
+    expect(outcome).toEqual({ ok: false, code: "not_configured" });
+    expect(fromSpy).not.toHaveBeenCalled();
+    expect(getOwnedProject).not.toHaveBeenCalled();
   });
 
   it("returns not_found when the run doesn't exist", async () => {

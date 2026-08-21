@@ -1209,7 +1209,26 @@ alter table public.share_links enable row level security;
 -- request resolves its token exclusively through the service-role client
 -- (lib/supabase/service.ts), which bypasses RLS entirely. No anon policy is
 -- added here -- this schema never grants the anon role a read via RLS.
+--
+-- created_by = auth.uid() alone is NOT enough: it lets a signed-in caller
+-- insert a row naming a run_id they don't own (with their own created_by),
+-- minting themselves a public link to a stranger's report -- PostgREST has
+-- no other gate in front of this table. run_id must independently resolve
+-- to a run behind one of the caller's own projects, same one-hop-ownership
+-- shape as runs_owner/responses_owner above.
 drop policy if exists "share_links_owner" on public.share_links;
 create policy "share_links_owner" on public.share_links
-  for all using (created_by = auth.uid())
-  with check (created_by = auth.uid());
+  for all using (
+    created_by = auth.uid()
+    and run_id in (
+      select id from public.runs
+      where project_id in (select id from public.projects where user_id = auth.uid())
+    )
+  )
+  with check (
+    created_by = auth.uid()
+    and run_id in (
+      select id from public.runs
+      where project_id in (select id from public.projects where user_id = auth.uid())
+    )
+  );

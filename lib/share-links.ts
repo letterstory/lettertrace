@@ -9,7 +9,8 @@ export const SHARE_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type CreateShareLinkOutcome =
   | { ok: true; token: string; expiresAt: string }
-  | { ok: false; code: "not_found" };
+  | { ok: false; code: "not_found" }
+  | { ok: false; code: "not_configured" };
 
 /**
  * Mint (or rotate) the one share link for a run the caller owns. run_id is
@@ -22,6 +23,14 @@ export async function createShareLink(
   userId: string,
   runId: string,
 ): Promise<CreateShareLinkOutcome> {
+  // app/share/[token]/page.tsx needs the service-role client to resolve a
+  // token with no session behind it. Minting without checking this first
+  // would tell the owner sharing worked while every recipient silently gets
+  // a crash -- refuse up front instead, before touching the database at all.
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { ok: false, code: "not_configured" };
+  }
+
   const { data: runRow } = await supabase
     .from("runs")
     .select("id, project_id")

@@ -21,6 +21,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
   try {
     const outcome = await createShareLink(supabase, user.id, params.id);
     if (!outcome.ok) {
+      if (outcome.code === "not_configured") {
+        return NextResponse.json(
+          {
+            error:
+              "Sharing isn't configured on this deployment. Ask your administrator to set SUPABASE_SERVICE_ROLE_KEY.",
+          },
+          { status: 503 },
+        );
+      }
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 

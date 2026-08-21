@@ -40,6 +40,17 @@ describe("POST /api/runs/[id]/share", () => {
     expect(res.status).toBe(404);
   });
 
+  it("503s with a fix-naming message when the deployment isn't configured for sharing", async () => {
+    vi.mocked(createClient).mockReturnValue(fakeSessionClient({ id: "user-1" }) as never);
+    vi.mocked(createShareLink).mockResolvedValue({ ok: false, code: "not_configured" });
+
+    const res = await POST(req(), { params: { id: "run-1" } });
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toContain("SUPABASE_SERVICE_ROLE_KEY");
+  });
+
   it("returns exactly { token, expiresAt } on success, nothing else", async () => {
     vi.mocked(createClient).mockReturnValue(fakeSessionClient({ id: "user-1" }) as never);
     vi.mocked(createShareLink).mockResolvedValue({
