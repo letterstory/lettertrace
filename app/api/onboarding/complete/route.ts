@@ -5,13 +5,19 @@ import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import {
   resolveRunKey,
+  resolveRunKeyFor,
   consumeTrialRun,
   recordTrialUsage,
   recordTrialSpend,
   runBudgetMicros,
   pickDefaultProvider,
   engineKeyMessage,
+  trialCoveredProviders,
+  trialRunLimit,
+  getTrialUsage,
+  type ResolvedKey,
 } from "@/lib/trial";
+import { trialSpendLimitMicros } from "@/lib/pricing";
 import { defaultModelFor } from "@/lib/models";
 import { coveredProviders } from "@/lib/routers";
 import { normalizeCompetitorList } from "@/lib/competitors";
@@ -152,7 +158,11 @@ export async function POST(request: Request) {
       description,
       default_provider: provider,
       default_model: model,
-      schedule: "off",
+      // "Cadence from the onset": a new project monitors on a schedule from
+      // day one (trial-funded until the allowance runs out, then unblocked by
+      // the user's own key) instead of being a one-shot demo whose schedule
+      // hides in Settings. The Runs page control turns it off in one click.
+      schedule: "daily",
     })
     .select("*")
     .single();
@@ -216,9 +226,32 @@ export async function POST(request: Request) {
     if (rows.length) await supabase.from("prompts").insert(rows);
   }
 
-  // Immediately run the first search.
-  const key = await resolveRunKey(supabase, user.id, project);
-  if (!key.apiKey) {
+  // First measurement is a SWEEP: one run per engine the account can fund —
+  // the user's own coverage, plus the trial's while the allowance lasts — in
+  // parallel, so the wall clock stays roughly one run. Probing every engine on
+  // the first run maximizes the chance of finding a mention at all, which is
+  // the moment the product proves itself.
+  const usage = await getTrialUsage(supabase, user.id);
+  const trialActive =
+    usage.runs < trialRunLimit() && usage.spendMicros < trialSpendLimitMicros();
+  const sweep = Array.from(
+    new Set([...runnable, ...(trialActive ? trialCoveredProviders(true) : [])]),
+  );
+  // The project's own engine leads: its run is the one the response points at.
+  sweep.sort((a, b) =>
+    a === project.default_provider ? -1 : b === project.default_provider ? 1 : 0,
+  );
+
+  const keys: ResolvedKey[] = [];
+  for (const p of sweep) {
+    const k = await resolveRunKeyFor(supabase, user.id, p, defaultModelFor(p), {
+      webSearch: true,
+    });
+    if ((k.source === "own" || k.source === "trial") && k.apiKey) keys.push(k);
+  }
+
+  if (keys.length === 0) {
+    const key = await resolveRunKey(supabase, user.id, project);
     return NextResponse.json({
       projectId: project.id,
       ran: false,
@@ -229,8 +262,15 @@ export async function POST(request: Request) {
     });
   }
 
-  // Atomically consume a free run before executing (see /api/runs).
-  if (key.source === "trial" && !(await consumeTrialRun(supabase))) {
+  // Atomically consume a free run per trial-funded engine BEFORE executing
+  // (see /api/runs). Sequential on purpose: the sweep stops being granted runs
+  // at exactly the engine where the allowance ran out.
+  const funded: ResolvedKey[] = [];
+  for (const k of keys) {
+    if (k.source === "trial" && !(await consumeTrialRun(supabase))) continue;
+    funded.push(k);
+  }
+  if (funded.length === 0) {
     return NextResponse.json({
       projectId: project.id,
       ran: false,
@@ -238,36 +278,55 @@ export async function POST(request: Request) {
     });
   }
 
-  try {
-    const result = await executeRun({
-      supabase,
-      project,
-      provider: key.provider,
-      model: key.model,
-      apiKey: key.apiKey,
-      route: key.route,
-      budgetMicros: runBudgetMicros(key),
-      context: {
-        channel: "dashboard",
-        actorType: "user",
-        actorId: user.id,
-        actorLabel: user.email ?? "You",
-      },
-    });
-    if (key.source === "trial") {
-      await recordTrialUsage(supabase, result.tokensUsed);
-      await recordTrialSpend(supabase, result.spendMicros);
-    }
-    return NextResponse.json({
-      projectId: project.id,
-      ran: true,
-      runId: result.runId,
-      status: result.status,
-    });
-  } catch (e) {
+  // Trial-funded runs share the remaining spend budget rather than each
+  // claiming all of it — the recorded overshoot past the cap is otherwise
+  // multiplied by however many runs launched from the same snapshot.
+  const trialRuns = funded.filter((k) => k.source === "trial").length;
+
+  const settled = await Promise.allSettled(
+    funded.map(async (k) => {
+      const budget = runBudgetMicros(k);
+      const result = await executeRun({
+        supabase,
+        project,
+        provider: k.provider,
+        model: k.model,
+        apiKey: k.apiKey!,
+        route: k.route,
+        budgetMicros: budget === null ? null : Math.floor(budget / Math.max(trialRuns, 1)),
+        context: {
+          channel: "dashboard",
+          actorType: "user",
+          actorId: user.id,
+          actorLabel: user.email ?? "You",
+        },
+      });
+      if (k.source === "trial") {
+        await recordTrialUsage(supabase, result.tokensUsed);
+        await recordTrialSpend(supabase, result.spendMicros);
+      }
+      return { provider: k.provider, runId: result.runId, status: result.status };
+    }),
+  );
+
+  const runs = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+
+  if (runs.length === 0) {
+    const firstFailure = settled.find(
+      (s): s is PromiseRejectedResult => s.status === "rejected",
+    );
     return NextResponse.json(
-      { projectId: project.id, ran: false, error: humanError(e) },
+      { projectId: project.id, ran: false, error: humanError(firstFailure?.reason) },
       { status: 200 },
     );
   }
+
+  return NextResponse.json({
+    projectId: project.id,
+    ran: true,
+    // The default engine's run (the sweep is sorted so it launched first).
+    runId: runs[0].runId,
+    status: runs[0].status,
+    runs,
+  });
 }

@@ -116,7 +116,9 @@ export function spendMicros(input: SpendInput): number {
   return micros > 0 ? micros : 0;
 }
 
-const DEFAULT_TRIAL_SPEND_LIMIT_USD = 5;
+// Raised 5 → 15 alongside TRIAL_RUN_LIMIT (see lib/trial.ts): the trial funds
+// multi-engine runs now, so the dollar ceiling scales with the run allowance.
+const DEFAULT_TRIAL_SPEND_LIMIT_USD = 15;
 
 /**
  * The per-user ceiling on operator-funded spend, in micro-dollars

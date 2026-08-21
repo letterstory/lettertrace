@@ -1,9 +1,18 @@
 import { ArrowRight, PlayCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { getProject } from "@/lib/data";
-import { resolveRunKey, engineKeyMessage, nextRunMessage } from "@/lib/trial";
+import { getProject, getConfiguredProviders, getRouterKeysPublic } from "@/lib/data";
+import {
+  resolveRunKey,
+  engineKeyMessage,
+  nextRunMessage,
+  trialEnabled,
+  trialCoveredProviders,
+  trialRunLimit,
+  getTrialUsage,
+} from "@/lib/trial";
+import { trialSpendLimitMicros } from "@/lib/pricing";
 import { PROVIDERS, modelLabel } from "@/lib/models";
-import { ROUTERS } from "@/lib/routers";
+import { ROUTERS, coveredProviders } from "@/lib/routers";
 import { timeAgo } from "@/lib/utils";
 import { isAbandoned, settleAbandonedRun, INTERRUPTED_RUN_ERROR } from "@/lib/engine";
 import type { Run, RunStatus } from "@/lib/types";
@@ -16,6 +25,8 @@ import {
   EmptyState,
 } from "@/components/ui";
 import { RunNow } from "./run-now";
+import { RunAllEngines } from "./run-all-engines";
+import { ScheduleControl } from "./schedule-control";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +70,33 @@ export default async function RunsPage() {
   const key = await resolveRunKey(supabase, user.id, project);
   const canRun = key.source === "own" || key.source === "trial";
 
+  // Every engine this account can fund a run on right now: engines the user's
+  // own credentials cover, plus — while the trial allowance lasts — the ones
+  // the operator's trial keys serve. This is the "run on all engines" list;
+  // the run endpoint re-checks funding per run, so this is display truth, not
+  // an authorization.
+  const [configured, routerRows] = await Promise.all([
+    getConfiguredProviders(supabase, user.id),
+    getRouterKeysPublic(supabase, user.id),
+  ]);
+  const ownCovered = coveredProviders({
+    direct: configured,
+    routers: routerRows.map((k) => ({ router: k.router, searchVerified: k.search_verified ?? [] })),
+    webSearch: project.use_web_search,
+  });
+  let available = ownCovered;
+  if (trialEnabled()) {
+    const usage = await getTrialUsage(supabase, user.id);
+    const trialActive =
+      usage.runs < trialRunLimit() && usage.spendMicros < trialSpendLimitMicros();
+    if (trialActive) {
+      available = Array.from(
+        new Set([...ownCovered, ...trialCoveredProviders(project.use_web_search)]),
+      );
+    }
+  }
+  const engineList = available.map((p) => ({ provider: p, label: PROVIDERS[p].label }));
+
   const { count: activePrompts } = await supabase
     .from("prompts")
     .select("id", { count: "exact", head: true })
@@ -99,13 +137,32 @@ export default async function RunsPage() {
         // different model — see nextRunMessage.
         description={canRun ? nextRunMessage(key) : engineKeyMessage(key)}
         action={
-          <RunNow
-            canRun={canRun}
-            keySource={key.source}
-            activePrompts={activePrompts ?? 0}
-            providerLabel={PROVIDERS[project.default_provider].label}
-          />
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <RunNow
+              canRun={canRun}
+              keySource={key.source}
+              activePrompts={activePrompts ?? 0}
+              providerLabel={PROVIDERS[project.default_provider].label}
+            />
+            {/* Only when there's a second engine to offer — a one-engine
+                "run on all engines" is the same button twice. */}
+            {engineList.length >= 2 && (
+              <RunAllEngines
+                engines={engineList}
+                disabled={(activePrompts ?? 0) === 0}
+              />
+            )}
+          </div>
         }
+      />
+
+      {/* The schedule lives on the project settings form too, but this page is
+          where people go to make runs happen — it's where "how do I run this
+          daily?" gets asked. */}
+      <ScheduleControl
+        schedule={project.schedule}
+        keySource={key.source}
+        providerLabel={PROVIDERS[project.default_provider].label}
       />
 
       {runs.length === 0 ? (

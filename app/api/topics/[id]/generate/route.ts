@@ -78,6 +78,9 @@ export async function POST(
       apiKey: key.apiKey!,
       topicName: topic.name,
       topicDescription: topic.description,
+      // The Settings blurb has promised this field "helps generate better
+      // monitoring prompts" since before it was true. Now it's true.
+      brandDescription: project.description,
       count,
     });
 
@@ -98,12 +101,15 @@ export async function POST(
       );
     }
 
-    const rows = variations.map((text) => ({
+    const rows = variations.map((v) => ({
       project_id: project.id,
       topic_id: topic.id,
-      text,
+      text: v.text,
       source: "ai" as const,
       is_active: true,
+      // The ladder tier the generator assigned, so the frontier readout can
+      // say WHERE the brand appears, not just whether.
+      specificity: v.specificity,
     }));
 
     const { data, error } = await supabase.from("prompts").insert(rows).select();

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  CalendarCheck,
   Github,
   KeyRound,
   Layers,
@@ -16,6 +17,11 @@ import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 import { InstallCli } from "@/components/install-cli";
+import {
+  FOUNDER_CALL_LANDING_SOURCE,
+  founderCallUrl,
+  taggedBookingUrl,
+} from "@/lib/founder-call";
 
 const GITHUB_URL = "https://github.com/letterstory/lettertrace";
 
@@ -148,6 +154,12 @@ const toneBg: Record<string, string> = {
 };
 
 export default function LandingPage() {
+  // Gated on the same env var as the dashboard's founder-call offer, and for
+  // the same reason (see lib/founder-call.ts): a self-hosted Lettertrace must
+  // not send its visitors to *our* founder's calendar. Unset means the section
+  // does not exist.
+  const bookingUrl = founderCallUrl();
+
   return (
     <div id="top" className="min-h-screen bg-paper text-ink">
       {/* Nav */}
@@ -338,6 +350,42 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* Founder call */}
+      {bookingUrl && (
+        <section className="mx-auto max-w-6xl px-5 pt-20">
+          <div className="relative overflow-hidden rounded border border-ink/10 bg-surface shadow-lift">
+            <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded bg-mint glow-blob" />
+            <div className="pointer-events-none absolute -bottom-24 -left-16 h-56 w-56 rounded bg-terracotta/40 glow-blob" />
+            <div className="relative flex flex-col gap-8 p-8 sm:p-10 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded bg-ink/[0.04] text-terracotta-dark">
+                  <CalendarCheck className="h-5 w-5" aria-hidden />
+                </span>
+                <div>
+                  <p className="mono-eyebrow">talk to a human</p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                    Grab 15 minutes with Mathew.
+                  </h2>
+                  <p className="mt-2 max-w-lg text-ink-soft">
+                    Our founder will walk you through setting up your brand and topics,
+                    and how to read your first results.
+                  </p>
+                </div>
+              </div>
+              <a
+                href={taggedBookingUrl(bookingUrl, FOUNDER_CALL_LANDING_SOURCE)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-12 shrink-0 items-center justify-center gap-2 self-center rounded bg-ink px-7 text-base font-medium tracking-tight text-paper shadow-sm transition-colors hover:bg-ink/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper lg:ml-6"
+              >
+                Pick a time
+                <ArrowRight className="h-4 w-4" aria-hidden />
+              </a>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Final CTA */}
       <section className="relative overflow-hidden">

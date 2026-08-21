@@ -11,14 +11,8 @@ import {
   engineCoverage,
   type RouterCoverage,
 } from "@/lib/routers";
-import { article } from "@/lib/utils";
+import { article, SCHEDULE_LABELS } from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
-
-const SCHEDULE_LABELS: Record<Schedule, string> = {
-  off: "Manual only",
-  daily: "Daily",
-  weekly: "Weekly",
-};
 
 // The answer engine is stored as a (provider, model) pair; the picker packs
 // both into one "provider:model" option value and unpacks on submit.

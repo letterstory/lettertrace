@@ -144,6 +144,76 @@ export function TrendChart({
   );
 }
 
+// One color per answer engine, stable across renders so Claude is always the
+// same line week to week. Terracotta stays the brand's color on the
+// single-engine chart, so the engine palette starts elsewhere.
+const ENGINE_COLORS = ["#129C82", "#E07850", "#6F87C8", "#C8A24A", "#B06FC8"];
+
+/**
+ * Visibility over time, one line per answer engine. Replaces the blended
+ * single-line trend whenever runs span engines: Claude's 40% and Gemini's 12%
+ * aren't points on one series, and a line that zigzags between them reads as
+ * volatility that never happened. Each run extends only its own engine's line
+ * (connectNulls bridges the gaps where other engines ran).
+ */
+export function EngineTrendChart({
+  data,
+  series,
+}: {
+  /** Chronological rows: { date, [engineKey]: visibility 0..100 } */
+  data: Record<string, string | number | null>[];
+  series: { key: string; label: string }[];
+}) {
+  const t = useChartTheme();
+  if (!data || data.length === 0 || series.length === 0) {
+    return <Placeholder label="No runs to chart yet" height={280} />;
+  }
+  const labelOf = new Map(series.map((s) => [s.key, s.label]));
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
+        <CartesianGrid stroke={t.grid} vertical={false} />
+        <XAxis dataKey="date" tick={t.axisTick} tickLine={false} axisLine={{ stroke: t.grid }} />
+        <YAxis
+          domain={[0, 100]}
+          tick={t.axisTick}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(v: number) => `${v}%`}
+          width={44}
+        />
+        <Tooltip
+          contentStyle={t.tooltipStyle}
+          formatter={(value: number, name: string) => [
+            `${Math.round(value)}%`,
+            labelOf.get(name) ?? name,
+          ]}
+        />
+        <Legend
+          iconType="plainline"
+          wrapperStyle={t.legendStyle}
+          formatter={(value: string) => labelOf.get(value) ?? value}
+        />
+        {series.map((s, i) => {
+          const color = ENGINE_COLORS[i % ENGINE_COLORS.length];
+          return (
+            <Line
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              stroke={color}
+              strokeWidth={2.5}
+              connectNulls
+              dot={{ r: 3, fill: color, strokeWidth: 0 }}
+              activeDot={{ r: 5 }}
+            />
+          );
+        })}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function ShareBars({
   data,
 }: {
