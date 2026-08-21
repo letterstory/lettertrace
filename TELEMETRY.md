@@ -101,7 +101,23 @@ underneath them, and they are the ones that describe the work:
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
 
-Two things the live stream makes clear that the design didn't:
+Five things the live stream makes clear that the design didn't. The first two
+change how every query over this data has to be written:
+
+- **Every span arrives exactly twice.** The Vercel OTLP export delivers each
+  span as two identical rows, same `span_id`, and it has done so for every span
+  since export went live. So `count()` reports double the truth everywhere:
+  requests, provider calls, cron ticks. Count `uniqExact(span_id)` instead (or
+  `uniqExact(trace_id)` when the unit is a whole trace). A ratio built from two
+  `count()`s survives, because the doubling cancels — but any absolute number,
+  any rate per second, and any "at least N samples" floor does not.
+- **HTTP failure is an attribute here, never a span status.** `status_code = 2`
+  has not once appeared on a Next.js server span in the whole history of this
+  store, not even for a 5xx; the only Error-status spans anywhere are
+  `llm.query`. The request outcome lives on `attrs.http.status_code`, so a
+  check written the obvious way — `kind = 2 AND status_code = 2` — reads a flat
+  zero straight through a total outage. Every error panel and every request-path
+  alarm reads the attribute.
 
 - **The outbound `fetch` spans are named with the full URL**, query string
   included — `@vercel/otel`'s default. So a Supabase PostgREST call arrives as
@@ -115,6 +131,13 @@ Two things the live stream makes clear that the design didn't:
   records span status Unset at the HTTP layer; only `llm.query` sets status
   Error. So engine health is an `llm.query` question — a dependency error rate
   computed from client spans reads zero straight through a rate-limit storm.
+- **Engine health is a per-*model* question, not a per-provider one.** Provider
+  quota is enforced per model, so one model on a key can be refusing every call
+  while its siblings on the same key answer normally. Grouped by
+  `llm.provider` alone that reads as a mild elevation and hides underneath the
+  healthy siblings; grouped by (`llm.provider`, `llm.model`) it reads as the
+  100% outage it is. Incident #103 was exactly this shape, and it has recurred
+  since. Group by both.
 
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
@@ -137,6 +160,14 @@ the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
 `ops.provider`, …). The signature is the one `signatureOf()` already scrubbed,
 so ids and numbers are collapsed and no content rides along. `run.failed` and
 `error` records are the error stream worth alerting on.
+
+One caveat on that stream: an `error` record is not the same as a failed call.
+Retries inside `runQuery` each record their own ops row while the surrounding
+`llm.query` span stays open, so a transient fault that the next attempt fixes
+still lands as an error log. On 2026-08-20, "OpenAI returned an empty answer"
+appeared 26 times against zero failed OpenAI spans — every one of them
+recovered on retry. Count spans to judge whether the engines are working;
+read the logs to find out what they are struggling with.
 
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer
