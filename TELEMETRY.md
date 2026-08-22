@@ -13,10 +13,19 @@ takes, and for the same reason: this repository is public and ships a prebuilt
 image, so a self-hosted install reports to nobody until its operator says so.
 The consequence for reading this store is worth stating plainly: **an absence
 of spans is only evidence of an outage on a deployment where the endpoint is
-known to be set.** On this org's Vercel Production deployment it is **not set
-yet** — the four variables under [Configuration](#configuration) are the last
-step of shipping this, and until someone adds them in Vercel, merging changes
-nothing observable. Delete this paragraph once they are set.
+known to be set.**
+
+On this org's Vercel **Production** deployment it *is* set, and has been since
+**15:43 UTC on 2026-08-19** — traces, metrics and logs have flowed continuously
+since. **Preview is not configured**, so PR builds still report nothing; that is
+a deliberate gap, not a fault, but it does mean a change cannot be observed
+until it reaches Production.
+
+One property of this deployment shapes how you read the stream, and it is not a
+bug: the app is serverless, so it emits only while a function instance is alive.
+Idle stretches produce real gaps — over the first 18 hours of export, twenty
+gaps longer than 5 minutes, the longest 12.5 minutes. A short silence is the app
+being idle, not the app being down.
 
 ## What monitoring also exists
 
@@ -92,6 +101,56 @@ underneath them, and they are the ones that describe the work:
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
 
+Six things the live stream makes clear that the design didn't. The first two
+change how every query over this data has to be written:
+
+- **Every span arrives exactly twice.** The Vercel OTLP export delivers each
+  span as two identical rows, same `span_id`, and it has done so for every span
+  since export went live. So `count()` reports double the truth everywhere:
+  requests, provider calls, cron ticks. Count `uniqExact(span_id)` instead (or
+  `uniqExact(trace_id)` when the unit is a whole trace). A ratio built from two
+  `count()`s survives, because the doubling cancels — but any absolute number,
+  any rate per second, and any "at least N samples" floor does not.
+- **HTTP failure is an attribute here, never a span status.** `status_code = 2`
+  has not once appeared on a Next.js server span in the whole history of this
+  store, not even for a 5xx; the only Error-status spans anywhere are
+  `llm.query`. The request outcome lives on `attrs.http.status_code`, so a
+  check written the obvious way — `kind = 2 AND status_code = 2` — reads a flat
+  zero straight through a total outage. Every error panel and every request-path
+  alarm reads the attribute.
+
+- **The outbound `fetch` spans are named with the full URL**, query string
+  included — `@vercel/otel`'s default. So a Supabase PostgREST call arrives as
+  `fetch GET https://<ref>.supabase.co/rest/v1/api_keys?select=id,user_id&key_hash=eq.<sha256>`.
+  Two consequences. `name` is effectively unique per call, so never group or
+  chart outbound traffic by it — group by host. And row ids, the Supabase
+  project ref and API-key *hashes* ride along in span names; none of that is
+  content under the rule below, but it is more identifier than the hand-placed
+  spans carry, and it is worth a deliberate decision rather than a default.
+- **A provider 429 does not fail the fetch span.** The rate-limited call still
+  records span status Unset at the HTTP layer; only `llm.query` sets status
+  Error. So engine health is an `llm.query` question — a dependency error rate
+  computed from client spans reads zero straight through a rate-limit storm.
+- **Engine health is a per-*model* question, not a per-provider one.** Provider
+  quota is enforced per model, so one model on a key can be refusing every call
+  while its siblings on the same key answer normally. Grouped by
+  `llm.provider` alone that reads as a mild elevation and hides underneath the
+  healthy siblings; grouped by (`llm.provider`, `llm.model`) it reads as the
+  100% outage it is. Incident #103 was exactly this shape, and it has recurred
+  since. Group by both.
+- **Four routes run a whole job inside the HTTP request, and they wreck any
+  latency read that includes them.** Measured over the seven days since export
+  went live: `/api/runs/route` p95 **556 s**, `/api/cron/run/route` **151 s**,
+  `/api/onboarding/complete/route` **63 s**,
+  `/api/cron/letterprove-health/route` **2.2 s** — against 4–500 ms for every
+  route a human waits on. One cron tick landing in a window is enough to drag
+  an all-routes p95 into the seconds and flatten an interactive latency chart
+  to a baseline of zero. So the interactive question and the job question are
+  two different questions: exclude those four route values (verbatim, `/route`
+  suffix and all) when asking the first, and read the second per-route. Across
+  the 150 fifteen-minute buckets carrying at least 20 interactive requests, the
+  interactive p95 ran a median of **457 ms** and never exceeded **1.4 s**.
+
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
 
@@ -113,6 +172,14 @@ the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
 `ops.provider`, …). The signature is the one `signatureOf()` already scrubbed,
 so ids and numbers are collapsed and no content rides along. `run.failed` and
 `error` records are the error stream worth alerting on.
+
+One caveat on that stream: an `error` record is not the same as a failed call.
+Retries inside `runQuery` each record their own ops row while the surrounding
+`llm.query` span stays open, so a transient fault that the next attempt fixes
+still lands as an error log. On 2026-08-20, "OpenAI returned an empty answer"
+appeared 26 times against zero failed OpenAI spans — every one of them
+recovered on retry. Count spans to judge whether the engines are working;
+read the logs to find out what they are struggling with.
 
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer
