@@ -101,7 +101,7 @@ underneath them, and they are the ones that describe the work:
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
 
-Five things the live stream makes clear that the design didn't. The first two
+Six things the live stream makes clear that the design didn't. The first two
 change how every query over this data has to be written:
 
 - **Every span arrives exactly twice.** The Vercel OTLP export delivers each
@@ -138,6 +138,18 @@ change how every query over this data has to be written:
   healthy siblings; grouped by (`llm.provider`, `llm.model`) it reads as the
   100% outage it is. Incident #103 was exactly this shape, and it has recurred
   since. Group by both.
+- **Four routes run a whole job inside the HTTP request, and they wreck any
+  latency read that includes them.** Measured over the seven days since export
+  went live: `/api/runs/route` p95 **556 s**, `/api/cron/run/route` **151 s**,
+  `/api/onboarding/complete/route` **63 s**,
+  `/api/cron/letterprove-health/route` **2.2 s** — against 4–500 ms for every
+  route a human waits on. One cron tick landing in a window is enough to drag
+  an all-routes p95 into the seconds and flatten an interactive latency chart
+  to a baseline of zero. So the interactive question and the job question are
+  two different questions: exclude those four route values (verbatim, `/route`
+  suffix and all) when asking the first, and read the second per-route. Across
+  the 150 fifteen-minute buckets carrying at least 20 interactive requests, the
+  interactive p95 ran a median of **457 ms** and never exceeded **1.4 s**.
 
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
