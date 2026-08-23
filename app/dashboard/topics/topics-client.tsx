@@ -222,7 +222,7 @@ function ReanalyzeSection({
 
         {suggestions && suggestions.length === 0 && !error && (
           <p className="text-sm text-ink-faint">
-            Nothing new to suggest — your current topics already cover what the
+            Nothing new to suggest: your current topics already cover what the
             analysis found.
           </p>
         )}

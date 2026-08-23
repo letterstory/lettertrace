@@ -70,7 +70,7 @@ export async function PUT(
     statusCode: 200,
     targetType: "router_key",
     targetId: outcome.key.id,
-    summary: `Saved a ${outcome.key.router} router key (${outcome.key.key_hint}) — ${verificationSummary(outcome.verification)}`,
+    summary: `Saved a ${outcome.key.router} router key (${outcome.key.key_hint}): ${verificationSummary(outcome.verification)}`,
     metadata: {
       router: outcome.key.router,
       key_hint: outcome.key.key_hint,

@@ -132,7 +132,7 @@ export async function setRouterKey(
       return {
         ok: false,
         code: "invalid",
-        message: "A router base URL must use https — your API key is sent to it.",
+        message: "A router base URL must use https: your API key is sent to it.",
       };
     }
     baseUrl = raw.replace(/\/+$/, "");

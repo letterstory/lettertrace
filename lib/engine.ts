@@ -166,7 +166,7 @@ export async function settleAbandonedRun(
 /** What an interrupted run says for itself. Shared so the sweeper, the status
  *  endpoint and the background catch can't describe it three different ways. */
 export const INTERRUPTED_RUN_ERROR =
-  "The run was interrupted before it finished — the server stopped executing it. Answers stored before that point were kept. Run it again to collect the rest.";
+  "The run was interrupted before it finished: the server stopped executing it. Answers stored before that point were kept. Run it again to collect the rest.";
 
 /**
  * Settle every run that nothing is executing any more.

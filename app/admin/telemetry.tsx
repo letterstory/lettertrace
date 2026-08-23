@@ -137,7 +137,7 @@ export function Telemetry({
           total={stuck.length}
           shown={shownStuck.length}
           filtering={filtering}
-          hint="Still running after 30 minutes — an invocation that died without writing a status. These never finish on their own."
+          hint="Still running after 30 minutes: an invocation that died without writing a status. These never finish on their own."
         >
           {shownStuck.map((r) => (
             <Row key={r.id} accent>
@@ -197,7 +197,7 @@ export function Telemetry({
               ? "Nothing recorded in the window."
               : // Only when the list is empty. Printed above a populated list it
                 // contradicted the rows directly beneath it.
-                "Telemetry is off — errors outside the run lifecycle are not recorded. Set OPS_TELEMETRY=1 and redeploy. Everything else on this page comes from run history and does not depend on it."
+                "Telemetry is off, so errors outside the run lifecycle are not recorded. Set OPS_TELEMETRY=1 and redeploy. Everything else on this page comes from run history and does not depend on it."
             : "Nothing matches the current filter."
         }
       >

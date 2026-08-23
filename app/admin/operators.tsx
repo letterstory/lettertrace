@@ -119,14 +119,14 @@ export function OperatorsMenu({ roster }: { roster: OperatorRoster }) {
           {unresolved > 0 && (
             <p className="border-t border-ink/5 px-4 py-2.5 text-xs text-terracotta-dark">
               {roster.gate === "user-id"
-                ? "An id matching no account grants nothing — almost certainly a typo, and whoever it was meant for cannot get in."
+                ? "An id matching no account grants nothing. It is almost certainly a typo, and whoever it was meant for cannot get in."
                 : "An allowlisted address with no account can be registered by anyone who guesses it. Switch to ADMIN_USER_IDS."}
             </p>
           )}
 
           {roster.degraded && (
             <p className="border-t border-ink/5 px-4 py-2.5 text-xs text-ink-faint">
-              Accounts could not be fully read ({roster.degraded}) — an entry shown as unmatched may
+              Accounts could not be fully read ({roster.degraded}), so an entry shown as unmatched may
               simply not have been checked.
             </p>
           )}

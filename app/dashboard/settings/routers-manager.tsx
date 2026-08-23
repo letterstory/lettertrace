@@ -333,10 +333,10 @@ function EngineStatus({
               <span className="text-ink-soft">
                 <span className="font-medium text-ink">{PROVIDERS[provider].label}</span>{" "}
                 {unreachable
-                  ? `not reachable on this key${check?.error ? ` — ${check.error}` : ""}`
+                  ? `not reachable on this key${check?.error ? `: ${check.error}` : ""}`
                   : grounded
                     ? "measurable, live web search confirmed"
-                    : "reachable, but web search isn't confirmed — usable only for projects with web search off"}
+                    : "reachable, but web search isn't confirmed. Usable only for projects with web search off"}
               </span>
             </li>
           );
@@ -346,7 +346,7 @@ function EngineStatus({
           worth naming once, because "my router does 400 models" makes their
           absence surprising. */}
       <p className="text-xs text-ink-faint">
-        {needsOwnKeyList} {needsOwnKey.length === 1 ? "needs its own key" : "need their own keys"} — their answers
+        {needsOwnKeyList} {needsOwnKey.length === 1 ? "needs its own key" : "need their own keys"}: their answers
         aren&apos;t comparable when routed through a gateway.
       </p>
     </div>

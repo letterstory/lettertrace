@@ -40,7 +40,7 @@ export async function POST(request: Request) {
   await logDashboard(user, request, {
     category: "router_key",
     action: "router_key.saved",
-    summary: `Saved a ${outcome.key.router} router key (${outcome.key.key_hint}) — ${verificationSummary(outcome.verification)}`,
+    summary: `Saved a ${outcome.key.router} router key (${outcome.key.key_hint}): ${verificationSummary(outcome.verification)}`,
     targetType: "router_key",
     targetId: outcome.key.id,
     metadata: {

@@ -129,7 +129,7 @@ export function signupAlert(user: { email?: string | null; id: string; created_a
       `User id: ${user.id}`,
       user.created_at ? `Signed up: ${user.created_at}` : "",
       "",
-      "They have not necessarily run anything yet — this fires when the account",
+      "They have not necessarily run anything yet: this fires when the account",
       "is confirmed and first signed in.",
     ]
       .filter((line) => line !== "")

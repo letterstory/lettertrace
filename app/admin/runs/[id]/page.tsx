@@ -183,7 +183,7 @@ export default async function AdminRunPage({ params }: { params: { id: string } 
         {(responses ?? []).length === 0 ? (
           <Card>
             <p className="px-6 py-8 text-sm text-ink-faint">
-              No answers recorded — the run {run.status === "failed" ? "failed" : "has not produced any yet"}.
+              No answers recorded: the run {run.status === "failed" ? "failed" : "has not produced any yet"}.
             </p>
           </Card>
         ) : (
@@ -249,7 +249,7 @@ export default async function AdminRunPage({ params }: { params: { id: string } 
       </section>
 
       <p className="text-xs text-ink-faint">
-        Operator view — this page shows customer run content so outbound can reference what the
+        Operator view: this page shows customer run content so outbound can reference what the
         account actually saw.
       </p>
     </div>
