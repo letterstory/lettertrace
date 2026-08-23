@@ -278,7 +278,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
         <div className="space-y-3">
           <SectionHeading
             title="Competitors by question"
-            description="Across all replicates: who gets named — and whose site gets cited — for each question. “You’re missing” flags where a competitor shows up and your brand doesn’t."
+            description="Across all replicates: who gets named, and whose site gets cited, for each question. “You’re missing” flags where a competitor shows up and your brand doesn’t."
           />
           <div className="space-y-3">
             {competitionByPrompt.map((p) => (

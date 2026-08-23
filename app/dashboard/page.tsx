@@ -406,7 +406,7 @@ export default async function DashboardPage() {
     frontier === "general"
       ? "You appear in the broadest questions about your space."
       : frontier === "mid"
-        ? "You appear in segment-level questions, not yet in the broadest ones — that top tier is the gap to close."
+        ? "You appear in segment-level questions, not yet in the broadest ones. That top tier is the gap to close."
         : frontier === "niche"
           ? "You appear in niche questions only. That's where young brands start; broadening comes as authority grows."
           : "No tier shows mentions yet. Generate more niche questions to find where you first appear.";

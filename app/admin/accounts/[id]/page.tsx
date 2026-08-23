@@ -123,7 +123,7 @@ function RunSparkline({ series }: { series: { day: string; runs: number }[] }) {
               fill: d.runs === 0 ? "rgb(var(--c-ink) / 0.12)" : "rgb(var(--c-mint-bright))",
             }}
           >
-            <title>{`${d.day} — ${d.runs} run${d.runs === 1 ? "" : "s"}`}</title>
+            <title>{`${d.day} · ${d.runs} run${d.runs === 1 ? "" : "s"}`}</title>
           </rect>
         );
       })}
@@ -368,13 +368,13 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
         <div>
           <h3 className="text-lg font-semibold text-ink">What they monitor</h3>
           <p className="mt-1 max-w-3xl text-sm text-ink-faint">
-            The brands, cadence and competitors this account tracks — one card per organization.
+            The brands, cadence and competitors this account tracks, one card per organization.
           </p>
         </div>
         {projects.length === 0 ? (
           <Card>
             <p className="px-5 py-8 text-sm text-ink-faint">
-              No organizations yet — this account signed up but never set one up.
+              No organizations yet: this account signed up but never set one up.
             </p>
           </Card>
         ) : (
@@ -429,7 +429,7 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
           <span className="text-sm tabular-nums text-ink-faint">{prompts.length}</span>
         </div>
         <p className="max-w-3xl text-sm text-ink-faint">
-          The active questions they ask the engines every run — what they actually care about being
+          The active questions they ask the engines every run: what they actually care about being
           the answer to.
         </p>
         <Card>
@@ -524,13 +524,13 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
           <span className="text-sm tabular-nums text-ink-faint">{activity.length}</span>
         </div>
         <p className="max-w-3xl text-sm text-ink-faint">
-          Everything this account has done lately, whatever the surface — dashboard, API, CLI or the
+          Everything this account has done lately, whatever the surface: dashboard, API, CLI or the
           scheduler.
         </p>
         <Card>
           {activity.length === 0 ? (
             <p className="px-5 py-8 text-sm text-ink-faint">
-              Nothing recorded — either this account is quiet, or activity logging is not populated
+              Nothing recorded: either this account is quiet, or activity logging is not populated
               on this deployment.
             </p>
           ) : (
@@ -555,7 +555,7 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
       </section>
 
       <p className="text-xs text-ink-faint">
-        Operator view — this page shows one account’s own content so you can see who is using the
+        Operator view: this page shows one account’s own content so you can see who is using the
         product and what they monitor.{" "}
         <Link href="/admin/growth" className="underline">
           Back to Growth

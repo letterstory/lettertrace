@@ -57,8 +57,8 @@ export function TrialBanner({
             </p>
             {exhausted && router && (
               <p className="mt-1 text-xs text-ink-faint">
-                One key per assistant, or a single {router.label} key that covers them all —
-                either works.
+                One key per assistant, or a single {router.label} key that covers them all.
+                Either works.
               </p>
             )}
             {!exhausted && limit <= 12 && (

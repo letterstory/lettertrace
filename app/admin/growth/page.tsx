@@ -73,7 +73,7 @@ function RunSparkline({ series }: { series: { day: string; users: number; runs: 
               fill: d.runs === 0 ? "rgb(var(--c-ink) / 0.12)" : "rgb(var(--c-mint-bright))",
             }}
           >
-            <title>{`${d.day} — ${d.runs} run${d.runs === 1 ? "" : "s"}, ${d.users} user${d.users === 1 ? "" : "s"}`}</title>
+            <title>{`${d.day} · ${d.runs} run${d.runs === 1 ? "" : "s"}, ${d.users} user${d.users === 1 ? "" : "s"}`}</title>
           </rect>
         );
       })}
@@ -107,14 +107,14 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
     <div className="space-y-10">
       <SectionHeading
         title="Growth"
-        description="Activity measured in runs, and the lead list it produces. Emails are shown in the clear here — this page exists for outbound."
+        description="Activity measured in runs, and the lead list it produces. Emails are shown in the clear here: this page exists for outbound."
         action={<PeopleDirectory accounts={report.accounts} />}
       />
 
       {report.degraded && (
         <Card className="border-terracotta/40 bg-terracotta/[0.04]">
           <p className="px-6 py-4 text-sm text-terracotta-dark">
-            Some figures could not be loaded ({report.degraded}) — treat the numbers below as
+            Some figures could not be loaded ({report.degraded}). Treat the numbers below as
             incomplete rather than as zero.
           </p>
         </Card>
@@ -279,7 +279,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           <div>
             <h3 className="text-lg font-semibold text-ink">Lapsed leads</h3>
             <p className="mt-1 max-w-2xl text-sm text-ink-faint">
-              No run in 7 days. Work addresses are the outbound list — and “never ran” is the
+              No run in 7 days. Work addresses are the outbound list, and “never ran” is the
               warmest lead: they wanted this enough to sign up, then bounced off something.
             </p>
           </div>

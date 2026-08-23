@@ -23,7 +23,7 @@ export default function PrivacyPage() {
         <p><strong>Provider API keys.</strong> If you bring your own Anthropic or OpenAI key, we store it encrypted (see §5) so scheduled runs can use it. We also store a short hint such as <code>sk-…4a9c</code> so you can tell your keys apart.</p>
         <p><strong>Lettertrace API keys.</strong> Stored only as SHA-256 hashes. The full key is shown once at creation and cannot be recovered by us or by you afterwards.</p>
         <p><strong>Usage counters.</strong> If you use trial runs on our shared provider keys, we count the runs and tokens consumed so we can apply the free-run limit.</p>
-        <p><strong>Marketing-site visitor identification.</strong> On our public marketing pages only — the homepage and legal pages, never while you are signed in to the product — we use a third-party service, RB2B, to identify the business behind a visit and, for some US-based visitors, the individual (typically name, job title, company, LinkedIn profile, and business email), inferred from network and device signals. We use this for business-to-business sales and marketing. It does not run inside the authenticated app, and it is disabled entirely on separately operated (self-hosted) deployments of the software.</p>
+        <p><strong>Marketing-site visitor identification.</strong> On our public marketing pages only (the homepage and legal pages, never while you are signed in to the product), we use a third-party service, RB2B, to identify the business behind a visit and, for some US-based visitors, the individual (typically name, job title, company, LinkedIn profile, and business email), inferred from network and device signals. We use this for business-to-business sales and marketing. It does not run inside the authenticated app, and it is disabled entirely on separately operated (self-hosted) deployments of the software.</p>
         <p>We do not use advertising trackers, we do not sell your information, and we do not build behavioural profiles of you as an account holder.</p>
       </Section>
 
@@ -87,7 +87,7 @@ export default function PrivacyPage() {
       </Section>
 
       <Section n={9} title="Cookies">
-        <p>Within the app we use cookies only for authentication — keeping you signed in and refreshing your session. On our public marketing pages, the RB2B service described in §1 also uses cookies and similar device identifiers to recognise returning business visitors. We do not use advertising cookies. Clearing your cookies signs you out.</p>
+        <p>Within the app we use cookies only for authentication: keeping you signed in and refreshing your session. On our public marketing pages, the RB2B service described in §1 also uses cookies and similar device identifiers to recognise returning business visitors. We do not use advertising cookies. Clearing your cookies signs you out.</p>
       </Section>
 
       <Section n={10} title="Children">

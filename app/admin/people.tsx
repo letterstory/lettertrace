@@ -225,7 +225,7 @@ function PeopleDialog({ accounts, onClose }: { accounts: AccountRow[]; onClose: 
           {clipped > 0 ? (
             <>
               Showing the first {shown.length.toLocaleString()} of{" "}
-              {filtered.length.toLocaleString()} — refine the search to reach the rest.
+              {filtered.length.toLocaleString()}. Refine the search to reach the rest.
             </>
           ) : (
             <>

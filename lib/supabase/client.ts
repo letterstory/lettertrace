@@ -34,7 +34,7 @@ export function createClient() {
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
       "Supabase browser config is missing. Set NEXT_PUBLIC_SUPABASE_URL and " +
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY in the server environment — see the " +
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY in the server environment. See the " +
         "self-hosting section of the README.",
     );
   }

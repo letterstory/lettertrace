@@ -64,7 +64,7 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
               <p className="font-semibold text-ink">Access is gated on email addresses</p>
               <p className="text-ink-soft">
                 Safe only while every address in{" "}
-                <code className="font-mono text-xs">ADMIN_EMAILS</code> already has an account —
+                <code className="font-mono text-xs">ADMIN_EMAILS</code> already has an account:
                 signup issues a session immediately, so an allowlisted address nobody has
                 registered can be claimed by whoever guesses it. Set{" "}
                 <code className="font-mono text-xs">ADMIN_USER_IDS</code> instead.
@@ -118,12 +118,12 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
                   `${live.failures.length} distinct run failure${live.failures.length === 1 ? "" : "s"}. `}
                 {!failing &&
                   (live.runs24h.total === 0
-                    ? `No runs in the last ${win.label} — nothing has failed, but nothing has been exercised either.`
+                    ? `No runs in the last ${win.label}: nothing has failed, but nothing has been exercised either.`
                     : `${live.runs24h.completed} of ${live.runs24h.completed + live.runs24h.failed} runs completed.`)}
               </p>
               {live.degraded && (
                 <p className="text-sm text-terracotta-dark">
-                  Some figures could not be loaded ({live.degraded}) — treat the numbers below as
+                  Some figures could not be loaded ({live.degraded}). Treat the numbers below as
                   incomplete rather than as zero.
                 </p>
               )}
@@ -206,7 +206,7 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
 
       <p className="text-xs text-ink-faint">
         Last run {timeAgo(live.lastRunAt)}. Nothing on this page records or displays customer
-        content — prompts, answers and brand names are never written to telemetry.{" "}
+        content: prompts, answers and brand names are never written to telemetry.{" "}
         <Link href="/dashboard" className="underline">
           Back to dashboard
         </Link>

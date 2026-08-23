@@ -68,7 +68,7 @@ export function ScheduleControl({
             <p className="text-sm font-medium text-ink">Automatic runs</p>
             {!scheduled && (
               <p className="text-xs text-ink-faint">
-                Run your prompts on a schedule — around 8:00 UTC — instead of by
+                Run your prompts on a schedule (around 8:00 UTC) instead of by
                 hand, and build a trend over time.
               </p>
             )}

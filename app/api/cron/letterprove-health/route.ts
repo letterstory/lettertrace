@@ -99,7 +99,7 @@ async function handle(request: Request) {
         ...lines,
         "",
         `Configured origin: ${origin}`,
-        "Set NEXT_PUBLIC_LETTERPROVE_ORIGIN if Letterprove has moved, then redeploy —",
+        "Set NEXT_PUBLIC_LETTERPROVE_ORIGIN if Letterprove has moved, then redeploy:",
         "the origin is read at build time.",
       ].join("\n"),
     });
