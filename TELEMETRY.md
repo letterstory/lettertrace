@@ -23,9 +23,15 @@ until it reaches Production.
 
 One property of this deployment shapes how you read the stream, and it is not a
 bug: the app is serverless, so it emits only while a function instance is alive.
-Idle stretches produce real gaps — over the first 18 hours of export, twenty
-gaps longer than 5 minutes, the longest 12.5 minutes. A short silence is the app
-being idle, not the app being down.
+Idle stretches produce real gaps, and they are wider than the first day
+suggested. Over the first 18 hours the longest was 12.5 minutes; four more days
+showed the actual rhythm. Traffic is dominated by an API client that polls
+`/api/v1/**` in a burst during the second half of every hour, so **the stream
+has an hourly heartbeat, not a continuous one**. Between bursts only sparse
+organic traffic fills the gap, and on a quiet day it does not: measured silences
+reached **33 minutes** with the app fully healthy. A short silence is the app
+being idle, not the app being down, and any telemetry-down alarm here has to be
+wider than that client's own period.
 
 ## What monitoring also exists
 
@@ -171,7 +177,21 @@ OTel log record: body `<kind>: <signature>`, severity from the ops level, and
 the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
 `ops.provider`, …). The signature is the one `signatureOf()` already scrubbed,
 so ids and numbers are collapsed and no content rides along. `run.failed` and
-`error` records are the error stream worth alerting on.
+`error` records are the error stream worth alerting on. Unlike spans, log
+records arrive **once** — the double delivery above is a span artifact, so
+`count()` is the right counting form here.
+
+Two cautions before alerting on either kind. A `run.failed` record is **not**
+always a fault: `lib/engine.ts` derives the run status from `succeeded === 0`,
+so a trial-funded run that halts at the free-usage limit having stored nothing
+lands under the same kind as a run the engines killed. `ops.budget_stopped`
+separates the pricing event from the outage and is carried on every record. And
+an `error` record is **not** a failed call: each retry inside `runQuery` writes
+its own row while the surrounding `llm.query` span stays open, so a transient
+fault the next attempt fixes still reaches the log stream — on 2026-08-20,
+"OpenAI returned an empty answer." appeared 26 times against zero failed OpenAI
+spans. Count spans to judge whether the engines are working; read the logs to
+learn what they are struggling with.
 
 One caveat on that stream: an `error` record is not the same as a failed call.
 Retries inside `runQuery` each record their own ops row while the surrounding
