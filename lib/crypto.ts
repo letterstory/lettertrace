@@ -171,3 +171,12 @@ export function normalizeUserCode(input: string): string {
 export function oauthTokenHint(plaintext: string): string {
   return keyHint(plaintext);
 }
+
+/**
+ * Share link: an opaque, high-entropy token presented in a public URL to
+ * view one run's report with no login. Same contract as every other bearer
+ * secret above — stored only as its sha256Hex digest, plaintext shown once.
+ */
+export function generateShareToken(): string {
+  return `lt_share_${crypto.randomBytes(32).toString("base64url")}`;
+}

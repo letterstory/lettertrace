@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
-import { ArrowLeft, ExternalLink, Globe } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
-import { getProject } from "@/lib/data";
+import { ExternalLink, Globe } from "lucide-react";
+import { createServiceClient } from "@/lib/supabase/service";
+import { resolveShareToken } from "@/lib/share-links";
 import { modelLabel } from "@/lib/models";
 import { pct, timeAgo } from "@/lib/utils";
 import {
@@ -13,6 +13,7 @@ import {
 import type {
   Competitor,
   Mention,
+  Project,
   Prompt,
   Response,
   Run,
@@ -20,19 +21,21 @@ import type {
   Sentiment,
   Source,
 } from "@/lib/types";
-import {
-  Card,
-  CardBody,
-  SectionHeading,
-  Badge,
-  StatCard,
-  EmptyState,
-} from "@/components/ui";
+import { Card, CardBody, SectionHeading, Badge, StatCard, EmptyState } from "@/components/ui";
 import { isAbandoned, settleAbandonedRun, INTERRUPTED_RUN_ERROR } from "@/lib/engine";
-import { MarkResultsSeen } from "./mark-seen";
-import ShareRunButton from "./share-run-button";
 
 export const dynamic = "force-dynamic";
+export const metadata = { robots: { index: false, follow: false } };
+
+// The anonymous, no-login view of one run's report -- see the "Sharing a
+// run" section in README.md and lib/share-links.ts for what this is and why.
+//
+// This deliberately has its own fetch + render, rather than reusing
+// app/dashboard/runs/[id]/page.tsx: keeping that page untouched was chosen
+// over de-duplicating this logic, so the two views can (and will) drift in
+// minor ways over time. There is no MarkResultsSeen, no back-to-dashboard
+// link, no sign-up CTA, and no revoke control -- the viewer has nowhere
+// authenticated to go, and there's nothing here for them to manage.
 
 const STATUS_TONE: Record<RunStatus, "mint" | "teal" | "terracotta" | "neutral"> = {
   completed: "mint",
@@ -52,68 +55,61 @@ function SentimentDot({ sentiment }: { sentiment: Sentiment | null }) {
   );
 }
 
-export default async function RunDetailPage({ params }: { params: { id: string } }) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+export default async function SharedRunPage({ params }: { params: { token: string } }) {
+  const db = createServiceClient();
 
-  const project = await getProject(supabase, user.id);
-  if (!project) {
-    return (
-      <div className="space-y-8">
-        <SectionHeading title="Run" />
-        <EmptyState title="No project yet" description="Create your project to view runs." />
-      </div>
-    );
-  }
+  // An unknown, malformed, or expired token, and a since-deleted run or
+  // project, all take this SAME notFound() path -- see
+  // resolveShareToken's own comment on why the failure modes are merged.
+  const resolved = await resolveShareToken(db, params.token);
+  if (!resolved) notFound();
 
-  const { data: runRow } = await supabase
+  const { data: runRow } = await db
     .from("runs")
     .select("*")
-    .eq("id", params.id)
-    .eq("project_id", project.id)
+    .eq("id", resolved.runId)
     .maybeSingle();
   if (!runRow) notFound();
-  const run = runRow as Run;
+  let run = runRow as Run;
 
-  // Self-heal a provably-dead run on read, like the runs list and the status
-  // endpoint — so opening a stuck run shows "failed" with its partial answers,
-  // not a phantom "running".
-  if (isAbandoned(run) && (await settleAbandonedRun(supabase, run.id, INTERRUPTED_RUN_ERROR))) {
-    run.status = "failed";
-    run.error = INTERRUPTED_RUN_ERROR;
-    run.finished_at = new Date().toISOString();
+  if (isAbandoned(run) && (await settleAbandonedRun(db, run.id, INTERRUPTED_RUN_ERROR))) {
+    run = {
+      ...run,
+      status: "failed",
+      error: INTERRUPTED_RUN_ERROR,
+      finished_at: new Date().toISOString(),
+    };
   }
 
-  const { data: responseRows } = await supabase
+  const { data: projectRow } = await db
+    .from("projects")
+    .select("*")
+    .eq("id", run.project_id)
+    .maybeSingle();
+  if (!projectRow) notFound();
+  const project = projectRow as Project;
+
+  const { data: responseRows } = await db
     .from("responses")
     .select("*")
     .eq("run_id", run.id)
     .order("created_at", { ascending: true });
   const responses = (responseRows ?? []) as Response[];
 
-  const { data: mentionRows } = await supabase
-    .from("mentions")
-    .select("*")
-    .eq("run_id", run.id);
+  const { data: mentionRows } = await db.from("mentions").select("*").eq("run_id", run.id);
   const mentions = (mentionRows ?? []) as Mention[];
 
-  const { data: sourceRows } = await supabase
-    .from("sources")
-    .select("*")
-    .eq("run_id", run.id);
+  const { data: sourceRows } = await db.from("sources").select("*").eq("run_id", run.id);
   const sources = (sourceRows ?? []) as Source[];
 
-  const { data: promptRows } = await supabase
+  const { data: promptRows } = await db
     .from("prompts")
     .select("*")
     .eq("project_id", project.id);
   const prompts = (promptRows ?? []) as Prompt[];
   const promptText = new Map(prompts.map((p) => [p.id, p.text]));
 
-  const { data: competitorRows } = await supabase
+  const { data: competitorRows } = await db
     .from("competitors")
     .select("id, name, domain, aliases")
     .eq("project_id", project.id);
@@ -140,10 +136,6 @@ export default async function RunDetailPage({ params }: { params: { id: string }
   const brand = stats.find((s) => s.type === "brand");
   const topCompetitor = stats.find((s) => s.type === "competitor");
 
-  // Competitors per QUESTION, aggregated across replicates — the view the
-  // per-answer list below can't give: for each question, who gets named (and
-  // whose site gets cited), and where the brand is missing entirely. The two
-  // signals are separate events: named in the prose vs. cited as a source.
   const citedRateByPrompt = new Map<string, Map<string, number>>();
   for (const pc of computeCompetitorCitations(sources, competitors, responses, prompts)) {
     citedRateByPrompt.set(
@@ -168,7 +160,6 @@ export default async function RunDetailPage({ params }: { params: { id: string }
           mentionRate: e.mentionRate,
           citedRate: cited?.get(e.name.toLowerCase()) ?? 0,
         }));
-      // Rivals cited but never named must still show — being read is a real signal.
       if (cited) {
         for (const [nameLower, citedRate] of cited) {
           if (!rivals.some((r) => r.name.toLowerCase() === nameLower)) {
@@ -189,14 +180,12 @@ export default async function RunDetailPage({ params }: { params: { id: string }
         totalResponses: ps.totalResponses,
         brandMentionRate: brandRow?.mentionRate ?? 0,
         rivals,
-        // The brand is absent while a rival shows up strongly — the ground to build.
         gap:
           (brandRow?.mentionRate ?? 0) === 0 &&
           rivals.some((r) => Math.max(r.mentionRate, r.citedRate) >= 0.3),
       };
     })
     .filter((p) => p.rivals.length > 0)
-    // Gaps first, then the questions rivals win hardest.
     .sort((a, b) => {
       if (a.gap !== b.gap) return a.gap ? -1 : 1;
       const at = Math.max(0, ...a.rivals.map((r) => Math.max(r.mentionRate, r.citedRate)));
@@ -204,33 +193,24 @@ export default async function RunDetailPage({ params }: { params: { id: string }
       return bt - at;
     });
 
-  // Was the brand's own site cited? A leading indicator independent of mentions.
   const ownedResponseIds = new Set(sources.filter((s) => s.is_owned).map((s) => s.response_id));
   const anySources = sources.length > 0;
 
   return (
-    <div className="space-y-8">
-      {/* Reaching this page is what "checked the results" means, so it clears
-          the dashboard nudge however the user arrived. */}
-      <MarkResultsSeen runId={run.id} />
+    <div className="mx-auto max-w-4xl space-y-8 p-6">
       <div className="space-y-4">
-        <a
-          href="/dashboard/runs"
-          className="inline-flex items-center gap-1 text-sm text-ink-faint hover:text-ink"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to runs
-        </a>
         <SectionHeading
           title="Run results"
           description={`${modelLabel(run.provider, run.model)} · ${run.completed_count} / ${run.prompt_count} answers · ${timeAgo(run.created_at)}`}
-          action={
-            <div className="flex items-center gap-3">
-              <ShareRunButton runId={run.id} />
-              <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
-            </div>
-          }
+          action={<Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>}
         />
-        {run.error && <p className="text-sm text-terracotta">{run.error}</p>}
+        {/* run.error is never rendered here, unlike the owner's dashboard view:
+            it can carry trial/budget text ("this account reached its free-usage
+            limit...") EVEN ON A COMPLETED RUN (see lib/engine.ts), plus raw
+            provider error strings -- none of it is the recipient's business. */}
+        {run.status === "failed" && (
+          <p className="text-sm text-terracotta">This run did not complete successfully.</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -284,7 +264,7 @@ export default async function RunDetailPage({ params }: { params: { id: string }
         <div className="space-y-3">
           <SectionHeading
             title="Competitors by question"
-            description="Across all replicates: who gets named, and whose site gets cited, for each question. “You’re missing” flags where a competitor shows up and your brand doesn’t."
+            description="Across all replicates: who gets named — and whose site gets cited — for each question. “You’re missing” flags where a competitor shows up and your brand doesn’t."
           />
           <div className="space-y-3">
             {competitionByPrompt.map((p) => (
