@@ -37,6 +37,26 @@ export interface RunContext {
 // seconds short of done. 8-wide it clears the ceiling with half left over.
 const CONCURRENCY = 8;
 
+// Per-provider override, for engines whose published rate limit is tighter than
+// 8-wide traffic. Added 2026-08-23 after incident #108: Perplexity's entry tier
+// allows 50 requests/minute, and a sonar answer takes ~5.5s, so an 8-wide pool
+// offers ~87 requests/minute — comfortably over the ceiling, sustained for the
+// whole run. A 76-question run was refused 46 times in 40 seconds. 4-wide is
+// ~44/minute, which fits under the limit with margin to spare and still clears
+// the 300s invocation ceiling for a full-size run (60 answers ≈ 83s).
+//
+// This paces us BELOW the limit; the retry/Retry-After path in the Perplexity
+// adapter is the safety net for the bursts that still get through. Both are
+// needed — pacing alone can't survive a shared key, and retrying alone means
+// every run pays a 60-second rate-limit window it could have avoided.
+const PROVIDER_CONCURRENCY: Partial<Record<Provider, number>> = {
+  perplexity: 4,
+};
+
+function concurrencyFor(provider: Provider): number {
+  return PROVIDER_CONCURRENCY[provider] ?? CONCURRENCY;
+}
+
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
 // wider pool doesn't make completed_count staler for whoever reads it mid-run.
@@ -400,7 +420,7 @@ async function resumeRunMeasured(
   let budgetStopped = false;
   const overBudget = () => ceiling !== null && spentMicros >= ceiling;
 
-  await mapPool(jobs, CONCURRENCY, async (prompt) => {
+  await mapPool(jobs, concurrencyFor(provider), async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
     // the point where in-flight answers have already reported their cost. Jobs
     // already dispatched finish and are kept — a stored answer is real data,
