@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  clicksSince,
+  isPeriod,
   normalizeProductUrl,
+  periodStart,
   productOf,
   shapeConversionStats,
   shapeConnectedUsers,
+  shapeRateSeries,
   type OutboundClickRow,
 } from "./conversions";
 import type { GrowthProfileRow } from "./growth";
@@ -72,6 +76,29 @@ describe("productOf", () => {
   });
 });
 
+describe("periods", () => {
+  it("validates period strings", () => {
+    expect(isPeriod("7d")).toBe(true);
+    expect(isPeriod("all")).toBe(true);
+    expect(isPeriod("90d")).toBe(false);
+    expect(isPeriod(undefined)).toBe(false);
+  });
+
+  it("opens 7d/30d as rolling windows, ytd at Jan 1 UTC, all as null", () => {
+    expect(periodStart("7d", NOW)).toBe(NOW - 7 * DAY_MS);
+    expect(periodStart("30d", NOW)).toBe(NOW - 30 * DAY_MS);
+    expect(periodStart("ytd", NOW)).toBe(Date.parse("2026-01-01T00:00:00.000Z"));
+    expect(periodStart("all", NOW)).toBeNull();
+  });
+
+  it("clicksSince keeps everything for null and filters otherwise", () => {
+    const clicks = [click({ clicked_at: iso(1) }), click({ clicked_at: iso(20) })];
+    expect(clicksSince(clicks, null)).toHaveLength(2);
+    expect(clicksSince(clicks, NOW - 7 * DAY_MS)).toHaveLength(1);
+    expect(clicksSince([click({ clicked_at: "not a date" })], NOW - 7 * DAY_MS)).toHaveLength(0);
+  });
+});
+
 describe("shapeConversionStats", () => {
   it("counts distinct connected and computes a one-decimal rate", () => {
     const clicks = [
@@ -79,47 +106,101 @@ describe("shapeConversionStats", () => {
       click({ user_id: "u1", clicked_at: iso(1) }),
       click({ user_id: "u2", url: "https://letterbrace.com/pricing" }),
     ];
-    const stats = shapeConversionStats(clicks, 4, NOW);
+    const stats = shapeConversionStats(clicks, 4, null);
     expect(stats.connectedUsers).toBe(2);
     expect(stats.totalUsers).toBe(4);
     expect(stats.rate).toBe(50);
-    expect(stats.clicksTotal).toBe(3);
+    expect(stats.clicks).toBe(3);
   });
 
   it("keeps sub-percent rates visible instead of rounding to zero", () => {
-    const stats = shapeConversionStats([click({})], 300, NOW);
+    const stats = shapeConversionStats([click({})], 300, null);
     expect(stats.rate).toBe(0.3);
   });
 
-  it("windows clicks at 7 and 30 days", () => {
+  it("scopes to the period while keeping all-time companions", () => {
     const clicks = [
-      click({ clicked_at: iso(0, 2) }),
-      click({ clicked_at: iso(10) }),
-      click({ clicked_at: iso(45) }),
+      click({ user_id: "u1", clicked_at: iso(0, 2) }),
+      click({ user_id: "u2", clicked_at: iso(10) }),
+      click({ user_id: "u3", clicked_at: iso(45) }),
     ];
-    const stats = shapeConversionStats(clicks, 10, NOW);
-    expect(stats.clicks7d).toBe(1);
-    expect(stats.clicks30d).toBe(2);
-    expect(stats.clicksTotal).toBe(3);
+    const stats = shapeConversionStats(clicks, 10, NOW - 7 * DAY_MS);
+    expect(stats.connectedUsers).toBe(1);
+    expect(stats.clicks).toBe(1);
+    expect(stats.rate).toBe(10);
+    expect(stats.connectedAllTime).toBe(3);
+    expect(stats.clicksAllTime).toBe(3);
   });
 
-  it("picks the most clicked product as top destination", () => {
+  it("picks the most clicked product in the period as top destination", () => {
     const clicks = [
       click({}),
       click({ clicked_at: iso(1) }),
-      click({ user_id: "u2", url: "https://letterbrace.com" }),
+      click({ user_id: "u2", url: "https://letterbrace.com", clicked_at: iso(45) }),
     ];
-    expect(shapeConversionStats(clicks, 10, NOW).topProduct).toEqual({
+    expect(shapeConversionStats(clicks, 10, NOW - 30 * DAY_MS).topProduct).toEqual({
       product: "phantomstory.com",
       clicks: 2,
     });
   });
 
   it("returns null rate and top product when there is nothing to divide", () => {
-    const stats = shapeConversionStats([], 0, NOW);
+    const stats = shapeConversionStats([], 0, null);
     expect(stats.rate).toBeNull();
     expect(stats.topProduct).toBeNull();
     expect(stats.connectedUsers).toBe(0);
+  });
+});
+
+describe("shapeRateSeries", () => {
+  it("builds one point per day with a cumulative rate over signups as of that day", () => {
+    // u2 signed up 20d ago, u3 3d ago (PROFILES); period covers last 7 days.
+    const clicks = [
+      click({ user_id: "u2", clicked_at: iso(5) }),
+      click({ user_id: "u2", clicked_at: iso(2) }),
+      click({ user_id: "u3", clicked_at: iso(2) }),
+    ];
+    const series = shapeRateSeries(clicks, PROFILES, NOW - 7 * DAY_MS, NOW);
+    expect(series).toHaveLength(8); // 7 full days back plus today
+
+    const day5 = series.find((p) => p.day === iso(5).slice(0, 10))!;
+    // By 5d ago: u1/u2/u4 signed up (u3 hadn't yet), u2 connected.
+    expect(day5.connected).toBe(1);
+    expect(day5.signups).toBe(3);
+    expect(day5.rate).toBe(33.3);
+    expect(day5.clicks).toBe(1);
+
+    const last = series.at(-1)!;
+    expect(last.connected).toBe(2);
+    expect(last.signups).toBe(4);
+    expect(last.rate).toBe(50);
+  });
+
+  it("matches the headline stat at its right edge", () => {
+    const clicks = [
+      click({ user_id: "u1", clicked_at: iso(6) }),
+      click({ user_id: "u2", clicked_at: iso(1) }),
+    ];
+    const since = NOW - 7 * DAY_MS;
+    const series = shapeRateSeries(clicks, PROFILES, since, NOW);
+    const stats = shapeConversionStats(clicks, PROFILES.length, since);
+    expect(series.at(-1)!.rate).toBe(stats.rate);
+  });
+
+  it("starts at the first click for all-time, and is empty with no clicks", () => {
+    const series = shapeRateSeries([click({ clicked_at: iso(3) })], PROFILES, null, NOW);
+    expect(series[0].day).toBe(iso(3).slice(0, 10));
+    expect(shapeRateSeries([], PROFILES, null, NOW)).toEqual([]);
+  });
+
+  it("ignores clicks from the future and unparseable timestamps", () => {
+    const clicks = [
+      click({ clicked_at: iso(-2) }),
+      click({ clicked_at: "not a date" }),
+      click({ user_id: "u2", clicked_at: iso(1) }),
+    ];
+    const series = shapeRateSeries(clicks, PROFILES, NOW - 7 * DAY_MS, NOW);
+    expect(series.at(-1)!.connected).toBe(1);
   });
 });
 
