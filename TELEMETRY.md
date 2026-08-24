@@ -193,14 +193,6 @@ fault the next attempt fixes still reaches the log stream — on 2026-08-20,
 spans. Count spans to judge whether the engines are working; read the logs to
 learn what they are struggling with.
 
-One caveat on that stream: an `error` record is not the same as a failed call.
-Retries inside `runQuery` each record their own ops row while the surrounding
-`llm.query` span stays open, so a transient fault that the next attempt fixes
-still lands as an error log. On 2026-08-20, "OpenAI returned an empty answer"
-appeared 26 times against zero failed OpenAI spans — every one of them
-recovered on retry. Count spans to judge whether the engines are working;
-read the logs to find out what they are struggling with.
-
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer
 domains are not, on any span attribute, metric attribute or log body. Span
