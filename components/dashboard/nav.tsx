@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { OutboundLink } from "@/components/outbound-link";
 
 interface NavItem {
   href: string;
@@ -41,9 +42,10 @@ export function DashboardNav() {
           {/* Phantomstory sits above Settings: a nav-shaped item that is really
               an external link, and dressed to say so — the brand mark renders
               greyscale until hover brings the colour up, and the corner arrow
-              is right-aligned where a route item would have nothing. */}
+              is right-aligned where a route item would have nothing.
+              OutboundLink so the click lands on /admin/conversions. */}
           {href === "/dashboard/settings" && (
-            <a
+            <OutboundLink
               href="https://phantomstory.com"
               target="_blank"
               rel="noreferrer"
@@ -61,7 +63,7 @@ export function DashboardNav() {
                 className="ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft"
                 aria-hidden
               />
-            </a>
+            </OutboundLink>
           )}
           <Link
             href={href}

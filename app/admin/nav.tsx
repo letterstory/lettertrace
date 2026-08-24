@@ -22,6 +22,11 @@ const TABS = [
       p.startsWith("/admin/runs") ||
       p.startsWith("/admin/accounts"),
   },
+  {
+    href: "/admin/conversions",
+    label: "Conversions",
+    match: (p: string) => p.startsWith("/admin/conversions"),
+  },
 ];
 
 export function AdminNav() {
