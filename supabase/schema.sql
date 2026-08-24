@@ -1243,3 +1243,29 @@ create policy "web_mentions_owner" on public.web_mentions
 drop policy if exists "search_keys_owner" on public.search_keys;
 create policy "search_keys_owner" on public.search_keys
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---------- outbound_clicks (cross-product conversions) -------------------
+--
+-- One row per click on a link that leaves lettertrace for another Letter
+-- Company product (phantomstory, letterbrace, ...). Written server-side by
+-- POST /api/out after cookie auth, read only by the staff-gated /admin
+-- Conversions page — so, like ops_events, RLS is ON WITH NO POLICIES:
+-- default-deny for every cookie client, service role on both ends.
+--
+-- The URL is stored normalized (origin + path, no query/hash) and only for
+-- hosts on the Letter product allow-list (lib/conversions.ts), so the table
+-- can't be filled with junk by an authenticated caller poking the endpoint.
+-- Safe to re-run.
+create table if not exists public.outbound_clicks (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  url        text not null,
+  clicked_at timestamptz not null default now()
+);
+
+create index if not exists idx_outbound_clicks_user on public.outbound_clicks (user_id, clicked_at desc);
+create index if not exists idx_outbound_clicks_time on public.outbound_clicks (clicked_at desc);
+
+alter table public.outbound_clicks enable row level security;
+
+revoke insert, update, delete on table public.outbound_clicks from anon, authenticated;
