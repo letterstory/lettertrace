@@ -76,43 +76,82 @@ export interface OutboundClickRow {
 }
 
 // ---------------------------------------------------------------------------
+// Periods
+// ---------------------------------------------------------------------------
+
+/** The page's one time filter: every number, the chart, and the table read the
+ *  same window, so the period is a page-level URL param rather than per-card
+ *  state. (The option labels live with the dropdown in period-select.tsx,
+ *  which is a client component and must not import this server module.) */
+export type Period = "7d" | "30d" | "ytd" | "all";
+
+export function isPeriod(value: unknown): value is Period {
+  return value === "7d" || value === "30d" || value === "ytd" || value === "all";
+}
+
+/** When the period opens, as a ms timestamp — null means all-time. YTD is
+ *  Jan 1 UTC, matching the UTC day-bucketing everywhere else on /admin. */
+export function periodStart(period: Period, now: number): number | null {
+  switch (period) {
+    case "7d":
+      return now - 7 * DAY_MS;
+    case "30d":
+      return now - 30 * DAY_MS;
+    case "ytd":
+      return Date.UTC(new Date(now).getUTCFullYear(), 0, 1);
+    case "all":
+      return null;
+  }
+}
+
+/** Clicks at or after `since` (null = everything). Unparseable timestamps drop
+ *  here rather than in every consumer. */
+export function clicksSince(clicks: OutboundClickRow[], since: number | null): OutboundClickRow[] {
+  if (since === null) return clicks;
+  return clicks.filter((c) => {
+    const t = Date.parse(c.clicked_at);
+    return Number.isFinite(t) && t >= since;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The headline numbers
 // ---------------------------------------------------------------------------
 
 export interface ConversionStats {
-  /** Distinct users with at least one recorded click, ever. */
+  /** Distinct users with at least one click inside the period. */
   connectedUsers: number;
   totalUsers: number;
   /** connectedUsers / totalUsers as a percentage with one decimal, null until
    *  there is anyone to divide by. One decimal because early on the honest
    *  number is 0.x% — a rounded 0% reads as "feature is broken". */
   rate: number | null;
-  clicks7d: number;
-  clicks30d: number;
-  clicksTotal: number;
-  /** Most-clicked product host, for the "where do they go" card. */
+  /** Clicks inside the period. */
+  clicks: number;
+  /** All-time companions, so a narrow period keeps its context in the hints. */
+  connectedAllTime: number;
+  clicksAllTime: number;
+  /** Most-clicked product host inside the period. */
   topProduct: { product: string; clicks: number } | null;
 }
 
 const DAY_MS = 86_400_000;
 
+/** Takes ALL clicks and scopes internally — the all-time companions come from
+ *  the same pass, so callers never juggle two filtered arrays. */
 export function shapeConversionStats(
   clicks: OutboundClickRow[],
   totalUsers: number,
-  now: number,
+  since: number | null,
 ): ConversionStats {
+  const inPeriod = clicksSince(clicks, since);
   const users = new Set<string>();
+  const allUsers = new Set<string>();
   const byProduct = new Map<string, number>();
-  let clicks7d = 0;
-  let clicks30d = 0;
 
-  for (const click of clicks) {
+  for (const click of clicks) allUsers.add(click.user_id);
+  for (const click of inPeriod) {
     users.add(click.user_id);
-    const t = Date.parse(click.clicked_at);
-    if (Number.isFinite(t) && t <= now) {
-      if (t >= now - 7 * DAY_MS) clicks7d += 1;
-      if (t >= now - 30 * DAY_MS) clicks30d += 1;
-    }
     const product = productOf(click.url);
     byProduct.set(product, (byProduct.get(product) ?? 0) + 1);
   }
@@ -122,11 +161,83 @@ export function shapeConversionStats(
     connectedUsers: users.size,
     totalUsers,
     rate: totalUsers > 0 ? Math.round((users.size / totalUsers) * 1000) / 10 : null,
-    clicks7d,
-    clicks30d,
-    clicksTotal: clicks.length,
+    clicks: inPeriod.length,
+    connectedAllTime: allUsers.size,
+    clicksAllTime: clicks.length,
     topProduct: top ? { product: top[0], clicks: top[1] } : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The rate over time (the chart under the stat row)
+// ---------------------------------------------------------------------------
+
+export interface RatePoint {
+  /** UTC date, YYYY-MM-DD. */
+  day: string;
+  /** Cumulative-within-period connected rate as of this day's end: distinct
+   *  users who clicked between the period start and this day, over signups
+   *  that existed by this day. Null while there are no signups to divide by. */
+  rate: number | null;
+  /** Cumulative connected users behind that rate. */
+  connected: number;
+  /** Clicks on this day alone. */
+  clicks: number;
+  signups: number;
+}
+
+/** One point per UTC day from the period start (or the first click, for
+ *  all-time) through today. The denominator is signups AS OF each day, not
+ *  today's — so the curve is the rate as it actually stood, and its last
+ *  point equals the headline card. */
+export function shapeRateSeries(
+  clicks: OutboundClickRow[],
+  profiles: GrowthProfileRow[],
+  since: number | null,
+  now: number,
+): RatePoint[] {
+  const inPeriod = clicksSince(clicks, since)
+    .map((c) => ({ ...c, t: Date.parse(c.clicked_at) }))
+    .filter((c) => Number.isFinite(c.t) && c.t <= now)
+    .sort((a, b) => a.t - b.t);
+
+  const firstDay = since ?? inPeriod[0]?.t;
+  if (firstDay === undefined) return [];
+
+  const signupTimes = profiles
+    .map((p) => Date.parse(p.created_at))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  const startDay = new Date(firstDay).toISOString().slice(0, 10);
+  const series: RatePoint[] = [];
+  const connected = new Set<string>();
+  let clickIdx = 0;
+  let signupIdx = 0;
+
+  for (
+    let dayStart = Date.parse(`${startDay}T00:00:00.000Z`);
+    dayStart <= now;
+    dayStart += DAY_MS
+  ) {
+    const dayEnd = dayStart + DAY_MS;
+    let dayClicks = 0;
+    while (clickIdx < inPeriod.length && inPeriod[clickIdx].t < dayEnd) {
+      connected.add(inPeriod[clickIdx].user_id);
+      dayClicks += 1;
+      clickIdx += 1;
+    }
+    while (signupIdx < signupTimes.length && signupTimes[signupIdx] < dayEnd) signupIdx += 1;
+
+    series.push({
+      day: new Date(dayStart).toISOString().slice(0, 10),
+      rate: signupIdx > 0 ? Math.round((connected.size / signupIdx) * 1000) / 10 : null,
+      connected: connected.size,
+      clicks: dayClicks,
+      signups: signupIdx,
+    });
+  }
+  return series;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +299,7 @@ export function shapeConnectedUsers(
 
 export interface ConversionsReport {
   stats: ConversionStats;
+  series: RatePoint[];
   connected: ConnectedUser[];
   /** Set when a query failed — the page says "incomplete", never fake zero. */
   degraded: string | null;
@@ -197,7 +309,10 @@ export interface ConversionsReport {
  *  the day it isn't is the day this earns aggregation SQL. */
 const ROWS_CAP = 10_000;
 
-export async function conversionsReport(now = Date.now()): Promise<ConversionsReport> {
+export async function conversionsReport(
+  period: Period = "30d",
+  now = Date.now(),
+): Promise<ConversionsReport> {
   const svc = createServiceClient();
 
   const [clicksQ, profilesQ] = await Promise.all([
@@ -214,10 +329,14 @@ export async function conversionsReport(now = Date.now()): Promise<ConversionsRe
   );
   const clicks = (clicksQ.data ?? []) as OutboundClickRow[];
   const profiles = (profilesQ.data ?? []) as GrowthProfileRow[];
+  const since = periodStart(period, now);
 
   return {
-    stats: shapeConversionStats(clicks, profiles.length, now),
-    connected: shapeConnectedUsers(clicks, profiles),
+    stats: shapeConversionStats(clicks, profiles.length, since),
+    series: shapeRateSeries(clicks, profiles, since, now),
+    // The table reads through the same window: destinations, counts and
+    // first/latest are period-scoped, so it always agrees with the cards.
+    connected: shapeConnectedUsers(clicksSince(clicks, since), profiles),
     degraded: failed.length > 0 ? failed.join(", ") : null,
   };
 }

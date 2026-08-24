@@ -3,10 +3,12 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
-import { conversionsReport } from "@/lib/conversions";
+import { conversionsReport, isPeriod, type Period, type RatePoint } from "@/lib/conversions";
 import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
+import { PeriodSelect } from "./period-select";
+import { PERIOD_OPTIONS } from "./periods";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -41,17 +43,94 @@ function ColumnHeader({ children, className }: { children: React.ReactNode; clas
   );
 }
 
-export default async function ConversionsPage() {
+/**
+ * The connected rate as it stood at each day's end — cumulative within the
+ * period, over the signups that existed then, so the right edge always equals
+ * the headline card. Same construction as Growth's RunSparkline: inline SVG,
+ * numbers in <title> tooltips, colors through style because CSS var() only
+ * resolves in styles. One series, so the title is the legend.
+ */
+function RateChart({ series }: { series: RatePoint[] }) {
+  const points = series.filter((p) => p.rate !== null) as (RatePoint & { rate: number })[];
+  if (points.length === 0) return null;
+
+  const W = 600;
+  const H = 110;
+  const PAD_TOP = 8;
+  const max = Math.max(0.1, ...points.map((p) => p.rate));
+  const x = (i: number) => (points.length === 1 ? W / 2 : (i / (points.length - 1)) * W);
+  const y = (rate: number) => H - 4 - (rate / max) * (H - 4 - PAD_TOP);
+  // One point can't make a line, so it becomes a flat one edge to edge — and
+  // the fill reuses these same coordinates so it always sits under the line.
+  const linePoints =
+    points.length === 1
+      ? [`0,${y(points[0].rate).toFixed(1)}`, `${W},${y(points[0].rate).toFixed(1)}`]
+      : points.map((p, i) => `${x(i).toFixed(1)},${y(p.rate).toFixed(1)}`);
+  const line = linePoints.join(" ");
+  const bandW = W / points.length;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      className="h-36 w-full"
+      role="img"
+      aria-label="Connected rate over time"
+    >
+      {/* Baseline at 0% — the one recessive gridline this needs. */}
+      <line x1={0} y1={H - 4} x2={W} y2={H - 4} style={{ stroke: "rgb(var(--c-ink) / 0.12)", strokeWidth: 1 }} vectorEffect="non-scaling-stroke" />
+      <polygon
+        points={`0,${H - 4} ${line} ${W},${H - 4}`}
+        style={{ fill: "rgb(var(--c-mint-bright) / 0.12)" }}
+      />
+      <polyline
+        points={line}
+        style={{ fill: "none", stroke: "rgb(var(--c-mint-bright))", strokeWidth: 2 }}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+      {/* Invisible per-day bands: hit targets wider than the marks, carrying
+          the native tooltip with the numbers for that day. */}
+      {points.map((p, i) => (
+        <rect
+          key={p.day}
+          x={x(i) - bandW / 2}
+          y={0}
+          width={bandW}
+          height={H}
+          fill="transparent"
+        >
+          <title>{`${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups) · ${p.clicks} click${p.clicks === 1 ? "" : "s"} this day`}</title>
+        </rect>
+      ))}
+    </svg>
+  );
+}
+
+type SP = Record<string, string | string[] | undefined>;
+
+function periodFrom(searchParams: SP): Period {
+  const raw = Array.isArray(searchParams.p) ? searchParams.p[0] : searchParams.p;
+  return isPeriod(raw) ? raw : "30d";
+}
+
+export default async function ConversionsPage({ searchParams }: { searchParams: SP }) {
   const admin = await requireAdmin();
   if (!admin) notFound();
 
-  const { stats, connected, degraded } = await conversionsReport();
+  const period = periodFrom(searchParams);
+  const periodLabel = PERIOD_OPTIONS.find((o) => o.value === period)!.label.toLowerCase();
+  const { stats, series, connected, degraded } = await conversionsReport(period);
+  const latest = series.filter((p) => p.rate !== null).at(-1);
+  const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
 
   return (
     <div className="space-y-10">
       <SectionHeading
         title="Conversions"
         description="Who goes from lettertrace to another Letter Company product. Today this measures connected users — clicked one of our outbound links; signups and paying customers become their own rungs once we can measure them. Emails are in the clear: this is a cross-sell list."
+        action={<PeriodSelect value={period} />}
       />
 
       {degraded && (
@@ -68,19 +147,27 @@ export default async function ConversionsPage() {
         <StatCard
           label="Connected rate"
           value={stats.rate === null ? "—" : `${stats.rate}%`}
-          hint={`${stats.connectedUsers.toLocaleString()} of ${stats.totalUsers.toLocaleString()} signups clicked a Letter product`}
+          hint={`${stats.connectedUsers.toLocaleString()} of ${stats.totalUsers.toLocaleString()} signups clicked a Letter product · ${periodLabel}`}
           accent="mint"
         />
         <StatCard
           label="Connected users"
           value={stats.connectedUsers.toLocaleString()}
-          hint="distinct users, all time"
+          hint={
+            period === "all"
+              ? "distinct users, all time"
+              : `distinct users, ${periodLabel} · ${stats.connectedAllTime.toLocaleString()} all time`
+          }
           accent="teal"
         />
         <StatCard
           label="Clicks"
-          value={stats.clicks30d.toLocaleString()}
-          hint={`rolling 30d · ${stats.clicks7d.toLocaleString()} in 7d · ${stats.clicksTotal.toLocaleString()} ever`}
+          value={stats.clicks.toLocaleString()}
+          hint={
+            period === "all"
+              ? "all time"
+              : `${periodLabel} · ${stats.clicksAllTime.toLocaleString()} all time`
+          }
           accent="butter"
         />
         <StatCard
@@ -111,28 +198,54 @@ export default async function ConversionsPage() {
           }
           hint={
             stats.topProduct
-              ? `${stats.topProduct.clicks.toLocaleString()} click${stats.topProduct.clicks === 1 ? "" : "s"}`
-              : "no clicks recorded yet"
+              ? `${stats.topProduct.clicks.toLocaleString()} click${stats.topProduct.clicks === 1 ? "" : "s"} · ${periodLabel}`
+              : `no clicks ${period === "all" ? "recorded yet" : "in this period"}`
           }
           accent="sand"
         />
       </div>
 
-      {/* ---- Row 2: who's connected ------------------------------------------ */}
+      {/* ---- Row 2: the rate over time ---------------------------------------- */}
+      <Card>
+        <div className="flex flex-col px-5 pb-4 pt-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold text-ink">Connected rate over time</h3>
+            <span className="text-xs text-ink-faint">{periodLabel}</span>
+          </div>
+          {series.length === 0 || !latest ? (
+            <p className="py-8 text-sm text-ink-faint">
+              No clicks {period === "all" ? "recorded yet" : "in this period"}, so there is no
+              rate to draw.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3">
+                <RateChart series={series} />
+              </div>
+              <p className="mt-3 text-xs tabular-nums text-ink-faint">
+                now {latest.rate}%{peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""} · cumulative
+                within the period, over signups as of each day · hover for daily numbers
+              </p>
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* ---- Row 3: who's connected ------------------------------------------ */}
       <section className="space-y-3">
         <div>
           <h3 className="text-lg font-semibold text-ink">Connected users</h3>
           <p className="mt-1 max-w-3xl text-sm text-ink-faint">
-            Everyone who clicked out to a Letter Company product, most recent first, with where
-            they went.
+            Everyone who clicked out to a Letter Company product in this period ({periodLabel}),
+            most recent first, with where they went.
           </p>
         </div>
         <Card>
           {connected.length === 0 ? (
             <p className="px-5 py-8 text-sm text-ink-faint">
-              Nobody has clicked out yet. Tracking only exists from the day it shipped, so an
-              empty list right after a deploy means &ldquo;too early&rdquo;, not
-              &ldquo;never&rdquo;.
+              Nobody clicked out {period === "all" ? "yet" : "in this period"}. Tracking only
+              exists from the day it shipped, so an empty list right after a deploy means
+              &ldquo;too early&rdquo;, not &ldquo;never&rdquo;.
             </p>
           ) : (
             <>
