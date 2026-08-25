@@ -4,6 +4,7 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
+import { RedactFetchUrls } from "./redact-fetch";
 
 /**
  * Start the OpenTelemetry SDK. Node runtime only — see instrumentation.ts for
@@ -39,6 +40,11 @@ export function registerOtel(): void {
     // pulled on its own clock, hence an interval short enough that a daily
     // cron run reports more than once.
     traceExporter: new OTLPTraceExporter(),
+
+    // "auto" keeps @vercel/otel's own export processor; RedactFetchUrls runs
+    // ahead of it and takes the request URL out of the outbound fetch spans it
+    // creates. See ./redact-fetch.ts for what was riding along in them.
+    spanProcessors: [new RedactFetchUrls(), "auto"],
     metricReaders: [
       new PeriodicExportingMetricReader({
         exporter: new OTLPMetricExporter(),
