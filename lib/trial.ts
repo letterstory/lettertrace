@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Project, Provider, RouteInfo } from "@/lib/types";
 import {
   getDecryptedKey,
+  getDecryptedKeys,
   getConfiguredProviders,
   getDecryptedRouterKeys,
   type DecryptedRouterKey,
@@ -293,9 +294,17 @@ export async function resolveKey(
   //    which credential settles the bill, and a user holding a direct Claude key
   //    should get Claude rather than Claude-via-a-gateway. Web search never
   //    applies to utility work, so any router that reaches the engine will do.
-  const routerKeys = await getDecryptedRouterKeys(supabase, userId);
+  //
+  //    Both credential sets are read up front, together: the loop below asks
+  //    about four providers, and asking the database one provider at a time
+  //    turned a single lookup into four sequential round trips on a path a
+  //    person is waiting through onboarding for.
+  const [ownKeys, routerKeys] = await Promise.all([
+    getDecryptedKeys(supabase, userId),
+    getDecryptedRouterKeys(supabase, userId),
+  ]);
   for (const p of order) {
-    const own = await getDecryptedKey(supabase, userId, p);
+    const own = ownKeys[p];
     if (own) return { source: "own", apiKey: own, provider: p, model: modelFor(p), requested };
 
     const viaRouter = routerKeys.find((rk) => routerSupport(rk.router, p) !== null);

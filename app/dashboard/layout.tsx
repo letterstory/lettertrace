@@ -38,52 +38,65 @@ export default async function DashboardLayout({
     getProjects(supabase, user.id),
   ]);
 
-  // Operator alert for a new account. This lives here rather than in the auth
-  // callback because email confirmation is optional: with it off, a password
+  // Two once-per-account flags, both on the same profile row, read together.
+  //
+  // Operator alert for a new account: this lives here rather than in the auth
+  // callback because email confirmation is optional — with it off, a password
   // signup gets a session immediately and never visits /auth/callback, so a
   // hook there would only ever see OAuth users. Every signed-in user reaches
   // the dashboard, whatever route they took in.
   //
-  // Costs nothing when alerting is switched off — the check short-circuits
-  // before any query — and one indexed read when it is on. The claim itself is
+  // Founder-call offer: for new signups only and only once ever.
+  //
+  // Both guards still short-circuit before any query — no admin emails means
+  // alerting is switched off, and an unset URL or an established account means
+  // the offer does not apply — but when either one IS live the row is fetched
+  // once for both flags instead of once each. This layout renders on every
+  // dashboard page, so a second read of the same row is a second chance to
+  // catch a slow one for no extra information. The alert claim itself is
   // guarded in the database, so a second tab cannot produce a second email.
-  if (adminAlertEmails().length > 0) {
-    const { data: alertState } = await supabase
-      .from("profiles")
-      .select("admin_alerted_at")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (alertState && (alertState as { admin_alerted_at: string | null }).admin_alerted_at === null) {
-      fireAndForget(alertNewSignup(createServiceClient(), user));
-    }
+  const callUrl = founderCallUrl();
+  const wantsAlertCheck = adminAlertEmails().length > 0;
+  const wantsOfferCheck = !!callUrl && withinSignupWindow(user.created_at);
+
+  // Started before the provider-key read below and awaited after it: they are
+  // independent questions about the same user, so they travel together.
+  const flagsPromise =
+    wantsAlertCheck || wantsOfferCheck
+      ? supabase
+          .from("profiles")
+          .select("admin_alerted_at, founder_call_prompted_at")
+          .eq("id", user.id)
+          .maybeSingle()
+      : null;
+
+  // Trial banner state: only when a trial is offered and the user is relying on
+  // shared keys. Key resolution prefers the user's own key from EITHER
+  // provider, so any own key at all means they're never on the trial.
+  const [providers, flagsResult] = await Promise.all([
+    getConfiguredProviders(supabase, user.id),
+    flagsPromise,
+  ]);
+
+  const flags = (flagsResult?.data ?? null) as {
+    admin_alerted_at: string | null;
+    founder_call_prompted_at: string | null;
+  } | null;
+
+  if (wantsAlertCheck && flags && flags.admin_alerted_at === null) {
+    fireAndForget(alertNewSignup(createServiceClient(), user));
   }
 
-  // Founder-call offer, for new signups only and only once ever. Both guards
-  // short-circuit before any query: unset URL means the feature does not exist
-  // (self-hosted images ship without it), and the signup window means an
-  // established account costs nothing to skip.
-  const callUrl = founderCallUrl();
   let offerFounderCall = false;
-  if (callUrl && withinSignupWindow(user.created_at)) {
-    const { data: offerState } = await supabase
-      .from("profiles")
-      .select("founder_call_prompted_at")
-      .eq("id", user.id)
-      .maybeSingle();
+  if (wantsOfferCheck && callUrl) {
     offerFounderCall = shouldOfferFounderCall({
       url: callUrl,
       createdAt: user.created_at,
       // A failed read yields undefined, which is deliberately NOT treated as
       // "never asked" — see shouldOfferFounderCall.
-      promptedAt: (offerState as { founder_call_prompted_at: string | null } | null)
-        ?.founder_call_prompted_at,
+      promptedAt: flags?.founder_call_prompted_at,
     });
   }
-
-  // Trial banner state: only when a trial is offered and the user is relying on
-  // shared keys. Key resolution prefers the user's own key from EITHER
-  // provider, so any own key at all means they're never on the trial.
-  const providers = await getConfiguredProviders(supabase, user.id);
 
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled() && providers.length === 0) {

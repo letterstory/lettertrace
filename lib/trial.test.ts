@@ -5,11 +5,17 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 // stays clean; resolveKey's own use of it is mocked per-test below.
 vi.mock("@/lib/data", () => ({
   getDecryptedKey: vi.fn(),
+  getDecryptedKeys: vi.fn(),
   getConfiguredProviders: vi.fn(),
   getDecryptedRouterKeys: vi.fn(),
 }));
 
-import { getDecryptedKey, getConfiguredProviders, getDecryptedRouterKeys } from "@/lib/data";
+import {
+  getDecryptedKey,
+  getDecryptedKeys,
+  getConfiguredProviders,
+  getDecryptedRouterKeys,
+} from "@/lib/data";
 import { GOOGLE_AI_OVERVIEWS_MODEL } from "@/lib/models";
 import type { Provider, RouterId } from "@/lib/types";
 import {
@@ -84,6 +90,7 @@ beforeEach(() => {
   }
   process.env.TRIAL_RUN_LIMIT = "5";
   vi.mocked(getDecryptedKey).mockReset().mockResolvedValue(null);
+  vi.mocked(getDecryptedKeys).mockReset().mockResolvedValue({});
   vi.mocked(getConfiguredProviders).mockReset().mockResolvedValue([]);
   vi.mocked(getDecryptedRouterKeys).mockReset().mockResolvedValue([]);
 });
@@ -95,9 +102,23 @@ afterEach(() => {
   }
 });
 
+/**
+ * The account's stored provider keys, set on BOTH lookups at once.
+ *
+ * There are two, deliberately: resolveRunKeyFor asks about the one engine it
+ * was given (getDecryptedKey), while resolveKey walks a preference order and
+ * so reads the whole set in one go (getDecryptedKeys). Setting them through
+ * one helper is what stops a test from passing against a resolver that reads
+ * the other one.
+ */
+function ownsKey(keys: Partial<Record<string, string>>) {
+  vi.mocked(getDecryptedKeys).mockResolvedValue(keys as never);
+  vi.mocked(getDecryptedKey).mockImplementation(async (_db, _user, p) => keys[p] ?? null);
+}
+
 describe("resolveKey", () => {
   it("uses the user's own key when they have one", async () => {
-    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-own");
+    ownsKey({ anthropic: "sk-ant-own" });
     const k = await resolveKey(db(0), "user-1", "anthropic");
     expect(k.source).toBe("own");
     expect(k.apiKey).toBe("sk-ant-own");
@@ -137,7 +158,7 @@ describe("resolveKey", () => {
   });
 
   it("honours the requested model when using the user's own key", async () => {
-    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-own");
+    ownsKey({ anthropic: "sk-ant-own" });
     const k = await resolveKey(db(0), "user-1", "anthropic", "claude-opus-4-8");
     expect(k.model).toBe("claude-opus-4-8");
   });
@@ -153,9 +174,7 @@ describe("resolveKey", () => {
 // Only the named providers have a stored key.
 function ownsKeysFor(...providers: string[]) {
   vi.mocked(getConfiguredProviders).mockResolvedValue(providers as never);
-  vi.mocked(getDecryptedKey).mockImplementation(async (_db, _user, p) =>
-    providers.includes(p) ? `key-for-${p}` : null,
-  );
+  ownsKey(Object.fromEntries(providers.map((p) => [p, `key-for-${p}`])));
 }
 
 describe("resolveRunKeyFor", () => {
@@ -409,9 +428,7 @@ describe("resolveKey with a router credential", () => {
   // Suggestion and classification calls never search, so an unverified router
   // is fine here — but the preferred engine still wins over credential type.
   it("keeps the preferred engine when its own key exists", async () => {
-    vi.mocked(getDecryptedKey).mockImplementation(async (_db, _user, p) =>
-      p === "anthropic" ? "sk-ant-own" : null,
-    );
+    ownsKey({ anthropic: "sk-ant-own" });
     hasRouter("concentrate");
     const k = await resolveKey(db(0), "user-1", "anthropic");
     expect(k.apiKey).toBe("sk-ant-own");
@@ -614,7 +631,7 @@ describe("the free-tier spend ceiling", () => {
   });
 
   it("never rations a user spending their own money", async () => {
-    vi.mocked(getDecryptedKey).mockResolvedValue("sk-ant-mine");
+    ownsKey({ anthropic: "sk-ant-mine" });
     const key = await runKeyFor(meters(99, 999_000_000), "u1", "anthropic");
     expect(key.source).toBe("own");
     expect(runBudgetMicros(key)).toBeNull();

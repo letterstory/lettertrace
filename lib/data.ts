@@ -186,6 +186,42 @@ export async function getDecryptedRouterKeys(
   return keys;
 }
 
+/**
+ * Every provider key the user holds, decrypted, indexed by provider
+ * (server-only). One round trip for the whole set.
+ *
+ * This exists because credential resolution asks about providers in preference
+ * order, and asking one at a time meant up to four sequential round trips on
+ * the same table for the same user — four independent chances to catch a slow
+ * one, on a path someone is waiting on. `(user_id, provider)` is unique, so a
+ * single read indexed by provider answers the same question.
+ *
+ * An undecryptable row is omitted rather than surfaced, exactly as
+ * getDecryptedKey returns null for one: at the point of use a credential we
+ * cannot read is indistinguishable from one that was never stored.
+ */
+export async function getDecryptedKeys(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<Partial<Record<Provider, string>>> {
+  const { data } = await supabase
+    .from("provider_keys")
+    .select("provider, encrypted_key")
+    .eq("user_id", userId);
+
+  const rows = (data ?? []) as { provider: Provider; encrypted_key: string }[];
+  const keys: Partial<Record<Provider, string>> = {};
+  for (const row of rows) {
+    if (!row.encrypted_key) continue;
+    try {
+      keys[row.provider] = decryptSecret(row.encrypted_key);
+    } catch {
+      continue;
+    }
+  }
+  return keys;
+}
+
 /** Decrypt the user's key for a provider (server-only). Returns null if none. */
 export async function getDecryptedKey(
   supabase: SupabaseClient,
