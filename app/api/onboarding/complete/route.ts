@@ -305,13 +305,22 @@ export async function POST(request: Request) {
         await recordTrialUsage(supabase, result.tokensUsed);
         await recordTrialSpend(supabase, result.spendMicros);
       }
-      return { provider: k.provider, runId: result.runId, status: result.status };
+      return {
+        provider: k.provider,
+        runId: result.runId,
+        status: result.status,
+        // Why an engine stored nothing, in the words the Runs page already
+        // uses. executeRun captures it as the run's hardError; dropping it
+        // here is what left a project starting life a column short with
+        // nobody told which column or why.
+        error: result.error ?? null,
+      };
     }),
   );
 
-  const runs = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+  const stored = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
 
-  if (runs.length === 0) {
+  if (stored.length === 0) {
     const firstFailure = settled.find(
       (s): s is PromiseRejectedResult => s.status === "rejected",
     );
@@ -321,12 +330,27 @@ export async function POST(request: Request) {
     );
   }
 
+  // Every engine the sweep launched, including the ones that threw before a
+  // run row could be written. A partial sweep is the normal shape of this
+  // failure — one engine's key is out of quota while the rest answer fine —
+  // so the caller needs the whole roll call, not just the survivors.
+  const runs = settled.map((s, i) =>
+    s.status === "fulfilled"
+      ? s.value
+      : {
+          provider: funded[i].provider,
+          runId: null,
+          status: "failed" as const,
+          error: humanError(s.reason),
+        },
+  );
+
   return NextResponse.json({
     projectId: project.id,
     ran: true,
     // The default engine's run (the sweep is sorted so it launched first).
-    runId: runs[0].runId,
-    status: runs[0].status,
+    runId: stored[0].runId,
+    status: stored[0].status,
     runs,
   });
 }

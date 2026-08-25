@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Badge, Button, Card, CardBody, Input, Label, Spinner, Textarea } from "@/components/ui";
+import { PROVIDERS } from "@/lib/models";
 import { cn } from "@/lib/utils";
 
 interface Topic {
@@ -26,7 +27,13 @@ interface CompetitorDraft {
   domain: string;
 }
 
-type Step = "brand" | "topics" | "searching";
+type Step = "brand" | "topics" | "searching" | "results";
+
+/** One engine of the first sweep that answered nothing, and why. */
+interface EmptyEngine {
+  provider: string;
+  error: string | null;
+}
 
 export function Onboarding() {
   const router = useRouter();
@@ -49,6 +56,10 @@ export function Onboarding() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Engines whose leg of the first sweep stored no answers. Setup used to
+  // discard this and land the user on a dashboard quietly missing a column.
+  const [emptyEngines, setEmptyEngines] = useState<EmptyEngine[]>([]);
+  const [ranEngines, setRanEngines] = useState(0);
 
   // --- Step 1 -> suggest -----------------------------------------------------
   async function handleNext(e: React.FormEvent) {
@@ -222,6 +233,26 @@ export function Onboarding() {
         setBusy(false);
         return;
       }
+      // The first measurement is a sweep across every engine the account can
+      // fund, and one engine can come back empty (a used-up provider quota is
+      // the common case) while the rest answer in full. Say so here, at the
+      // moment it happens, rather than dropping the user onto a dashboard
+      // whose missing column has no explanation on it.
+      const sweep: EmptyEngine[] = Array.isArray(data?.runs)
+        ? (data.runs as { provider?: unknown; status?: unknown; error?: unknown }[])
+            .filter((r) => r?.status !== "completed")
+            .map((r) => ({
+              provider: typeof r.provider === "string" ? r.provider : "",
+              error: typeof r.error === "string" && r.error ? r.error : null,
+            }))
+        : [];
+      if (data?.ran && sweep.length > 0) {
+        setEmptyEngines(sweep);
+        setRanEngines(Array.isArray(data.runs) ? data.runs.length : 0);
+        setStep("results");
+        setBusy(false);
+        return;
+      }
       // The org (and, ideally, its first run) now exist and it's the active
       // one. Land on the overview whether we came from first-run onboarding
       // or from "New organization".
@@ -235,6 +266,46 @@ export function Onboarding() {
   }
 
   // --- Render ----------------------------------------------------------------
+  if (step === "results") {
+    const answered = Math.max(ranEngines - emptyEngines.length, 0);
+    return (
+      <div className="mx-auto max-w-lg py-10">
+        <h2 className="text-2xl font-semibold text-ink">Your project is set up</h2>
+        <p className="mt-2 text-ink-soft">
+          {answered > 0
+            ? `${answered} of ${ranEngines} AI assistants answered your questions. The rest came back empty, so your first report is missing their column until you run again.`
+            : "None of the AI assistants answered your questions, so your first report is empty until you run again."}
+        </p>
+        <Card className="mt-6">
+          <CardBody className="space-y-4">
+            {emptyEngines.map((e, i) => (
+              <div key={`${e.provider}-${i}`}>
+                <p className="text-sm font-medium text-ink">
+                  {PROVIDERS[e.provider as keyof typeof PROVIDERS]?.label ?? e.provider} returned no
+                  answers
+                </p>
+                <p className="mt-1 text-sm text-ink-faint">
+                  {e.error ?? "The engine did not answer. Try running this project again."}
+                </p>
+              </div>
+            ))}
+          </CardBody>
+        </Card>
+        <Button
+          size="lg"
+          className="mt-6 w-full"
+          onClick={() => {
+            router.push("/dashboard");
+            router.refresh();
+          }}
+        >
+          Go to my dashboard
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+
   if (step === "searching") {
     return (
       <div className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center text-center">
