@@ -133,6 +133,11 @@ change how every query over this data has to be written:
   project ref and API-key *hashes* ride along in span names; none of that is
   content under the rule below, but it is more identifier than the hand-placed
   spans carry, and it is worth a deliberate decision rather than a default.
+  PR #152 is that decision: it drops the query string and collapses uuid and
+  long hex/numeric path segments to `:id` before export. Once it merges the
+  example above arrives as `fetch GET https://<ref>.supabase.co/rest/v1/api_keys`
+  and the identifiers are gone — but `name` stays high-cardinality enough that
+  grouping outbound traffic by host, not by name, remains the rule.
 - **A provider 429 does not fail the fetch span.** The rate-limited call still
   records span status Unset at the HTTP layer; only `llm.query` sets status
   Error. So engine health is an `llm.query` question — a dependency error rate
@@ -143,7 +148,16 @@ change how every query over this data has to be written:
   `llm.provider` alone that reads as a mild elevation and hides underneath the
   healthy siblings; grouped by (`llm.provider`, `llm.model`) it reads as the
   100% outage it is. Incident #103 was exactly this shape, and it has recurred
-  since. Group by both.
+  since.
+
+  `llm.route` is the third half of the same lesson, learned 2026-08-26. A router
+  is a credential, not an engine, so the same (provider, model) can be reached
+  two ways and only one of them need be broken: that morning every
+  `claude-haiku-4-5` call through the Concentrate router failed on a gateway
+  `400` (`does not support inference_geo`) while direct Anthropic traffic in the
+  same window was clean. Grouped without the route, the alarm named Anthropic
+  for a fault that was the gateway's. **Group engine health by
+  (`llm.provider`, `llm.model`, `llm.route`).**
 - **Four routes run a whole job inside the HTTP request, and they wreck any
   latency read that includes them.** Measured over the seven days since export
   went live: `/api/runs/route` p95 **556 s**, `/api/cron/run/route` **151 s**,
