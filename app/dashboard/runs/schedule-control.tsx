@@ -65,10 +65,10 @@ export function ScheduleControl({
         <div className="flex min-w-0 items-start gap-3">
           <CalendarClock className="mt-0.5 h-5 w-5 shrink-0 text-ink-faint" />
           <div className="min-w-0 space-y-0.5">
-            <p className="text-sm font-medium text-ink">Automatic runs</p>
+            <p className="text-sm font-medium text-ink">Scheduled reports</p>
             {!scheduled && (
               <p className="text-xs text-ink-faint">
-                Run your prompts on a schedule (around 8:00 UTC) instead of by
+                Run a report on a schedule (around 8:00 UTC) instead of by
                 hand, and build a trend over time.
               </p>
             )}

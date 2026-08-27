@@ -108,7 +108,7 @@ export default async function DashboardPage() {
       action={
         runs.length > 0 ? (
           <Button href="/dashboard/runs" variant="secondary" size="sm">
-            View all runs
+            View all reports
           </Button>
         ) : undefined
       }
@@ -143,7 +143,7 @@ export default async function DashboardPage() {
       },
       {
         done: false,
-        title: "Run your first monitor",
+        title: "Run your first report",
         description: "Query the models with your key and see who gets mentioned.",
         href: "/dashboard/runs",
         icon: Play,
@@ -744,14 +744,14 @@ export default async function DashboardPage() {
       {/* Latest run caption */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-ink/10 bg-paper-shade/50 px-5 py-4">
         <p className="text-sm text-ink-faint">
-          Latest run:{" "}
+          Latest report:{" "}
           <span className="font-medium text-ink">
             {modelLabel(latestRun.provider, latestRun.model)}
           </span>{" "}
           · {totalResponses} answers · {timeAgo(latestRun.created_at)}
         </p>
         <Button href="/dashboard/runs" variant="secondary" size="sm">
-          View all runs
+          View all reports
         </Button>
       </div>
     </div>

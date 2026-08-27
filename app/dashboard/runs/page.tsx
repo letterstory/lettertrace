@@ -48,10 +48,10 @@ export default async function RunsPage() {
   if (!project) {
     return (
       <div className="space-y-8">
-        <SectionHeading title="Runs" />
+        <SectionHeading title="Reports" />
         <EmptyState
           title="No project yet"
-          description="Create your project first, then you can run your first brand monitor."
+          description="Create your project first, then you can run your first report."
           action={
             <Button href="/dashboard/settings">
               Create a project <ArrowRight className="h-4 w-4" />
@@ -131,7 +131,7 @@ export default async function RunsPage() {
   return (
     <div className="space-y-8">
       <SectionHeading
-        title="Runs"
+        title="Reports"
         // Describes the NEXT run, and says so. The old copy claimed what
         // "each run" asks, sitting above a list of completed runs that named a
         // different model — see nextRunMessage.
@@ -168,8 +168,8 @@ export default async function RunsPage() {
       {runs.length === 0 ? (
         <EmptyState
           icon={<PlayCircle className="h-8 w-8" />}
-          title="No runs yet"
-          description="Run your first monitor to see where your brand shows up in AI answers."
+          title="No reports yet"
+          description="Run your first report to see where your brand shows up in AI answers."
         />
       ) : (
         <div className="space-y-3">

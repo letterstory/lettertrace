@@ -52,7 +52,7 @@ export function RunNow({
           minute", which roughly doubled the button's width the moment it was
           clicked — the spinner already says a wait is underway. */}
       <Button onClick={run} loading={loading} loadingText="Running…" disabled={disabled}>
-        <Play className="h-4 w-4" /> Run monitor now
+        <Play className="h-4 w-4" /> Run report now
       </Button>
 
       {keySource === "exhausted" && (

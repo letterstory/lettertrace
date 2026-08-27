@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
-import { DashboardNav } from "@/components/dashboard/nav";
+import { DashboardNav, type NavReport } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { WhyFree } from "@/components/dashboard/why-free";
@@ -19,6 +19,7 @@ import { getUnseenRun } from "@/lib/results-seen";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
 import { modelLabel } from "@/lib/models";
 import { timeAgo } from "@/lib/utils";
+import type { Run } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -97,6 +98,31 @@ export default async function DashboardLayout({
   // happened to be on when the run landed.
   const unseenRun = project ? await getUnseenRun(supabase, project) : null;
 
+  // Recent reports for the sidebar's Overview sub-menu. Completed only — those
+  // are the ones with a results page behind them; the runs page still shows
+  // running/failed rows. Formatted here so the nav stays a pure client render.
+  let navReports: NavReport[] = [];
+  let reportCount = 0;
+  if (project) {
+    const { data: reportRows, count } = await supabase
+      .from("runs")
+      .select("id, provider, model, created_at", { count: "exact" })
+      .eq("project_id", project.id)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(6);
+    reportCount = count ?? 0;
+    navReports = (
+      (reportRows ?? []) as Pick<Run, "id" | "provider" | "model" | "created_at">[]
+    ).map((r) => ({
+      id: r.id,
+      // Relative, not calendar dates — "the one from last week" is how the
+      // list gets scanned; the model tells same-day reports apart.
+      when: timeAgo(r.created_at),
+      model: modelLabel(r.provider, r.model),
+    }));
+  }
+
   return (
     <div className="min-h-screen bg-paper md:flex">
       {/* Usage attestation. Mounted here rather than in the root layout because
@@ -131,7 +157,7 @@ export default async function DashboardLayout({
             </div>
           )}
 
-          <DashboardNav />
+          <DashboardNav reports={navReports} totalReports={reportCount} />
 
           <div className="mt-auto hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
             <WhyFree />
