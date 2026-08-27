@@ -94,7 +94,7 @@ export function TrendChart({
 }) {
   const t = useChartTheme();
   if (!data || data.length === 0) {
-    return <Placeholder label="No runs to chart yet" height={280} />;
+    return <Placeholder label="No reports to chart yet" height={280} />;
   }
   return (
     <ResponsiveContainer width="100%" height={280}>
@@ -166,7 +166,7 @@ export function EngineTrendChart({
 }) {
   const t = useChartTheme();
   if (!data || data.length === 0 || series.length === 0) {
-    return <Placeholder label="No runs to chart yet" height={280} />;
+    return <Placeholder label="No reports to chart yet" height={280} />;
   }
   const labelOf = new Map(series.map((s) => [s.key, s.label]));
   return (

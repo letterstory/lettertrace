@@ -62,8 +62,8 @@ export default async function RunDetailPage({ params }: { params: { id: string }
   if (!project) {
     return (
       <div className="space-y-8">
-        <SectionHeading title="Run" />
-        <EmptyState title="No project yet" description="Create your project to view runs." />
+        <SectionHeading title="Report" />
+        <EmptyState title="No project yet" description="Create your project to view reports." />
       </div>
     );
   }
@@ -217,10 +217,10 @@ export default async function RunDetailPage({ params }: { params: { id: string }
           href="/dashboard/runs"
           className="inline-flex items-center gap-1 text-sm text-ink-faint hover:text-ink"
         >
-          <ArrowLeft className="h-4 w-4" /> Back to runs
+          <ArrowLeft className="h-4 w-4" /> Back to reports
         </a>
         <SectionHeading
-          title="Run results"
+          title="Report"
           description={`${modelLabel(run.provider, run.model)} · ${run.completed_count} / ${run.prompt_count} answers · ${timeAgo(run.created_at)}`}
           action={<Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>}
         />
