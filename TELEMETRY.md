@@ -107,7 +107,7 @@ underneath them, and they are the ones that describe the work:
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
 
-Six things the live stream makes clear that the design didn't. The first two
+Seven things the live stream makes clear that the design didn't. The first two
 change how every query over this data has to be written:
 
 - **Every span arrives exactly twice.** The Vercel OTLP export delivers each
@@ -170,6 +170,16 @@ change how every query over this data has to be written:
   suffix and all) when asking the first, and read the second per-route. Across
   the 150 fifteen-minute buckets carrying at least 20 interactive requests, the
   interactive p95 ran a median of **457 ms** and never exceeded **1.4 s**.
+- **An API-triggered `run.execute` span ends before the run does, so its
+  `run.status` is always empty.** `resumeRun` sets `run.status` only when the
+  run finishes, but on the `api` channel the route responds immediately and the
+  span is cut and exported at response time (~50 ms) — every empty-status
+  `run.execute` on record is `run.channel = 'api'`, while `cron` and `dashboard`
+  spans carry a status and run for seconds to minutes. The runs themselves
+  complete fine (each has its `run.completed` ops log moments later). So "did
+  the runs succeed" is not answerable from spans on the API channel: exclude
+  `run.channel = 'api'` when counting outcomes from `run.execute`, and read the
+  `run.completed` / `run.failed` ops logs for the rest.
 
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
