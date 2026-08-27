@@ -185,6 +185,28 @@ describe("openai runQuery with web search — transport", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("retries Concentrate's 424 provider-errored wrapper and succeeds on the next attempt", async () => {
+    // Concentrate reports an upstream provider failure as 424 Failed
+    // Dependency — the direct-key equivalent of a 5xx. On 2026-08-27 these
+    // were transient (57% of calls in the same minutes succeeded), but the
+    // >=500 gate treated them as permanent and three runs lost 83 answers.
+    mockFetch(
+      { status: 424, body: { error: { code: "server_error", message: "Provider errored" } } },
+      { body: responsesOk("answer") },
+    );
+    const res = await runQuery({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      apiKey: KEY,
+      route: { router: "concentrate", baseUrl: null },
+      prompt: "q",
+      webSearch: true,
+    });
+
+    expect(res.text).toBe("answer");
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a 401 immediately as an invalid key", async () => {
     mockFetch({ status: 401, body: { error: { message: "bad key" } } });
     const err = await runQuery({

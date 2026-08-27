@@ -783,6 +783,14 @@ async function anthropicWebSearch(
 //   the Anthropic path's retrieved-but-not-cited results. That turns a
 //   searched-but-uncited answer from a false "ungrounded" (a real, billed
 //   browse discarded) into the grounded measurement it is.
+// Transient HTTP statuses on the Responses transport, worth another attempt.
+// 5xx is the provider itself failing; 424 is Concentrate's wrapper for the
+// same thing ("Provider errored" / code server_error) — the upstream provider
+// failed behind the router, and the request never reached a model.
+function isRetryableStatus(status: number): boolean {
+  return status >= 500 || status === 424;
+}
+
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -876,13 +884,19 @@ async function openaiWebSearch(
         const body = await res.json().catch(() => ({}));
         const err = new OpenAI.APIError(res.status, body, undefined, undefined);
         // Retry transient server errors; surface auth/quota immediately.
-        if (res.status >= 500) { lastErr = err; continue; }
+        // 424 is on the transient side: Concentrate reports an upstream
+        // provider failure as 424 Failed Dependency, so what a direct key
+        // would deliver as a retryable 5xx arrives from the router under 500.
+        // On 2026-08-27 that gap cost three runs 83 gpt-5.6-luna answers —
+        // 40% of the engine's calls failed on 424 while the other 60%
+        // succeeded in the same minutes, and none were retried.
+        if (isRetryableStatus(res.status)) { lastErr = err; continue; }
         throw err;
       }
       j = (await res.json()) as ResponsesBody;
     } catch (err) {
       lastErr = err;
-      if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
+      if (err instanceof OpenAI.APIError && err.status && !isRetryableStatus(err.status)) throw err;
     }
   }
   if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
