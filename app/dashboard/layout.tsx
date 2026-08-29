@@ -71,12 +71,26 @@ export default async function DashboardLayout({
           .maybeSingle()
       : null;
 
+  // Recent completed runs for the sidebar's Overview sub-menu. Depends only on
+  // the project resolved above, so it rides in the same batch as the reads
+  // below rather than costing its own round trip on every dashboard render.
+  const reportsPromise = project
+    ? supabase
+        .from("runs")
+        .select("id, provider, model, created_at", { count: "exact" })
+        .eq("project_id", project.id)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(6)
+    : null;
+
   // Trial banner state: only when a trial is offered and the user is relying on
   // shared keys. Key resolution prefers the user's own key from EITHER
   // provider, so any own key at all means they're never on the trial.
-  const [providers, flagsResult] = await Promise.all([
+  const [providers, flagsResult, reportsResult] = await Promise.all([
     getConfiguredProviders(supabase, user.id),
     flagsPromise,
+    reportsPromise,
   ]);
 
   const flags = (flagsResult?.data ?? null) as {
@@ -111,19 +125,14 @@ export default async function DashboardLayout({
   // happened to be on when the run landed.
   const unseenRun = project ? await getUnseenRun(supabase, project) : null;
 
-  // Recent reports for the sidebar's Overview sub-menu. Completed only — those
-  // are the ones with a results page behind them; the runs page still shows
-  // running/failed rows. Formatted here so the nav stays a pure client render.
+  // Recent reports for the sidebar's Overview sub-menu, fetched in the batch
+  // above. Completed only — those are the ones with a results page behind them;
+  // the runs page still shows running/failed rows. Formatted here so the nav
+  // stays a pure client render.
   let navReports: NavReport[] = [];
   let reportCount = 0;
-  if (project) {
-    const { data: reportRows, count } = await supabase
-      .from("runs")
-      .select("id, provider, model, created_at", { count: "exact" })
-      .eq("project_id", project.id)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(6);
+  if (reportsResult) {
+    const { data: reportRows, count } = reportsResult;
     reportCount = count ?? 0;
     navReports = (
       (reportRows ?? []) as Pick<Run, "id" | "provider" | "model" | "created_at">[]
