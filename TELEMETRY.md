@@ -196,6 +196,16 @@ call still costs time, so an engine that has stopped answering appears as a
 rate rather than as an absence. The two histograms land in `otel.histograms`,
 the two counters in `otel.metrics` as `sum`.
 
+One caveat on the histograms: both use the SDK's default explicit bucket
+bounds, which end at 10,000 ms, and most real samples overflow that top bucket
+(on 2026-08-29, 61% of google, 88% of openai and 97% of anthropic
+`provider.request.duration` samples sat in the +Inf bucket, with observed
+maxima of 52 to 116 s; run durations reach minutes, so `run.duration` has the
+same problem). A p95 (or any higher percentile) computed from `otel.histograms`
+for these two metrics therefore cannot resolve above 10 s, it just reads "over
+10s". For latency percentiles use span durations instead (`duration_ns` in
+`otel.spans`): `llm.query` for provider requests, `run.execute` for runs.
+
 **Logs.** Every `recordOps` / `recordOpsError` call in the app also emits an
 OTel log record: body `<kind>: <signature>`, severity from the ops level, and
 the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
