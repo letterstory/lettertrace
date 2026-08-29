@@ -82,7 +82,7 @@ export function RunReadyBanner({
           </span>
           <div>
             <p className="text-sm font-medium text-ink">
-              {failed ? "Your latest run failed" : "Your run finished, results are ready"}
+              {failed ? "Your latest report failed" : "Your report is ready"}
             </p>
             <p className="mt-0.5 text-xs text-ink-faint">
               {failed
