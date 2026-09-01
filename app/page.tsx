@@ -17,6 +17,7 @@ import { Badge, Button, Card } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 import { InstallCli } from "@/components/install-cli";
+import { LetterCoTelemetry } from "@/components/letterco-telemetry";
 import {
   FOUNDER_CALL_LANDING_SOURCE,
   founderCallUrl,
@@ -162,6 +163,7 @@ export default function LandingPage() {
 
   return (
     <div id="top" className="min-h-screen bg-paper text-ink">
+      <LetterCoTelemetry />
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/80 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
