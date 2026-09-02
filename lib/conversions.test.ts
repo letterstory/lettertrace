@@ -153,10 +153,11 @@ describe("shapeConversionStats", () => {
 });
 
 describe("shapeRateSeries", () => {
-  it("builds one point per day with a cumulative rate over signups as of that day", () => {
+  it("builds one point per day with that day's rate over signups as of that day", () => {
     // u2 signed up 20d ago, u3 3d ago (PROFILES); period covers last 7 days.
     const clicks = [
       click({ user_id: "u2", clicked_at: iso(5) }),
+      click({ user_id: "u2", clicked_at: iso(5, 2) }),
       click({ user_id: "u2", clicked_at: iso(2) }),
       click({ user_id: "u3", clicked_at: iso(2) }),
     ];
@@ -164,27 +165,43 @@ describe("shapeRateSeries", () => {
     expect(series).toHaveLength(8); // 7 full days back plus today
 
     const day5 = series.find((p) => p.day === iso(5).slice(0, 10))!;
-    // By 5d ago: u1/u2/u4 signed up (u3 hadn't yet), u2 connected.
+    // 5d ago: u1/u2/u4 had signed up (u3 hadn't yet); u2 clicked twice, one user.
     expect(day5.connected).toBe(1);
     expect(day5.signups).toBe(3);
-    expect(day5.rate).toBe(33.3);
-    expect(day5.clicks).toBe(1);
+    expect(day5.rate).toBe(33.33);
+    expect(day5.clicks).toBe(2);
 
-    const last = series.at(-1)!;
-    expect(last.connected).toBe(2);
-    expect(last.signups).toBe(4);
-    expect(last.rate).toBe(50);
+    const day2 = series.find((p) => p.day === iso(2).slice(0, 10))!;
+    // 2d ago: all four signed up; u2 and u3 clicked — u2's earlier day doesn't carry over.
+    expect(day2.connected).toBe(2);
+    expect(day2.signups).toBe(4);
+    expect(day2.rate).toBe(50);
   });
 
-  it("matches the headline stat at its right edge", () => {
-    const clicks = [
-      click({ user_id: "u1", clicked_at: iso(6) }),
-      click({ user_id: "u2", clicked_at: iso(1) }),
-    ];
-    const since = NOW - 7 * DAY_MS;
-    const series = shapeRateSeries(clicks, PROFILES, since, NOW);
-    const stats = shapeConversionStats(clicks, PROFILES.length, since);
-    expect(series.at(-1)!.rate).toBe(stats.rate);
+  it("puts a quiet day at zero rather than carrying the last rate forward", () => {
+    const clicks = [click({ user_id: "u2", clicked_at: iso(5) })];
+    const series = shapeRateSeries(clicks, PROFILES, NOW - 7 * DAY_MS, NOW);
+    const day4 = series.find((p) => p.day === iso(4).slice(0, 10))!;
+    expect(day4.connected).toBe(0);
+    expect(day4.rate).toBe(0);
+    expect(series.at(-1)!.rate).toBe(0);
+  });
+
+  it("keeps two decimals so one clicker in a big base is not rounded to zero", () => {
+    const profiles: GrowthProfileRow[] = Array.from({ length: 2000 }, (_, i) => ({
+      id: `p${i}`,
+      email: null,
+      created_at: iso(30),
+    }));
+    const series = shapeRateSeries([click({ user_id: "p1", clicked_at: iso(1) })], profiles, NOW - 7 * DAY_MS, NOW);
+    expect(series.find((p) => p.day === iso(1).slice(0, 10))!.rate).toBe(0.05);
+  });
+
+  it("is null on days before anyone had signed up", () => {
+    const profiles: GrowthProfileRow[] = [{ id: "u1", email: null, created_at: iso(2) }];
+    const series = shapeRateSeries([click({ clicked_at: iso(1) })], profiles, NOW - 7 * DAY_MS, NOW);
+    expect(series.find((p) => p.day === iso(5).slice(0, 10))!.rate).toBeNull();
+    expect(series.find((p) => p.day === iso(1).slice(0, 10))!.rate).toBe(100);
   });
 
   it("starts at the first click for all-time, and is empty with no clicks", () => {
@@ -200,7 +217,8 @@ describe("shapeRateSeries", () => {
       click({ user_id: "u2", clicked_at: iso(1) }),
     ];
     const series = shapeRateSeries(clicks, PROFILES, NOW - 7 * DAY_MS, NOW);
-    expect(series.at(-1)!.connected).toBe(1);
+    expect(series.find((p) => p.day === iso(1).slice(0, 10))!.connected).toBe(1);
+    expect(series.reduce((n, p) => n + p.clicks, 0)).toBe(1);
   });
 });
 

@@ -175,21 +175,25 @@ export function shapeConversionStats(
 export interface RatePoint {
   /** UTC date, YYYY-MM-DD. */
   day: string;
-  /** Cumulative-within-period connected rate as of this day's end: distinct
-   *  users who clicked between the period start and this day, over signups
-   *  that existed by this day. Null while there are no signups to divide by. */
+  /** This day's connected rate: distinct users who clicked on this day, over
+   *  signups that existed by this day's end. The headline card's construction
+   *  with a one-day window, so a day is 0 when nobody clicked and null only
+   *  while there is no one to divide by. Two decimals rather than the card's
+   *  one: a single day's share of the whole user base is small by nature, and
+   *  1 in 2,000 has to read as 0.05%, not 0%. */
   rate: number | null;
-  /** Cumulative connected users behind that rate. */
+  /** Distinct users who clicked on this day. */
   connected: number;
   /** Clicks on this day alone. */
   clicks: number;
+  /** Signups as of this day's end. */
   signups: number;
 }
 
 /** One point per UTC day from the period start (or the first click, for
- *  all-time) through today. The denominator is signups AS OF each day, not
- *  today's — so the curve is the rate as it actually stood, and its last
- *  point equals the headline card. */
+ *  all-time) through today. Each point stands on its own — that day's
+ *  clickers over that day's user base — so the curve shows which days
+ *  actually moved people, not a total that can only climb. */
 export function shapeRateSeries(
   clicks: OutboundClickRow[],
   profiles: GrowthProfileRow[],
@@ -211,7 +215,6 @@ export function shapeRateSeries(
 
   const startDay = new Date(firstDay).toISOString().slice(0, 10);
   const series: RatePoint[] = [];
-  const connected = new Set<string>();
   let clickIdx = 0;
   let signupIdx = 0;
 
@@ -221,6 +224,7 @@ export function shapeRateSeries(
     dayStart += DAY_MS
   ) {
     const dayEnd = dayStart + DAY_MS;
+    const connected = new Set<string>();
     let dayClicks = 0;
     while (clickIdx < inPeriod.length && inPeriod[clickIdx].t < dayEnd) {
       connected.add(inPeriod[clickIdx].user_id);
@@ -231,7 +235,7 @@ export function shapeRateSeries(
 
     series.push({
       day: new Date(dayStart).toISOString().slice(0, 10),
-      rate: signupIdx > 0 ? Math.round((connected.size / signupIdx) * 1000) / 10 : null,
+      rate: signupIdx > 0 ? Math.round((connected.size / signupIdx) * 10_000) / 100 : null,
       connected: connected.size,
       clicks: dayClicks,
       signups: signupIdx,
