@@ -3,9 +3,8 @@
 import { Fragment, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowUpRight, ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { OutboundLink } from "@/components/outbound-link";
 
 interface NavItem {
   href: string;
@@ -99,32 +98,6 @@ export function DashboardNav({
         );
         return (
           <Fragment key={href}>
-          {/* Phantomstory sits above Settings: a nav-shaped item that is really
-              an external link, and dressed to say so — the brand mark renders
-              greyscale until hover brings the colour up, and the corner arrow
-              is right-aligned where a route item would have nothing.
-              OutboundLink so the click lands on /admin/conversions. */}
-          {href === "/dashboard/settings" && (
-            <OutboundLink
-              href="https://phantomstory.com"
-              target="_blank"
-              rel="noreferrer"
-              className="group flex items-center gap-3 rounded px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:bg-ink/5"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/images/phantomstory.png"
-                alt=""
-                aria-hidden
-                className="h-4 w-4 shrink-0 grayscale transition group-hover:grayscale-0"
-              />
-              <span>Phantoms</span>
-              <ArrowUpRight
-                className="ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink-soft"
-                aria-hidden
-              />
-            </OutboundLink>
-          )}
           {isOverview ? (
             // The toggle can't live inside the Link (nested interactive
             // elements), so it overlays the row's right edge instead.
