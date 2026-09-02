@@ -1,0 +1,63 @@
+# Tell Slack when someone files an issue, and say which repo it landed in.
+#
+# Until this existed, an issue on any of our repos reached us only if a human
+# happened to open GitHub — #115 sat for three weeks that way. This posts every
+# opened or reopened issue to the Slack channel behind SLACK_ISSUES_WEBHOOK_URL.
+#
+# It is written once, here, and shared: this file is both this repo's own
+# trigger AND a reusable workflow every other letterstory repo can call with a
+# ten-line file. To wire up another repo, add .github/workflows/issues.yml:
+#
+#   name: Issue to Slack
+#   on:
+#     issues:
+#       types: [opened, reopened]
+#   jobs:
+#     notify:
+#       uses: letterstory/lettertrace/.github/workflows/issue-to-slack.yml@master
+#       secrets: inherit
+#
+# `secrets: inherit` hands through the org-level SLACK_ISSUES_WEBHOOK_URL, so a
+# new repo needs no secret of its own. This repo is public, which is what lets
+# private repos call the workflow and check out the script it runs.
+name: Issue to Slack
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_call:
+    secrets:
+      SLACK_ISSUES_WEBHOOK_URL:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Always the script from THIS repo, whichever repo the issue is in.
+      - uses: actions/checkout@v4
+        with:
+          repository: letterstory/lettertrace
+          ref: master
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Event fields go through env, never into the command line: an issue title
+      # is attacker-controlled text and must never be interpolated into a shell.
+      - name: Post to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_ISSUES_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          ACTION: ${{ github.event.action }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          AUTHOR_URL: ${{ github.event.issue.user.html_url }}
+          LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: bash .github/scripts/issue-to-slack.sh
