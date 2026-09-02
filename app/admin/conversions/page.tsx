@@ -44,11 +44,12 @@ function ColumnHeader({ children, className }: { children: React.ReactNode; clas
 }
 
 /**
- * The connected rate as it stood at each day's end — cumulative within the
- * period, over the signups that existed then, so the right edge always equals
- * the headline card. Same construction as Growth's RunSparkline: inline SVG,
- * numbers in <title> tooltips, colors through style because CSS var() only
- * resolves in styles. One series, so the title is the legend.
+ * Each day's connected rate on its own — that day's clickers over the signups
+ * that existed by then — so a quiet day sits on the baseline and a busy one
+ * stands out, instead of every day folding into a total that can only climb.
+ * Same construction as Growth's RunSparkline: inline SVG, numbers in <title>
+ * tooltips, colors through style because CSS var() only resolves in styles.
+ * One series, so the title is the legend.
  */
 function RateChart({ series }: { series: RatePoint[] }) {
   const points = series.filter((p) => p.rate !== null) as (RatePoint & { rate: number })[];
@@ -101,7 +102,7 @@ function RateChart({ series }: { series: RatePoint[] }) {
           height={H}
           fill="transparent"
         >
-          <title>{`${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups) · ${p.clicks} click${p.clicks === 1 ? "" : "s"} this day`}</title>
+          <title>{`${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups clicked this day) · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`}</title>
         </rect>
       ))}
     </svg>
@@ -124,6 +125,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
   const { stats, series, connected, degraded } = await conversionsReport(period);
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
+  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <div className="space-y-10">
@@ -223,8 +225,10 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
                 <RateChart series={series} />
               </div>
               <p className="mt-3 text-xs tabular-nums text-ink-faint">
-                now {latest.rate}%{peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""} · cumulative
-                within the period, over signups as of each day · hover for daily numbers
+                {latest.day === today ? "today" : latest.day} {latest.rate}%
+                {peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""} · each
+                day on its own: users who clicked that day, over signups as of that day · hover for
+                daily numbers
               </p>
             </>
           )}
