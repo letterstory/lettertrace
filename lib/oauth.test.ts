@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   authenticateClient,
   dataScopesOf,
+  getClient,
   exchangeAuthorizationCode,
   exchangeRefreshToken,
   OAuthError,
@@ -321,5 +322,32 @@ describe("authenticateClient", () => {
     await expect(
       authenticateClient(client, { bodyClientId: "nope", authHeader: null }),
     ).rejects.toBeInstanceOf(OAuthError);
+  });
+});
+
+describe("getClient", () => {
+  const fake = (result: { data?: unknown; error?: { message: string } | null }) =>
+    ({
+      from: () => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null, ...result }) }),
+        }),
+      }),
+    }) as never;
+
+  it("returns null for a missing row and for an empty id", async () => {
+    expect(await getClient(fake({ data: null }), "nope")).toBeNull();
+    expect(await getClient(fake({ data: cliClient }), "")).toBeNull();
+  });
+
+  it("returns the row when present", async () => {
+    expect(await getClient(fake({ data: cliClient }), "lt_cli")).toEqual(cliClient);
+  });
+
+  it("throws on a query error instead of reporting an unknown client (#115)", async () => {
+    await expect(getClient(fake({ error: { message: "boom" } }), "lt_cli")).rejects.toMatchObject({
+      code: "server_error",
+      status: 500,
+    });
   });
 });

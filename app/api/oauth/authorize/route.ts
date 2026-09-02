@@ -37,7 +37,20 @@ export async function GET(request: Request) {
   const clientId = p.get("client_id") ?? "";
   const redirectUri = p.get("redirect_uri") ?? "";
 
-  const client = await getClient(service, clientId);
+  if (!clientId) {
+    // The only known way to arrive here from our own CLI is a shell that
+    // truncated the sign-in URL at its first "&" (Windows cmd.exe, CLI <= 0.1.2).
+    return oauthErrorPage(
+      "This sign-in link is missing its client_id, which usually means your terminal cut the URL short. " +
+        "Update the Lettertrace CLI (npm install -g lettertrace@latest) or paste the full URL it printed.",
+    );
+  }
+  let client;
+  try {
+    client = await getClient(service, clientId);
+  } catch {
+    return oauthErrorPage("Lettertrace could not look up this OAuth client right now. Try again in a moment.", 500);
+  }
   if (!client) return oauthErrorPage("Unknown OAuth client.");
   if (!redirectUri || !redirectUriAllowed(client, redirectUri)) {
     return oauthErrorPage("The redirect URI is not registered for this client.");

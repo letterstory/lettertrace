@@ -27,10 +27,41 @@ export class NeedsLogin extends Error {
   }
 }
 
+/**
+ * The program + argv that opens `url` in the default browser on `platform`.
+ * Exported (pure) so the Windows branch can be unit-tested from any OS.
+ *
+ * Windows is the delicate one. `cmd /c start "" <url>` is the classic recipe,
+ * but Node only quotes an argument that contains whitespace, so cmd.exe saw the
+ * raw query string and split it on every `&` — the browser opened
+ * `/api/oauth/authorize?response_type=code` and nothing else, which the server
+ * reported as "Unknown OAuth client" (#115). Going through PowerShell with a
+ * base64-encoded script means no shell ever parses the URL: single quotes are
+ * fully literal in PowerShell, and -EncodedCommand sidesteps every quoting rule
+ * of the command line itself.
+ */
+export function browserLaunch(url, platform = process.platform) {
+  if (platform === "darwin") return { cmd: "open", args: [url] };
+  if (platform === "win32") {
+    const script = `Start-Process '${url.replace(/'/g, "''")}'`;
+    const root = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    return {
+      cmd: `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+    };
+  }
+  return { cmd: "xdg-open", args: [url] };
+}
+
 function openBrowser(url) {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  const { cmd, args } = browserLaunch(url);
   try {
     const child = spawn(cmd, args, { stdio: "ignore", detached: true });
     child.on("error", () => {});

@@ -278,11 +278,14 @@ export async function getClient(
   clientId: string,
 ): Promise<OAuthClient | null> {
   if (!clientId) return null;
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("oauth_clients")
     .select(CLIENT_COLUMNS)
     .eq("client_id", clientId)
     .maybeSingle();
+  // A failed query is not "no such client". Swallowing it here once sent a
+  // user off to re-seed a client row that had been present all along (#115).
+  if (error) throw new OAuthError("server_error", 500, error.message);
   return (data as OAuthClient | null) ?? null;
 }
 
