@@ -4,6 +4,7 @@ import { DashboardNav, type NavReport } from "@/components/dashboard/nav";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { WhyFree } from "@/components/dashboard/why-free";
+import { ProductCta } from "@/components/dashboard/product-cta";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { LetterproveAttest } from "@/components/letterprove-attest";
 import { isFirstSignIn } from "@/lib/letterprove";
@@ -136,7 +137,9 @@ export default async function DashboardLayout({
       {offerFounderCall && callUrl && <FounderCallOffer url={callUrl} />}
 
       <aside className="flex flex-col border-b border-ink/10 bg-paper md:h-screen md:w-[260px] md:shrink-0 md:border-b-0 md:border-r">
-        <div className="flex flex-col gap-6 px-5 py-6 md:h-full">
+        {/* Scrolls: six reports in the sub-menu plus the CTA push Sign out past
+            the fold, and an h-screen column without it leaves them unreachable. */}
+        <div className="flex flex-col gap-6 px-5 py-6 md:h-full md:overflow-y-auto">
           <div className="flex items-center justify-between gap-2">
             <Logo />
             <ThemeToggle className="hidden md:inline-flex" />
@@ -159,7 +162,13 @@ export default async function DashboardLayout({
 
           <DashboardNav reports={navReports} totalReports={reportCount} />
 
-          <div className="mt-auto hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
+          {/* The only mt-auto in this column, deliberately: flexbox splits free
+              space equally between every auto margin, so leaving one on the
+              account block below halved the slack and left this box floating
+              mid-column instead of sitting on the footer. */}
+          <ProductCta className="md:mt-auto" />
+
+          <div className="hidden flex-col gap-3 border-t border-ink/10 pt-4 md:flex">
             <WhyFree />
             <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
               {user.email}
