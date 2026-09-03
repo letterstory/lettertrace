@@ -253,6 +253,88 @@ export function shapeActivity(
 }
 
 // ---------------------------------------------------------------------------
+// Signups
+// ---------------------------------------------------------------------------
+
+export interface Signups {
+  /** New profiles in the rolling 24h / 7d / 30d, same windows as activity. */
+  daily: number;
+  weekly: number;
+  monthly: number;
+  /** Every profile ever — the denominator the other pages divide by. */
+  total: number;
+}
+
+/** New accounts per rolling window. Counted off profiles.created_at, which the
+ *  signup trigger stamps, so this is "made an account", not "ran anything" —
+ *  the one number on this page that is deliberately NOT measured in runs,
+ *  because the gap between it and daily active IS the activation problem. */
+export function shapeSignups(profiles: GrowthProfileRow[], now: number): Signups {
+  const cutoffs = { daily: now - DAY_MS, weekly: now - 7 * DAY_MS, monthly: now - 30 * DAY_MS };
+  const counts = { daily: 0, weekly: 0, monthly: 0 };
+  for (const profile of profiles) {
+    const t = Date.parse(profile.created_at);
+    if (!Number.isFinite(t) || t > now) continue;
+    for (const key of ["daily", "weekly", "monthly"] as const) {
+      if (t >= cutoffs[key]) counts[key] += 1;
+    }
+  }
+  return { ...counts, total: profiles.length };
+}
+
+// ---------------------------------------------------------------------------
+// Returning users
+// ---------------------------------------------------------------------------
+
+export interface Retention {
+  /** Distinct users with at least one run in the last 30 days. */
+  active: number;
+  /** Of those, the ones who came back: runs on two or more distinct UTC days. */
+  returning: number;
+  /** returning / active as a whole percentage, null with nobody active. */
+  rate: number | null;
+}
+
+/** The share of active users who came back on a second day.
+ *
+ *  "Returning" needs a return TO something, and for a visibility tracker that
+ *  something is a run — so a returning user is one who fired runs on two or
+ *  more distinct UTC days inside the 30d window, not one who merely signed in
+ *  twice. Distinct days rather than run count on purpose: five runs in one
+ *  afternoon is a single evaluation session, and the question here is whether
+ *  anyone came back the next day.
+ *
+ *  Scheduled runs count, and that is deliberate: a user whose weekly schedule
+ *  keeps firing is retained even when they never open the app. */
+export function shapeRetention(
+  runs: GrowthRunRow[],
+  projectOwner: Map<string, string>,
+  now: number,
+): Retention {
+  const cutoff = now - 30 * DAY_MS;
+  const daysByUser = new Map<string, Set<string>>();
+
+  for (const run of runs) {
+    const t = Date.parse(run.created_at);
+    const owner = projectOwner.get(run.project_id);
+    if (!owner || !Number.isFinite(t) || t < cutoff || t > now) continue;
+    const days = daysByUser.get(owner) ?? new Set<string>();
+    days.add(utcDay(run.created_at));
+    daysByUser.set(owner, days);
+  }
+
+  const active = daysByUser.size;
+  let returning = 0;
+  for (const days of daysByUser.values()) if (days.size >= 2) returning += 1;
+
+  return {
+    active,
+    returning,
+    rate: active > 0 ? Math.round((returning / active) * 100) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Most active accounts
 // ---------------------------------------------------------------------------
 
@@ -437,6 +519,8 @@ export function shapeLeads(
 
 export interface GrowthReport {
   activity: Activity;
+  signups: Signups;
+  retention: Retention;
   topAccounts: TopAccount[];
   recentRuns: RecentRun[];
   leads: Lead[];
@@ -493,6 +577,8 @@ export async function growthReport(now = Date.now()): Promise<GrowthReport> {
 
   return {
     activity: shapeActivity(runs, projectOwner, now),
+    signups: shapeSignups(profiles, now),
+    retention: shapeRetention(runs, projectOwner, now),
     topAccounts: shapeTopAccounts(runs, projects, profiles),
     recentRuns: shapeRecentRuns(runs, projects, profiles),
     leads: shapeLeads(runs, projects, profiles, now),

@@ -75,6 +75,14 @@ export interface OutboundClickRow {
   clicked_at: string;
 }
 
+/** A BYOK credential row, from provider_keys OR router_keys — the two tables
+ *  are separate because a router is not an answer engine (see the schema), but
+ *  for "did this account bring its own key?" they are the same event. */
+export interface KeyRow {
+  user_id: string;
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Periods
 // ---------------------------------------------------------------------------
@@ -165,6 +173,55 @@ export function shapeConversionStats(
     connectedAllTime: allUsers.size,
     clicksAllTime: clicks.length,
     topProduct: top ? { product: top[0], clicks: top[1] } : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Brought their own keys
+// ---------------------------------------------------------------------------
+
+export interface KeyedStats {
+  /** Users whose FIRST key landed inside the period — the conversion event. */
+  users: number;
+  /** Users with at least one key, ever. */
+  allTime: number;
+  /** allTime / totalUsers as a percentage with one decimal, null until there is
+   *  anyone to divide by. Same one-decimal reasoning as the connected rate. */
+  rate: number | null;
+}
+
+/**
+ * How many accounts added their own API keys.
+ *
+ * A rung above CONNECTED and below paying: the trial runs on the operator's
+ * shared keys, so pasting your own key is the moment an account stops costing
+ * us money and starts intending to keep using the product.
+ *
+ * Period-scoping counts each user by their FIRST key, not by every key they
+ * add — someone who pastes Anthropic in July and OpenAI in August converted
+ * once, in July, and should not show up again in August's number. The all-time
+ * stock comes back alongside so a narrow period keeps its context.
+ */
+export function shapeKeyedStats(
+  keys: KeyRow[],
+  totalUsers: number,
+  since: number | null,
+): KeyedStats {
+  const firstByUser = new Map<string, number>();
+  for (const key of keys) {
+    const t = Date.parse(key.created_at);
+    if (!Number.isFinite(t)) continue;
+    const prev = firstByUser.get(key.user_id);
+    if (prev === undefined || t < prev) firstByUser.set(key.user_id, t);
+  }
+
+  let inPeriod = 0;
+  for (const t of firstByUser.values()) if (since === null || t >= since) inPeriod += 1;
+
+  return {
+    users: inPeriod,
+    allTime: firstByUser.size,
+    rate: totalUsers > 0 ? Math.round((firstByUser.size / totalUsers) * 1000) / 10 : null,
   };
 }
 
@@ -303,6 +360,7 @@ export function shapeConnectedUsers(
 
 export interface ConversionsReport {
   stats: ConversionStats;
+  keyed: KeyedStats;
   series: RatePoint[];
   connected: ConnectedUser[];
   /** Set when a query failed — the page says "incomplete", never fake zero. */
@@ -319,24 +377,36 @@ export async function conversionsReport(
 ): Promise<ConversionsReport> {
   const svc = createServiceClient();
 
-  const [clicksQ, profilesQ] = await Promise.all([
+  // All keys, all time: the period filter applies to a user's FIRST key, which
+  // can only be found by looking at every row they have.
+  const [clicksQ, profilesQ, providerKeysQ, routerKeysQ] = await Promise.all([
     svc
       .from("outbound_clicks")
       .select("user_id, url, clicked_at")
       .order("clicked_at", { ascending: false })
       .limit(ROWS_CAP),
     svc.from("profiles").select("id, email, created_at").limit(ROWS_CAP),
+    svc.from("provider_keys").select("user_id, created_at").limit(ROWS_CAP),
+    svc.from("router_keys").select("user_id, created_at").limit(ROWS_CAP),
   ]);
 
-  const failed = [clicksQ.error && "outbound_clicks", profilesQ.error && "profiles"].filter(
-    Boolean,
-  );
+  const failed = [
+    clicksQ.error && "outbound_clicks",
+    profilesQ.error && "profiles",
+    providerKeysQ.error && "provider_keys",
+    routerKeysQ.error && "router_keys",
+  ].filter(Boolean);
   const clicks = (clicksQ.data ?? []) as OutboundClickRow[];
   const profiles = (profilesQ.data ?? []) as GrowthProfileRow[];
+  const keys = [
+    ...((providerKeysQ.data ?? []) as KeyRow[]),
+    ...((routerKeysQ.data ?? []) as KeyRow[]),
+  ];
   const since = periodStart(period, now);
 
   return {
     stats: shapeConversionStats(clicks, profiles.length, since),
+    keyed: shapeKeyedStats(keys, profiles.length, since),
     series: shapeRateSeries(clicks, profiles, since, now),
     // The table reads through the same window: destinations, counts and
     // first/latest are period-scoped, so it always agrees with the cards.

@@ -24,7 +24,7 @@ export const metadata = { robots: { index: false, follow: false } };
  * pays for a product — get their own words when we can measure them, which is
  * why nothing on this page says "converted" about a mere click.
  *
- * Deliberately small for now: one row of numbers, one table.
+ * Deliberately small for now: one row of numbers, one chart, one table.
  */
 
 const CLASS_TONE: Record<EmailClass, "teal" | "sand" | "terracotta"> = {
@@ -122,7 +122,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
 
   const period = periodFrom(searchParams);
   const periodLabel = PERIOD_OPTIONS.find((o) => o.value === period)!.label.toLowerCase();
-  const { stats, series, connected, degraded } = await conversionsReport(period);
+  const { stats, keyed, series, connected, degraded } = await conversionsReport(period);
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
   const today = new Date().toISOString().slice(0, 10);
@@ -131,7 +131,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
     <div className="space-y-10">
       <SectionHeading
         title="Conversions"
-        description="Who goes from lettertrace to another Letter Company product. Today this measures connected users — clicked one of our outbound links; signups and paying customers become their own rungs once we can measure them. Emails are in the clear: this is a cross-sell list."
+        description="The rungs an account climbs: connected — clicked one of our outbound links — and keyed, where they paste their own API key and stop running on our shared trial. Signups on the other products and paying customers get their own rungs once we can measure them. Emails are in the clear: this is a cross-sell list."
         action={<PeriodSelect value={period} />}
       />
 
@@ -145,7 +145,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
       )}
 
       {/* ---- Row 1: the numbers --------------------------------------------- */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Connected rate"
           value={stats.rate === null ? "—" : `${stats.rate}%`}
@@ -171,6 +171,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               : `${periodLabel} · ${stats.clicksAllTime.toLocaleString()} all time`
           }
           accent="butter"
+        />
+        <StatCard
+          label="Added API keys"
+          value={keyed.users.toLocaleString()}
+          hint={
+            period === "all"
+              ? `${keyed.rate === null ? "—" : `${keyed.rate}%`} of ${stats.totalUsers.toLocaleString()} signups brought their own`
+              : `first key in ${periodLabel} · ${keyed.allTime.toLocaleString()} all time, ${keyed.rate === null ? "—" : `${keyed.rate}%`} of signups`
+          }
+          accent="terracotta"
         />
         <StatCard
           label="Top destination"
@@ -314,7 +324,9 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         Connected means &ldquo;clicked one of our outbound product links while signed
         in&rdquo; — visits that start anywhere else are invisible here, and clicking is not
         signing up or paying, which will be measured separately. Links are counted when wrapped
-        in OutboundLink; today that is the Phantoms item in the dashboard nav.{" "}
+        in OutboundLink; today that is the Phantoms item in the dashboard nav. Added API keys
+        counts an account once, on its first provider or router key: the trial runs on our
+        shared keys, so pasting your own is the rung where an account stops costing us money.{" "}
         <Link href="/admin/growth" className="underline">
           Back to growth
         </Link>

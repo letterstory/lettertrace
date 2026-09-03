@@ -5,6 +5,8 @@ import {
   shapeActivity,
   shapeLeads,
   shapeRecentRuns,
+  shapeRetention,
+  shapeSignups,
   shapeTopAccounts,
   type GrowthProfileRow,
   type GrowthProjectRow,
@@ -216,5 +218,66 @@ describe("shapeLeads", () => {
   it("drops accounts without an email — they cannot be contacted", () => {
     const profiles: GrowthProfileRow[] = [{ id: "u9", email: null, created_at: iso(1) }];
     expect(shapeLeads([], [], profiles, NOW)).toHaveLength(0);
+  });
+});
+
+describe("shapeSignups", () => {
+  it("counts profiles per rolling window, plus the all-time total", () => {
+    const profiles: GrowthProfileRow[] = [
+      { id: "a", email: "a@x.com", created_at: iso(0, 2) },
+      { id: "b", email: "b@x.com", created_at: iso(3) },
+      { id: "c", email: "c@x.com", created_at: iso(20) },
+      { id: "d", email: "d@x.com", created_at: iso(90) },
+    ];
+    expect(shapeSignups(profiles, NOW)).toEqual({
+      daily: 1,
+      weekly: 2,
+      monthly: 3,
+      total: 4,
+    });
+  });
+
+  it("ignores unparseable and future timestamps in the windows", () => {
+    const profiles: GrowthProfileRow[] = [
+      { id: "a", email: null, created_at: "not a date" },
+      { id: "b", email: null, created_at: new Date(NOW + DAY_MS).toISOString() },
+    ];
+    // Still both real accounts, so total counts them — the windows do not.
+    expect(shapeSignups(profiles, NOW)).toEqual({ daily: 0, weekly: 0, monthly: 0, total: 2 });
+  });
+});
+
+describe("shapeRetention", () => {
+  const owner = new Map([
+    ["proj-a", "u1"],
+    ["proj-b", "u2"],
+    ["proj-c", "u2"],
+  ]);
+
+  it("counts a user as returning only on a second distinct UTC day", () => {
+    const runs = [
+      // u1: three runs, all the same day — one session, not a return.
+      run({ project_id: "proj-a", created_at: iso(2, 1) }),
+      run({ project_id: "proj-a", created_at: iso(2, 2) }),
+      run({ project_id: "proj-a", created_at: iso(2, 3) }),
+      // u2: two days, across two different projects — returned.
+      run({ project_id: "proj-b", created_at: iso(5) }),
+      run({ project_id: "proj-c", created_at: iso(9) }),
+    ];
+    expect(shapeRetention(runs, owner, NOW)).toEqual({ active: 2, returning: 1, rate: 50 });
+  });
+
+  it("drops runs outside the 30d window and runs with no owner", () => {
+    const runs = [
+      run({ project_id: "proj-a", created_at: iso(1) }),
+      run({ project_id: "proj-a", created_at: iso(40) }),
+      run({ project_id: "proj-gone", created_at: iso(1) }),
+      run({ project_id: "proj-gone", created_at: iso(2) }),
+    ];
+    expect(shapeRetention(runs, owner, NOW)).toEqual({ active: 1, returning: 0, rate: 0 });
+  });
+
+  it("returns a null rate rather than 0% when nobody is active", () => {
+    expect(shapeRetention([], owner, NOW)).toEqual({ active: 0, returning: 0, rate: null });
   });
 });

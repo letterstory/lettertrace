@@ -7,7 +7,9 @@ import {
   productOf,
   shapeConversionStats,
   shapeConnectedUsers,
+  shapeKeyedStats,
   shapeRateSeries,
+  type KeyRow,
   type OutboundClickRow,
 } from "./conversions";
 import type { GrowthProfileRow } from "./growth";
@@ -253,5 +255,40 @@ describe("shapeConnectedUsers", () => {
       expect(c.email).toBeNull();
       expect(c.emailClass).toBe("personal");
     }
+  });
+});
+
+describe("shapeKeyedStats", () => {
+  const keys: KeyRow[] = [
+    // u1 converted 40 days ago and added a second key inside the window; the
+    // period must still credit them to the older date, not count them twice.
+    { user_id: "u1", created_at: iso(40) },
+    { user_id: "u1", created_at: iso(3) },
+    { user_id: "u2", created_at: iso(5) },
+    { user_id: "u3", created_at: iso(0, 2) },
+  ];
+
+  it("counts a user by their first key, once", () => {
+    expect(shapeKeyedStats(keys, 50, NOW - 30 * DAY_MS)).toEqual({
+      users: 2,
+      allTime: 3,
+      rate: 6,
+    });
+  });
+
+  it("counts everyone for an all-time period", () => {
+    expect(shapeKeyedStats(keys, 50, null)).toEqual({ users: 3, allTime: 3, rate: 6 });
+  });
+
+  it("keeps one decimal so an early rate does not round to zero", () => {
+    expect(shapeKeyedStats([{ user_id: "u1", created_at: iso(1) }], 2000, null).rate).toBe(0.1);
+  });
+
+  it("skips unparseable timestamps and nulls the rate with no users", () => {
+    expect(shapeKeyedStats([{ user_id: "u1", created_at: "nope" }], 0, null)).toEqual({
+      users: 0,
+      allTime: 0,
+      rate: null,
+    });
   });
 });
