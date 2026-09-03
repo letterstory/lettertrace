@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { article, resolveRedirectBase, safePath } from "@/lib/utils";
+import { article, duration, resolveRedirectBase, safePath } from "@/lib/utils";
 
 describe("resolveRedirectBase", () => {
   const PROD = "https://lettertrace.com";
@@ -95,5 +95,27 @@ describe("article", () => {
   it("ignores case and leading space", () => {
     expect(article("  openai")).toBe("an");
     expect(article("GOOGLE")).toBe("a");
+  });
+});
+
+describe("duration", () => {
+  it("picks one unit and rounds to it", () => {
+    expect(duration(30_000)).toBe("<1m");
+    expect(duration(9 * 60_000)).toBe("9m");
+    expect(duration(3 * 3_600_000)).toBe("3h");
+    expect(duration(5 * 86_400_000)).toBe("5d");
+    expect(duration(120 * 86_400_000)).toBe("4mo");
+  });
+
+  it("crosses over at 48h and 60d rather than at the unit boundary", () => {
+    // 36 hours is more legibly "36h" than "2d"; 47 days than "2mo".
+    expect(duration(36 * 3_600_000)).toBe("36h");
+    expect(duration(47 * 86_400_000)).toBe("47d");
+  });
+
+  it("renders an em dash for nothing to measure", () => {
+    expect(duration(null)).toBe("—");
+    expect(duration(-1)).toBe("—");
+    expect(duration(Number.NaN)).toBe("—");
   });
 });

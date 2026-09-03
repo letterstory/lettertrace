@@ -97,7 +97,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
   if (!admin) notFound();
 
   const report = await growthReport();
-  const { activity } = report;
+  const { activity, signups, retention } = report;
   const filter = leadFilterFrom(searchParams);
   const leads = report.leads.filter(filter.pick);
   const leadCounts = new Map(LEAD_FILTERS.map((f) => [f.key, report.leads.filter(f.pick).length]));
@@ -120,8 +120,11 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         </Card>
       )}
 
-      {/* ---- Row 1: the numbers --------------------------------------------- */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* ---- Row 1: the numbers ---------------------------------------------
+          Six cards on a three-wide grid: the activity windows across the top,
+          and the three ratios that judge them underneath — how many arrived,
+          how many came back, how concentrated the usage is. */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <StatCard
           label="Daily active"
           value={activity.daily.users.toLocaleString()}
@@ -141,9 +144,25 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           accent="butter"
         />
         <StatCard
+          label="New sign-ups"
+          value={signups.monthly.toLocaleString()}
+          hint={`rolling 30d · ${signups.weekly.toLocaleString()} in 7d · ${signups.daily.toLocaleString()} in 24h`}
+          accent="terracotta"
+        />
+        <StatCard
+          label="Returning users"
+          value={retention.rate === null ? "—" : `${retention.rate}%`}
+          hint={
+            retention.active === 0
+              ? "nobody has run in 30d"
+              : `${retention.returning.toLocaleString()} of ${retention.active.toLocaleString()} active users ran on 2+ days · 30d`
+          }
+          accent="mint"
+        />
+        <StatCard
           label="Stickiness"
           value={activity.stickiness === null ? "—" : `${activity.stickiness}%`}
-          hint={`DAU / MAU · ${report.totalUsers.toLocaleString()} signups total`}
+          hint={`DAU / MAU · ${signups.total.toLocaleString()} signups total`}
           accent="sand"
         />
       </div>
@@ -350,8 +369,11 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
       </section>
 
       <p className="text-xs text-ink-faint">
-        Active means “fired a run”, not “signed in”. Email classes: work = company domain,
-        personal = consumer providers, burner = disposable inboxes.{" "}
+        Active means “fired a run”, not “signed in”, and returning means “ran on two or
+        more separate days” — five runs in one afternoon is one evaluation session, not a
+        return. New sign-ups is the one figure counted off accounts rather than runs: the gap
+        between it and daily active is the activation problem. Email classes: work = company
+        domain, personal = consumer providers, burner = disposable inboxes.{" "}
         <Link href="/admin" className="underline">
           Back to operations
         </Link>
