@@ -26,6 +26,7 @@ Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and moni
 | Concept | What it is |
 |---|---|
 | **Organization (project)** | A brand's workspace: brand name, aliases, domain, default model, schedule. An account can have several, the sidebar selector switches the whole dashboard between them, and **＋ New organization** re-opens the setup wizard. |
+| **Team** | An organization can have more than one person on it. The **owner** created it and pays for its runs; **members** are invited by email and work alongside them. See [Teams](#teams). |
 | **Competitors** | Brands you benchmark against (name + aliases). |
 | **Topics** | Subjects you want to monitor (e.g. "project management software"). |
 | **Prompts (variations)** | Natural questions generated for a topic, the queries actually sent to the model. |
@@ -187,7 +188,8 @@ docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
 
 Everything else in [`.env.example`](./.env.example) is optional: the `TRIAL_*`
 keys exist to hand out free runs on your own provider account, the `ADMIN_*` /
-`RESEND_API_KEY` values only enable operator alerts, and `FOUNDER_CALL_URL`
+`RESEND_API_KEY` values enable operator alerts and the mail that carries
+[team invitations](#teams), and `FOUNDER_CALL_URL`
 offers new signups a setup call at a booking link of your choosing. Leave that
 last one unset — as `.env.example` does — and no such offer exists.
 
@@ -289,7 +291,51 @@ Set in your environment:
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
 
-> After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
+> After upgrading, re-run `supabase/schema.sql`. It adds the `project_members`
+> and `project_invites` tables plus the `can_access_project` / `is_project_owner`
+> helpers behind [Teams](#teams) — which every project-scoped RLS policy now
+> calls, so an older deployment keeps single-person behaviour until it is
+> applied. It also adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
+
+## Teams
+
+An organization is shared by inviting people to it: **Settings → Team**, enter
+an address, and they get a one-time link that expires in a week.
+
+|  | Owner | Member |
+|---|---|---|
+| See prompts, competitors, topics, runs, results | ✅ | ✅ |
+| Edit what's monitored, and start runs | ✅ | ✅ |
+| Invite and remove people | ✅ | — |
+| Delete the organization | ✅ | — |
+| See the other person's API keys | — | — |
+
+Three decisions worth knowing before you rely on it:
+
+**The owner's keys pay for everything.** A member's run resolves the *owner's*
+provider key and the owner's trial allowance, because "invite people to the
+instance I created" means sharing the instance, not asking each teammate to
+bring their own Anthropic account. Keys stay per-account and private — a member
+never sees the owner's, and their own are not used here. The scheduler already
+billed the owner this way; before teams the two paths merely happened to agree.
+
+**An invitation admits the person it names.** The link is a bearer credential
+travelling through email, so acceptance checks that you are signed in as the
+address it was sent to. Forwarding it to a colleague does not admit the
+colleague. The token is stored only as a SHA-256 digest — the same rule as API
+keys and OAuth codes — and accepting is a POST behind a button, never a GET on
+the link, because corporate mail scanners fetch every URL in an incoming
+message and would otherwise accept invitations on their recipients' behalf.
+
+**Membership is additive.** The owner stays `projects.user_id` and has no
+membership row, so everything that reasons about the owner — billing, key
+resolution, the scheduler, /admin — keeps its meaning, and there is no
+backfill. Access is one SQL predicate, `public.can_access_project`, which every
+RLS policy on the project's tables now calls.
+
+Invitations need mail configured (`RESEND_API_KEY` and a verified
+`ADMIN_ALERT_FROM`, below). Without it the invite form reports that it could
+not send rather than silently creating an invitation nobody was told about.
 
 ## Operator alerts (optional)
 

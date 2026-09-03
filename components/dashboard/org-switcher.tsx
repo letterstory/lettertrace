@@ -12,6 +12,10 @@ export interface OrgOption {
   name: string;
   /** Brand being monitored (projects.brand_name). */
   brandName: string;
+  /** Somebody else's organization, joined by invitation. Worth a mark in the
+   *  list: which of these is YOURS decides whether a destructive setting is
+   *  even offered, and finding that out by clicking is the wrong way. */
+  shared?: boolean;
 }
 
 // Sidebar organization switcher: pick which of the account's organizations the
@@ -131,7 +135,14 @@ export function OrgSwitcher({
                       )}
                     >
                       <span className="min-w-0">
-                        <span className="block truncate font-medium">{org.brandName}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate font-medium">{org.brandName}</span>
+                          {org.shared && (
+                            <span className="shrink-0 rounded-sm bg-ink/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
+                              Shared
+                            </span>
+                          )}
+                        </span>
                         {org.name !== org.brandName && (
                           <span className="block truncate text-xs text-ink-faint">{org.name}</span>
                         )}

@@ -124,11 +124,14 @@ export async function POST(request: Request) {
         update.default_model = engine.model;
       }
 
+      // No .eq("user_id") here: teammates edit the organization's settings,
+      // and getProject above already resolved a project this user can reach.
+      // RLS is the enforcement (projects_member_write) — an id they cannot see
+      // matches no row, which is the same outcome the extra filter gave.
       const { data, error } = await supabase
         .from("projects")
         .update(update)
         .eq("id", existing.id)
-        .eq("user_id", user.id)
         .select("*")
         .single();
 
