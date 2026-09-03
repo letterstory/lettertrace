@@ -294,10 +294,26 @@ describe("shapeKeyedStats", () => {
     expect(shapeKeyedStats(keys, profiles, null).users).toBe(3);
   });
 
-  it("keeps the activation rate all-time on both sides of the fraction", () => {
-    // 3 of 50 accounts have a key, whatever window is being viewed.
-    expect(shapeKeyedStats(keys, profiles, NOW - 30 * DAY_MS).rate).toBe(6);
-    expect(shapeKeyedStats(keys, profiles, null).rate).toBe(6);
+  it("rates the window's SIGNUP COHORT, so the numerator can't escape the denominator", () => {
+    // All time: 3 of 50 accounts hold a key.
+    const allTime = shapeKeyedStats(keys, profiles, null);
+    expect(allTime).toMatchObject({ cohortSize: 50, cohortKeyed: 3, rate: 6 });
+
+    // Last 30 days: u2 (7d) and u3 (3h) signed up in it, and both hold a key.
+    // The 47 keyless accounts signed up 10 days ago, so they are in the cohort
+    // too — 2 of 49.
+    const monthly = shapeKeyedStats(keys, profiles, NOW - 30 * DAY_MS);
+    expect(monthly).toMatchObject({ cohortSize: 49, cohortKeyed: 2 });
+    expect(monthly.rate).toBeCloseTo(4.1, 1);
+  });
+
+  it("never exceeds 100%, unlike keys-added-over-signups", () => {
+    // u1 signed up 50 days ago and first keyed 40 days ago. In a 7-day window
+    // they contribute a key event but no signup, which is exactly the case
+    // that would push a naive ratio past 100%.
+    const week = shapeKeyedStats(keys, profiles, NOW - 7 * DAY_MS);
+    expect(week.cohortKeyed).toBeLessThanOrEqual(week.cohortSize);
+    expect(week.rate!).toBeLessThanOrEqual(100);
   });
 
   it("keeps one decimal so an early rate does not round to zero", () => {
@@ -337,6 +353,8 @@ describe("shapeKeyedStats", () => {
       users: 0,
       allTime: 0,
       rate: null,
+      cohortSize: 0,
+      cohortKeyed: 0,
       medianMs: null,
       medianAllTimeMs: null,
     });

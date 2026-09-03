@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { classifyEmail, type EmailClass, type GrowthProfileRow } from "./growth";
+import { periodStart, type Period } from "@/lib/periods";
 
 /**
  * Cross-product conversions: who leaves lettertrace for another Letter
@@ -87,30 +88,11 @@ export interface KeyRow {
 // Periods
 // ---------------------------------------------------------------------------
 
-/** The page's one time filter: every number, the chart, and the table read the
- *  same window, so the period is a page-level URL param rather than per-card
- *  state. (The option labels live with the dropdown in period-select.tsx,
- *  which is a client component and must not import this server module.) */
-export type Period = "7d" | "30d" | "ytd" | "all";
-
-export function isPeriod(value: unknown): value is Period {
-  return value === "7d" || value === "30d" || value === "ytd" || value === "all";
-}
-
-/** When the period opens, as a ms timestamp — null means all-time. YTD is
- *  Jan 1 UTC, matching the UTC day-bucketing everywhere else on /admin. */
-export function periodStart(period: Period, now: number): number | null {
-  switch (period) {
-    case "7d":
-      return now - 7 * DAY_MS;
-    case "30d":
-      return now - 30 * DAY_MS;
-    case "ytd":
-      return Date.UTC(new Date(now).getUTCFullYear(), 0, 1);
-    case "all":
-      return null;
-  }
-}
+// The vocabulary moved to lib/periods.ts when Growth grew a window of its own —
+// two admin pages offering "last 7 days" and "past week" as separate ideas is
+// how a dashboard stops being readable. Re-exported so existing importers of
+// this module (and its tests) keep working.
+export { isPeriod, periodStart, type Period } from "@/lib/periods";
 
 /** Clicks at or after `since` (null = everything). Unparseable timestamps drop
  *  here rather than in every consumer. */
@@ -185,12 +167,23 @@ export interface KeyedStats {
   users: number;
   /** Users with at least one key, ever. */
   allTime: number;
-  /** allTime / totalUsers as a percentage with one decimal, null until there is
-   *  anyone to divide by. Same one-decimal reasoning as the connected rate.
-   *  Deliberately all-time on both sides: activation is a STOCK — the share of
-   *  everyone who ever signed up that now has a key — and dividing a period's
-   *  converters by every signup ever would read as a collapsing rate. */
+  /** Activation for the window's SIGNUP COHORT: of the accounts created inside
+   *  it, the share that have since connected a key. One decimal, same reasoning
+   *  as the connected rate — early on the honest number is 0.x%, and a rounded
+   *  0% reads as "feature is broken".
+   *
+   *  Cohort rather than "keys added in the window over signups in the window",
+   *  which is the obvious reading and is wrong: an account that signed up in
+   *  March and pasted a key today would count in the numerator and not the
+   *  denominator, so the ratio could exceed 100%. Numerator ⊆ denominator here,
+   *  always. On all-time the two definitions coincide exactly, which is why
+   *  this card's number does not move when the page first loads. */
   rate: number | null;
+  /** The window's signup cohort — the denominator, named in the hint because a
+   *  percentage of an unstated base is not a fact. */
+  cohortSize: number;
+  /** How many of that cohort have connected a key. */
+  cohortKeyed: number;
   /** Median milliseconds from signing up to connecting the first key, over the
    *  users whose first key landed in the period. Null when that cohort is
    *  empty, or when none of them can be matched to a signup time. */
@@ -257,10 +250,23 @@ export function shapeKeyedStats(
     }
   }
 
+  // The activation cohort: accounts CREATED in the window, and how many of them
+  // hold a key today. Walking profiles rather than keys is what keeps the
+  // numerator inside the denominator.
+  let cohortSize = 0;
+  let cohortKeyed = 0;
+  for (const [userId, created] of signedUpAt) {
+    if (since !== null && created < since) continue;
+    cohortSize += 1;
+    if (firstByUser.has(userId)) cohortKeyed += 1;
+  }
+
   return {
     users: inPeriod,
     allTime: firstByUser.size,
-    rate: profiles.length > 0 ? Math.round((firstByUser.size / profiles.length) * 1000) / 10 : null,
+    rate: cohortSize > 0 ? Math.round((cohortKeyed / cohortSize) * 1000) / 10 : null,
+    cohortSize,
+    cohortKeyed,
     medianMs: median(gapsInPeriod),
     medianAllTimeMs: median(gapsAllTime),
   };
