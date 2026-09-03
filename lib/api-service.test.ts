@@ -4,7 +4,7 @@ import {
   getRunStatus,
   createProject,
   createPrompts,
-  getOwnedProject,
+  getAccessibleProject,
   getRunReport,
   getRunResponses,
   latestCompletedRun,
@@ -186,20 +186,38 @@ describe("projectSummary", () => {
   });
 });
 
-describe("getOwnedProject", () => {
-  it("scopes the query by both project id and user id", async () => {
+describe("getAccessibleProject", () => {
+  it("returns the project to its owner without asking about membership", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
-    const project = await getOwnedProject(db as never, "user-1", "proj-1");
+    const project = await getAccessibleProject(db as never, "user-1", "proj-1");
     expect(project).toEqual(PROJECT);
-    expect(db.queries[0].filters).toEqual([
-      ["eq", "id", "proj-1"],
-      ["eq", "user_id", "user-1"],
+    expect(db.queries[0].filters).toEqual([["eq", "id", "proj-1"]]);
+    expect(db.queries.map((q) => q.table)).toEqual(["projects"]);
+  });
+
+  it("returns the project to an invited teammate", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      project_members: () => ({ data: { user_id: "user-2" } }),
+    });
+    expect(await getAccessibleProject(db as never, "user-2", "proj-1")).toEqual(PROJECT);
+    expect(db.queries[1].filters).toEqual([
+      ["eq", "project_id", "proj-1"],
+      ["eq", "user_id", "user-2"],
     ]);
   });
 
-  it("returns null when the project is not the user's", async () => {
+  it("returns null for a stranger — on the service-role client this check IS the boundary", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      project_members: () => ({ data: null }),
+    });
+    expect(await getAccessibleProject(db as never, "user-3", "proj-1")).toBeNull();
+  });
+
+  it("returns null when the project does not exist", async () => {
     const db = fakeDb({ projects: () => ({ data: null }) });
-    expect(await getOwnedProject(db as never, "user-2", "proj-1")).toBeNull();
+    expect(await getAccessibleProject(db as never, "user-2", "proj-1")).toBeNull();
   });
 });
 

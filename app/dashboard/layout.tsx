@@ -82,14 +82,22 @@ export default async function DashboardLayout({
     });
   }
 
-  // Trial banner state: only when a trial is offered and the user is relying on
-  // shared keys. Key resolution prefers the user's own key from EITHER
-  // provider, so any own key at all means they're never on the trial.
-  const providers = await getConfiguredProviders(supabase, user.id);
+  // Trial banner state: only when a trial is offered and the account paying for
+  // this organization is relying on shared keys. Key resolution prefers an own
+  // key from EITHER provider, so any own key at all means never on the trial.
+  //
+  // "The account paying" is the project's OWNER, not the viewer. A teammate
+  // looking at a shared organization must see the owner's allowance — that is
+  // the one their runs will spend — and their own key situation is irrelevant
+  // here. Reading someone else's needs service role; for the common case
+  // (their own project, or no project yet) this is the same query it was.
+  const payer = project?.user_id ?? user.id;
+  const payerClient = payer === user.id ? supabase : createServiceClient();
+  const providers = await getConfiguredProviders(payerClient, payer);
 
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled() && providers.length === 0) {
-    const used = await getTrialRunsUsed(supabase, user.id);
+    const used = await getTrialRunsUsed(payerClient, payer);
     const limit = trialRunLimit();
     trial = { used, limit, exhausted: used >= limit };
   }
@@ -151,6 +159,7 @@ export default async function DashboardLayout({
                 id: p.id,
                 name: p.name,
                 brandName: p.brand_name,
+                shared: p.user_id !== user.id,
               }))}
               activeId={project.id}
             />

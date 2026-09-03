@@ -1,10 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActivityLog } from "@/lib/types";
+import { memberProjectIds, ownerOrSharedProjectFilter } from "@/lib/project-access";
 
 // Read side of the activity log, shared by the dashboard Logs screen (cookie /
 // RLS client) and the programmatic surface (/api/v1/logs, MCP — service-role
-// client). Every query scopes by user_id EXPLICITLY so it is correct on the
-// service-role client too, where RLS is bypassed.
+// client). Every query scopes EXPLICITLY so it is correct on the service-role
+// client too, where RLS is bypassed.
 
 export interface LogQuery {
   /** Free text, matched against summary / action / path / actor / target. */
@@ -44,6 +45,14 @@ function sanitizeTerm(raw: string): string {
   return raw.replace(/[%_(),*]/g, " ").trim().slice(0, 100);
 }
 
+/** "Events I caused, plus events on an organization I was invited to." The
+ *  second half is what makes a shared organization auditable: a teammate's run
+ *  logs under THEIR user_id, so a plain user_id filter would hide from the
+ *  owner everything anyone else did in the owner's own project. */
+async function visibilityFilter(supabase: SupabaseClient, userId: string): Promise<string | null> {
+  return ownerOrSharedProjectFilter(userId, await memberProjectIds(supabase, userId));
+}
+
 /** One page of a user's activity, newest first, with the total match count. */
 export async function queryActivityLogs(
   supabase: SupabaseClient,
@@ -53,10 +62,9 @@ export async function queryActivityLogs(
   const pageSize = clampInt(filters.pageSize, 1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE);
   const page = clampInt(filters.page, 1, 100000, 1);
 
-  let query = supabase
-    .from("activity_logs")
-    .select("*", { count: "exact" })
-    .eq("user_id", userId);
+  const visible = await visibilityFilter(supabase, userId);
+  let query = supabase.from("activity_logs").select("*", { count: "exact" });
+  query = visible ? query.or(visible) : query.eq("user_id", userId);
 
   if (filters.channel) query = query.eq("channel", filters.channel);
   if (filters.category) query = query.eq("category", filters.category);
@@ -111,11 +119,11 @@ export async function activityStats(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<ActivityStats> {
-  const base = () =>
-    supabase
-      .from("activity_logs")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId);
+  const visible = await visibilityFilter(supabase, userId);
+  const base = () => {
+    const q = supabase.from("activity_logs").select("id", { count: "exact", head: true });
+    return visible ? q.or(visible) : q.eq("user_id", userId);
+  };
 
   const since24h = new Date(Date.now() - 86_400_000).toISOString();
   const since7d = new Date(Date.now() - 7 * 86_400_000).toISOString();
@@ -155,6 +163,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   competitor: "Competitor",
   provider_key: "Provider key",
   api_key: "API key",
+  team: "Team",
   oauth: "OAuth",
   onboarding: "Onboarding",
   settings: "Settings",

@@ -295,11 +295,114 @@ from auth.users u
 left join public.profiles p on p.id = u.id
 where p.id is null;
 
--- Point the dashboard at one of the caller's own organizations. SECURITY
--- DEFINER so it can guarantee a profile row exists (the client-write guard below
--- forbids client inserts) and self-scoped via auth.uid(), so a caller can only
--- move their OWN pointer, and only to a project they own. This makes switching
--- self-healing even if a profile row is somehow still missing. Safe to re-run.
+-- ---------- team collaboration ---------------------------------------
+-- A project is what the dashboard calls an organization, and until now exactly
+-- one person could see one: projects.user_id was both "who created this" and
+-- "who may read it". Teams split those apart.
+--
+-- The OWNER stays projects.user_id. Membership is purely additive — the owner
+-- deliberately has no project_members row — so nothing that already reasons
+-- about ownership (billing, key resolution, the admin pages, the scheduler)
+-- changes meaning, and there is no backfill to get wrong. "Who is on this
+-- team" is the owner plus this table.
+--
+-- Roles are a single value today, and that is a deliberate floor rather than a
+-- stub: 'member' means "can do everything with this project's content except
+-- the three things that dispose of it or its money" — delete the project,
+-- manage the team, touch the owner's API keys. Adding 'admin' later is a new
+-- value in the check constraint and a predicate change here, not a migration.
+create table if not exists public.project_members (
+  project_id uuid not null references public.projects (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  role text not null default 'member' check (role in ('member')),
+  -- Who let them in. Kept for the team list ("invited by jo@acme.io") and
+  -- because an unexplained member is a scary thing to find in your org.
+  invited_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now(),
+  primary key (project_id, user_id)
+);
+
+create index if not exists idx_project_members_user on public.project_members (user_id);
+
+-- An outstanding invitation. Structurally the same object as an OAuth device
+-- code: an opaque secret that is stored only as its SHA-256 digest, expires on
+-- its own, and can be spent exactly once.
+--
+-- email is what was invited, NOT a foreign key: the whole point is that the
+-- person may not have an account yet. It is compared case-insensitively at
+-- acceptance, and it is compared — an invite is addressed to a person, so a
+-- link forwarded to a colleague does not silently admit the colleague.
+create table if not exists public.project_invites (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects (id) on delete cascade,
+  email text not null,
+  token_hash text not null unique,
+  invited_by uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  accepted_at timestamptz,
+  accepted_by uuid references auth.users (id) on delete set null,
+  revoked_at timestamptz
+);
+
+create index if not exists idx_project_invites_project on public.project_invites (project_id, created_at desc);
+
+-- One live invitation per address per project. Partial, so a revoked or
+-- accepted invite doesn't block re-inviting the same person later — which is
+-- exactly what you do when someone leaves and comes back.
+create unique index if not exists project_invites_one_pending
+  on public.project_invites (project_id, lower(email))
+  where accepted_at is null and revoked_at is null;
+
+-- ---------- project access helpers -----------------------------------
+-- Every policy below asks one of two questions: "does the caller own this
+-- project?" and "may the caller see it at all?". Before teams, the second
+-- question didn't exist and the first was inlined as the same subquery in ten
+-- child policies (the comment where they start even admitted it should be a
+-- helper). Now it is one.
+--
+-- SECURITY DEFINER is load-bearing, not tidiness: projects' own policy has to
+-- ask about membership, and project_members' policy has to ask about the
+-- project. Evaluated as the caller those two would recurse into each other
+-- forever. A definer function reads both tables with RLS off and returns a
+-- boolean, which breaks the cycle — it can only ever answer about auth.uid(),
+-- so it leaks nothing.
+create or replace function public.is_project_owner(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.projects
+    where id = p_project_id and user_id = auth.uid()
+  );
+$$;
+
+create or replace function public.can_access_project(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.projects
+    where id = p_project_id and user_id = auth.uid()
+  ) or exists (
+    select 1 from public.project_members
+    where project_id = p_project_id and user_id = auth.uid()
+  );
+$$;
+
+grant execute on function public.is_project_owner(uuid) to authenticated;
+grant execute on function public.can_access_project(uuid) to authenticated;
+
+-- Point the dashboard at one of the organizations the caller can reach —
+-- their own, or one they were invited to. SECURITY DEFINER so it can guarantee
+-- a profile row exists (the client-write guard below forbids client inserts)
+-- and self-scoped via auth.uid(), so a caller can only move their OWN pointer.
+-- This makes switching self-healing even if a profile row is somehow still
+-- missing. Safe to re-run.
 create or replace function public.set_active_project(p_project_id uuid)
 returns void
 language plpgsql
@@ -308,13 +411,12 @@ as $$
 begin
   insert into public.profiles (id) values (auth.uid())
     on conflict (id) do nothing;
+  -- Owned OR shared with them: without this a teammate could be on a project
+  -- and still be unable to point the dashboard at it.
   update public.profiles
     set active_project_id = p_project_id
     where id = auth.uid()
-      and exists (
-        select 1 from public.projects
-        where id = p_project_id and user_id = auth.uid()
-      );
+      and public.can_access_project(p_project_id);
 end;
 $$;
 
@@ -327,12 +429,16 @@ alter table public.projects
   add column if not exists replicates integer not null default 1
   check (replicates between 1 and 10);
 
--- When the owner last actually LOOKED at this project's results. A run
+-- When anyone on this project's team last actually LOOKED at its results. A run
 -- finishing is silent otherwise: the scheduler and the API both finish runs
 -- while nobody is on the page, and even a manual run just appears in a list.
 -- Comparing a run's finished_at against this is what decides whether to nudge.
 -- Null means never looked, so the newest finished run is unseen — which is the
 -- right first impression for an account that has runs but has never opened one.
+--
+-- Deliberately one timestamp for the whole team rather than one per person:
+-- the question it answers is "has anybody looked at this yet", and a teammate
+-- reading the run is an answer to that.
 alter table public.projects
   add column if not exists results_seen_at timestamptz;
 
@@ -565,6 +671,8 @@ alter table public.runs           enable row level security;
 alter table public.responses      enable row level security;
 alter table public.mentions       enable row level security;
 alter table public.sources        enable row level security;
+alter table public.project_members enable row level security;
+alter table public.project_invites enable row level security;
 
 -- profiles: a user sees/edits only their own row.
 drop policy if exists "profiles_self" on public.profiles;
@@ -629,49 +737,124 @@ drop policy if exists "router_keys_owner" on public.router_keys;
 create policy "router_keys_owner" on public.router_keys
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
--- projects: owned by user.
+-- projects: the owner keeps every right they had.
 drop policy if exists "projects_owner" on public.projects;
 create policy "projects_owner" on public.projects
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
--- Helper: is a project owned by the current user?
--- (Inlined as a subquery in each child policy below.)
+-- A teammate reads the project and edits its settings — brand aliases, the
+-- schedule, which engine to ask — because those ARE the collaboration. They
+-- deliberately get no delete and no insert: disposing of the org and creating
+-- new ones stay with the owner, who is the one paying for them.
+--
+-- Permissive policies OR together, so the owner is unaffected by these.
+drop policy if exists "projects_member_read" on public.projects;
+create policy "projects_member_read" on public.projects
+  for select using (public.can_access_project(id));
 
--- Child tables: access allowed when the parent project belongs to the user.
+drop policy if exists "projects_member_write" on public.projects;
+create policy "projects_member_write" on public.projects
+  for update using (public.can_access_project(id))
+  with check (public.can_access_project(id));
+
+-- Ownership is not an editable field.
+--
+-- projects_member_write lets a teammate UPDATE the row, and without this a
+-- member could set user_id to themselves: the WITH CHECK would still pass —
+-- they can access the project either way — and they would have taken it,
+-- along with the billing that follows projects.user_id. A column grant is not
+-- a reliable defence here (Supabase re-grants table privileges to
+-- `authenticated`, so a REVOKE can silently be undone), so this is a trigger,
+-- exactly like guard_profiles above and for exactly the same reason.
+--
+-- Invoker rights, not definer: current_user then reveals whether a real client
+-- is writing. Our own security-definer functions and the service role run as
+-- the table owner and pass straight through, which is what would let a future
+-- "transfer this organization" RPC do the one legitimate version of this.
+-- Safe to re-run.
+create or replace function public.guard_projects()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user in ('authenticated', 'anon') and new.user_id is distinct from old.user_id then
+    new.user_id := old.user_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_projects_write on public.projects;
+create trigger guard_projects_write
+  before update on public.projects
+  for each row execute function public.guard_projects();
+
+-- Child tables: access allowed to anyone who can reach the parent project —
+-- the owner or a teammate. can_access_project replaces the identical subquery
+-- that used to be inlined in every one of these.
 drop policy if exists "competitors_owner" on public.competitors;
 create policy "competitors_owner" on public.competitors
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "topics_owner" on public.topics;
 create policy "topics_owner" on public.topics
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "prompts_owner" on public.prompts;
 create policy "prompts_owner" on public.prompts
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "runs_owner" on public.runs;
 create policy "runs_owner" on public.runs
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "responses_owner" on public.responses;
 create policy "responses_owner" on public.responses
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "mentions_owner" on public.mentions;
 create policy "mentions_owner" on public.mentions
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "sources_owner" on public.sources;
 create policy "sources_owner" on public.sources
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
+
+-- project_members: everyone on a team can see who else is on it — an invisible
+-- teammate is worse than no teammate. Only the owner adds or removes, and the
+-- one thing a member may do to the table is delete their OWN row, which is
+-- "leave this organization".
+drop policy if exists "project_members_read" on public.project_members;
+create policy "project_members_read" on public.project_members
+  for select using (public.can_access_project(project_id));
+
+drop policy if exists "project_members_owner_write" on public.project_members;
+create policy "project_members_owner_write" on public.project_members
+  for all using (public.is_project_owner(project_id))
+  with check (public.is_project_owner(project_id));
+
+drop policy if exists "project_members_leave" on public.project_members;
+create policy "project_members_leave" on public.project_members
+  for delete using (user_id = auth.uid());
+
+-- project_invites: owner-only, in both directions. A pending invite names an
+-- address that may not have an account yet, so the rows are the owner's list
+-- of who they have asked — not something the rest of the team needs.
+--
+-- Acceptance never reads through this policy: the person redeeming a token is
+-- by definition not yet on the team, and the token is looked up by digest
+-- through the service-role client in lib/team.ts.
+drop policy if exists "project_invites_owner" on public.project_invites;
+create policy "project_invites_owner" on public.project_invites
+  for all using (public.is_project_owner(project_id))
+  with check (public.is_project_owner(project_id));
 
 -- NOTE: the service-role key (used by /api/cron/run) bypasses RLS entirely,
 -- which is what lets the scheduler read due projects across all users.
@@ -1024,14 +1207,26 @@ create index if not exists idx_activity_created    on public.activity_logs (crea
 
 alter table public.activity_logs enable row level security;
 
--- Read-only for the owner. There is deliberately NO insert/update/delete policy:
--- with RLS on, that default-denies every client write, so the feed is
--- append-only and un-forgeable. The service-role writer bypasses RLS. We also
--- narrow the grants as defence-in-depth (Supabase may re-grant, hence the RLS
+-- Read-only, and only your own events plus the events of a project you're on.
+--
+-- The second half is what makes a shared organization auditable: a teammate
+-- starting runs and editing prompts logs under THEIR user_id, so without it
+-- the owner's feed would silently omit everything anyone else did in their own
+-- organization — the exact question a team makes worth asking. Scoped by
+-- project_id, so it reveals a teammate's activity on THIS project and nothing
+-- about their other work.
+--
+-- There is deliberately NO insert/update/delete policy: with RLS on, that
+-- default-denies every client write, so the feed is append-only and
+-- un-forgeable. The service-role writer bypasses RLS. We also narrow the
+-- grants as defence-in-depth (Supabase may re-grant, hence the RLS
 -- default-deny is the real guard).
 drop policy if exists "activity_logs_owner_read" on public.activity_logs;
 create policy "activity_logs_owner_read" on public.activity_logs
-  for select using (user_id = auth.uid());
+  for select using (
+    user_id = auth.uid()
+    or (project_id is not null and public.can_access_project(project_id))
+  );
 
 revoke insert, update, delete on table public.activity_logs from anon, authenticated;
 
@@ -1226,18 +1421,18 @@ alter table public.search_keys       enable row level security;
 -- service-role client and bypasses these, exactly like /api/cron/run.
 drop policy if exists "web_mention_watch_owner" on public.web_mention_watch;
 create policy "web_mention_watch_owner" on public.web_mention_watch
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "web_mention_runs_owner" on public.web_mention_runs;
 create policy "web_mention_runs_owner" on public.web_mention_runs
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 drop policy if exists "web_mentions_owner" on public.web_mentions;
 create policy "web_mentions_owner" on public.web_mentions
-  for all using (project_id in (select id from public.projects where user_id = auth.uid()))
-  with check (project_id in (select id from public.projects where user_id = auth.uid()));
+  for all using (public.can_access_project(project_id))
+  with check (public.can_access_project(project_id));
 
 -- search_keys: owned by user, same shape as provider_keys.
 drop policy if exists "search_keys_owner" on public.search_keys;

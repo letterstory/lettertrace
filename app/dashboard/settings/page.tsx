@@ -1,5 +1,6 @@
-import { KeyRound, Building2, Palette, Plug, Shuffle } from "lucide-react";
+import { KeyRound, Building2, Palette, Plug, Shuffle, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { getProject, getProviderKeysPublic, getRouterKeysPublic } from "@/lib/data";
 import { Card, CardBody, SectionHeading } from "@/components/ui";
 import { ThemeSwitch } from "@/components/theme";
@@ -7,8 +8,10 @@ import KeysManager from "./keys-manager";
 import RoutersManager from "./routers-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
+import TeamManager from "./team-manager";
 import type { ApiKeyPublic } from "@/lib/types";
 import { trialEnabled } from "@/lib/trial";
+import { loadTeam } from "@/lib/team";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +34,31 @@ export default async function SettingsPage() {
   ]);
   const apiKeys = (apiKeysRes.data as ApiKeyPublic[] | null) ?? [];
 
+  // Second pass, because it needs the project the first pass resolved. Service
+  // role: the list has to name teammates by email, and a member's profile row
+  // is not readable through the viewer's own RLS.
+  const team = project ? await loadTeam(createServiceClient(), project) : null;
+  const isOwner = project?.user_id === user.id;
+
+  // The engine picker below must offer the engines THIS ORGANIZATION can
+  // actually reach, which means the owner's credentials — a member picking
+  // Gemini because they personally hold a Google key would set a default the
+  // project can't run. Their own keys still render in the Keys card above:
+  // those are theirs, and are used by the organizations they own.
+  const payer = !project || isOwner ? null : createServiceClient();
+  const [payerKeys, payerRouterKeys] =
+    payer && project
+      ? await Promise.all([
+          getProviderKeysPublic(payer, project.user_id),
+          getRouterKeysPublic(payer, project.user_id),
+        ])
+      : [keys, routerKeys];
+
   // The saved routers as the engine picker sees them: what each gateway reaches,
   // and what its search was confirmed for. Not reduced to a provider list here —
   // coverage depends on the web-search toggle inside the form, which is client
   // state, so the picker resolves it per keystroke from these credentials.
-  const routerCoverage = routerKeys.map((k) => ({
+  const routerCoverage = payerRouterKeys.map((k) => ({
     router: k.router,
     searchVerified: k.search_verified ?? [],
   }));
@@ -103,12 +126,41 @@ export default async function SettingsPage() {
           </div>
           <ProjectForm
             project={project}
-            configuredProviders={keys.map((k) => k.provider)}
+            configuredProviders={payerKeys.map((k) => k.provider)}
             routerKeys={routerCoverage}
-            onTrial={trialEnabled() && keys.length === 0 && routerKeys.length === 0}
+            onTrial={
+              trialEnabled() && payerKeys.length === 0 && payerRouterKeys.length === 0
+            }
           />
         </CardBody>
       </Card>
+
+      {project && team && (
+        <Card>
+          <CardBody className="space-y-5">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 rounded bg-mint-tint p-2 text-mint-ink">
+                <Users className="h-5 w-5" />
+              </span>
+              <div>
+                <h3 className="text-lg font-semibold text-ink">Team</h3>
+                <p className="mt-1 text-sm text-ink-soft">
+                  {isOwner
+                    ? `Invite people into ${project.brand_name || project.name} by email. They get their own sign-in and work alongside you on this organization — everything below applies to this organization only, not to your others.`
+                    : `Who else is in ${project.brand_name || project.name}. ${team.members[0]?.email ?? "The owner"} runs this organization.`}
+                </p>
+              </div>
+            </div>
+            <TeamManager
+              members={team.members}
+              invites={team.invites}
+              isOwner={isOwner}
+              viewerId={user.id}
+              organization={project.brand_name || project.name}
+            />
+          </CardBody>
+        </Card>
+      )}
 
       <Card>
         <CardBody className="space-y-5">

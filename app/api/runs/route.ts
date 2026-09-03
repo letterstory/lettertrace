@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { getProject } from "@/lib/data";
 import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
+import { article } from "@/lib/utils";
 import { PROVIDERS, isProvider, resolveEngine } from "@/lib/models";
 import {
   resolveRunKey,
   resolveRunKeyFor,
-  consumeTrialRun,
-  recordTrialUsage,
-  recordTrialSpend,
+  consumeTrialRunFor,
+  recordTrialUsageFor,
+  recordTrialSpendFor,
   runBudgetMicros,
   engineKeyMessage,
 } from "@/lib/trial";
@@ -65,11 +67,34 @@ export async function POST(request: Request) {
   // trial funds multi-engine runs (each one atomically consumes a free run
   // below, so a 3-engine sweep costs 3 of the allowance — that's the deal the
   // raised cap exists to cover).
+  // The OWNER's credential pays for the run, whoever fired it.
+  //
+  // That is what a shared organization means: a teammate invited into it can
+  // measure the brand without also having to bring their own Anthropic key,
+  // and the account that set the project up is the one that agreed to spend.
+  // The scheduler has always billed project.user_id this way, so before teams
+  // existed these two paths merely happened to agree — they resolve the same
+  // person now for the owner, and no longer diverge for anyone else.
+  //
+  // Service-role because a teammate's own RLS can't read the owner's keys or
+  // move the owner's trial meters, which is exactly the point.
+  const billing = createServiceClient();
+  const payer = project.user_id;
   const key = overrideProvider
-    ? await resolveRunKeyFor(supabase, user.id, engine.provider, engine.model, {
+    ? await resolveRunKeyFor(billing, payer, engine.provider, engine.model, {
         webSearch: project.use_web_search,
       })
-    : await resolveRunKey(supabase, user.id, project);
+    : await resolveRunKey(billing, payer, project);
+
+  const owned = project.user_id === user.id;
+  // Every "no usable key" message ends by telling the reader to add one in
+  // Settings, which is the fix for the OWNER and misleading for a teammate:
+  // keys are per-account, so a key they added would not pay for this project.
+  // The owner's copy is left exactly as it was.
+  const addKeyFix = owned
+    ? `Add your own ${providerLabel} key in Settings to keep monitoring.`
+    : `This organization's owner needs to add ${article(providerLabel)} ${providerLabel} key to keep monitoring.`;
+  const notOwnerNote = " The keys for this organization belong to its owner, not to you.";
 
   // The selected engine has no key. Refusing beats running: the alternative is
   // storing another assistant's answers under this project's trend line.
@@ -79,7 +104,7 @@ export async function POST(request: Request) {
   if (key.source === "none" || key.source === "mismatch" || key.source === "unroutable") {
     return NextResponse.json(
       {
-        error: engineKeyMessage(key),
+        error: engineKeyMessage(key) + (owned ? "" : notOwnerNote),
         ...(key.source === "mismatch" ? { engineMismatch: true, available: key.available } : {}),
       },
       { status: 400 },
@@ -88,7 +113,7 @@ export async function POST(request: Request) {
   if (key.source === "exhausted") {
     return NextResponse.json(
       {
-        error: `You've used all ${key.limit ?? 0} free runs. Add your own ${providerLabel} key in Settings to keep monitoring.`,
+        error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,
         trialExhausted: true,
       },
       { status: 402 },
@@ -98,10 +123,10 @@ export async function POST(request: Request) {
   // Atomically consume a free run BEFORE executing, so concurrent requests
   // can't all slip past the gate while the counter lags. A consumed run
   // counts even if it later fails.
-  if (key.source === "trial" && !(await consumeTrialRun(supabase))) {
+  if (key.source === "trial" && !(await consumeTrialRunFor(billing, payer))) {
     return NextResponse.json(
       {
-        error: `You've used all ${key.limit ?? 0} free runs. Add your own ${providerLabel} key in Settings to keep monitoring.`,
+        error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,
         trialExhausted: true,
       },
       { status: 402 },
@@ -129,8 +154,8 @@ export async function POST(request: Request) {
     // ceiling — the run may already have stopped itself on that ceiling, but it
     // still has to be recorded or the next run starts from a stale total.
     if (key.source === "trial") {
-      await recordTrialUsage(supabase, result.tokensUsed);
-      await recordTrialSpend(supabase, result.spendMicros);
+      await recordTrialUsageFor(billing, payer, result.tokensUsed);
+      await recordTrialSpendFor(billing, payer, result.spendMicros);
     }
 
     // Echo the engine that actually answered. The caller asked for
