@@ -58,7 +58,14 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Gate the app behind auth.
-  if (!user && path.startsWith("/dashboard")) {
+  //
+  // /invite is gated for the same reason /dashboard is, and gets the same
+  // `next` round-trip: someone opening an invitation link who has never used
+  // Lettertrace lands on sign-up, creates the account the invite was sent to,
+  // and comes back to the link. The token is a path segment rather than a
+  // query param precisely so it survives that — the redirect below strips
+  // url.search, and an invite reduced to /login would be an invite lost.
+  if (!user && (path.startsWith("/dashboard") || path.startsWith("/invite/"))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", path);
