@@ -222,28 +222,67 @@ describe("shapeLeads", () => {
 });
 
 describe("shapeSignups", () => {
-  it("counts profiles per rolling window, plus the all-time total", () => {
-    const profiles: GrowthProfileRow[] = [
-      { id: "a", email: "a@x.com", created_at: iso(0, 2) },
-      { id: "b", email: "b@x.com", created_at: iso(3) },
-      { id: "c", email: "c@x.com", created_at: iso(20) },
-      { id: "d", email: "d@x.com", created_at: iso(90) },
-    ];
-    expect(shapeSignups(profiles, NOW)).toEqual({
-      daily: 1,
-      weekly: 2,
-      monthly: 3,
-      total: 4,
+  const profiles: GrowthProfileRow[] = [
+    { id: "a", email: "a@x.com", created_at: iso(0, 2) },
+    { id: "b", email: "b@x.com", created_at: iso(3) },
+    { id: "c", email: "c@x.com", created_at: iso(9) },
+    { id: "d", email: "d@x.com", created_at: iso(20) },
+    { id: "e", email: "e@x.com", created_at: iso(90) },
+  ];
+
+  it("counts the window and the equal-length window before it", () => {
+    // Last 7 days: a and b. The 7 days before that: c.
+    expect(shapeSignups(profiles, NOW - 7 * DAY_MS, NOW)).toEqual({
+      count: 2,
+      total: 5,
+      previous: 1,
+      change: 100,
     });
   });
 
-  it("ignores unparseable and future timestamps in the windows", () => {
-    const profiles: GrowthProfileRow[] = [
+  it("counts everything for all-time, with nothing to compare against", () => {
+    expect(shapeSignups(profiles, null, NOW)).toEqual({
+      count: 5,
+      total: 5,
+      previous: null,
+      change: null,
+    });
+  });
+
+  it("reports a fall as a negative change", () => {
+    const falling: GrowthProfileRow[] = [
+      { id: "n1", email: null, created_at: iso(2) },
+      { id: "o1", email: null, created_at: iso(8) },
+      { id: "o2", email: null, created_at: iso(10) },
+      { id: "o3", email: null, created_at: iso(12) },
+    ];
+    // 1 this week against 3 last week: down two thirds.
+    expect(shapeSignups(falling, NOW - 7 * DAY_MS, NOW)).toEqual({
+      count: 1,
+      total: 4,
+      previous: 3,
+      change: -67,
+    });
+  });
+
+  it("nulls the change rather than dividing by an empty previous window", () => {
+    // 30d window holds a, b, c and d; the 30 days before it hold nobody, since
+    // e is 90 days back. "Up from zero" is not a percentage, and rendering ∞%
+    // is worse than rendering nothing.
+    const stats = shapeSignups(profiles, NOW - 30 * DAY_MS, NOW);
+    expect(stats.count).toBe(4);
+    expect(stats.previous).toBe(0);
+    expect(stats.change).toBeNull();
+  });
+
+  it("ignores unparseable and future timestamps but still totals them", () => {
+    const odd: GrowthProfileRow[] = [
       { id: "a", email: null, created_at: "not a date" },
       { id: "b", email: null, created_at: new Date(NOW + DAY_MS).toISOString() },
     ];
-    // Still both real accounts, so total counts them — the windows do not.
-    expect(shapeSignups(profiles, NOW)).toEqual({ daily: 0, weekly: 0, monthly: 0, total: 2 });
+    const stats = shapeSignups(odd, NOW - 7 * DAY_MS, NOW);
+    expect(stats.count).toBe(0);
+    expect(stats.total).toBe(2);
   });
 });
 
@@ -253,6 +292,7 @@ describe("shapeRetention", () => {
     ["proj-b", "u2"],
     ["proj-c", "u2"],
   ]);
+  const month = NOW - 30 * DAY_MS;
 
   it("counts a user as returning only on a second distinct UTC day", () => {
     const runs = [
@@ -264,20 +304,42 @@ describe("shapeRetention", () => {
       run({ project_id: "proj-b", created_at: iso(5) }),
       run({ project_id: "proj-c", created_at: iso(9) }),
     ];
-    expect(shapeRetention(runs, owner, NOW)).toEqual({ active: 2, returning: 1, rate: 50 });
+    expect(shapeRetention(runs, owner, month, NOW)).toEqual({
+      active: 2,
+      returning: 1,
+      rate: 50,
+    });
   });
 
-  it("drops runs outside the 30d window and runs with no owner", () => {
+  it("drops runs outside the window and runs with no owner", () => {
     const runs = [
       run({ project_id: "proj-a", created_at: iso(1) }),
       run({ project_id: "proj-a", created_at: iso(40) }),
       run({ project_id: "proj-gone", created_at: iso(1) }),
       run({ project_id: "proj-gone", created_at: iso(2) }),
     ];
-    expect(shapeRetention(runs, owner, NOW)).toEqual({ active: 1, returning: 0, rate: 0 });
+    expect(shapeRetention(runs, owner, month, NOW)).toEqual({
+      active: 1,
+      returning: 0,
+      rate: 0,
+    });
+  });
+
+  it("follows the window: a run pair that straddles 30d only counts all-time", () => {
+    // The same user, one run inside 30d and one well outside it.
+    const runs = [
+      run({ project_id: "proj-a", created_at: iso(1) }),
+      run({ project_id: "proj-a", created_at: iso(200) }),
+    ];
+    expect(shapeRetention(runs, owner, month, NOW).returning).toBe(0);
+    expect(shapeRetention(runs, owner, null, NOW).returning).toBe(1);
   });
 
   it("returns a null rate rather than 0% when nobody is active", () => {
-    expect(shapeRetention([], owner, NOW)).toEqual({ active: 0, returning: 0, rate: null });
+    expect(shapeRetention([], owner, month, NOW)).toEqual({
+      active: 0,
+      returning: 0,
+      rate: null,
+    });
   });
 });
