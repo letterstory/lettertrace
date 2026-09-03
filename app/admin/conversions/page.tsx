@@ -6,7 +6,7 @@ import { requireAdmin } from "@/lib/admin";
 import { conversionsReport, isPeriod, type Period, type RatePoint } from "@/lib/conversions";
 import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
-import { timeAgo } from "@/lib/utils";
+import { duration, timeAgo } from "@/lib/utils";
 import { PeriodSelect } from "./period-select";
 import { PERIOD_OPTIONS } from "./periods";
 
@@ -144,8 +144,12 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         </Card>
       )}
 
-      {/* ---- Row 1: the numbers --------------------------------------------- */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      {/* ---- Row 1: the connected rung --------------------------------------- */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Connected · clicked out to another Letter product
+        </h3>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Connected rate"
           value={stats.rate === null ? "—" : `${stats.rate}%`}
@@ -171,16 +175,6 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               : `${periodLabel} · ${stats.clicksAllTime.toLocaleString()} all time`
           }
           accent="butter"
-        />
-        <StatCard
-          label="Added API keys"
-          value={keyed.users.toLocaleString()}
-          hint={
-            period === "all"
-              ? `${keyed.rate === null ? "—" : `${keyed.rate}%`} of ${stats.totalUsers.toLocaleString()} signups brought their own`
-              : `first key in ${periodLabel} · ${keyed.allTime.toLocaleString()} all time, ${keyed.rate === null ? "—" : `${keyed.rate}%`} of signups`
-          }
-          accent="terracotta"
         />
         <StatCard
           label="Top destination"
@@ -215,7 +209,51 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
           }
           accent="sand"
         />
-      </div>
+        </div>
+      </section>
+
+      {/* ---- Row 1b: the activation rung -------------------------------------
+          A rung up from a click: the trial runs on the operator's shared keys,
+          so pasting your own is where an account stops costing us money. The
+          rate is deliberately all-time on both sides — activation is a stock,
+          "how many of everyone who ever signed up now have a key", and
+          dividing this period's converters by every signup ever would read as
+          a rate that collapses whenever the window narrows. */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Activated · connected their own API key
+        </h3>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <StatCard
+            label="API-key activation"
+            value={keyed.rate === null ? "—" : `${keyed.rate}%`}
+            hint={`${keyed.allTime.toLocaleString()} of ${stats.totalUsers.toLocaleString()} accounts have connected at least one key · all time`}
+            accent="terracotta"
+          />
+          <StatCard
+            label="Added API keys"
+            value={keyed.users.toLocaleString()}
+            hint={
+              period === "all"
+                ? "accounts, counted once on their first key"
+                : `first key in ${periodLabel} · ${keyed.allTime.toLocaleString()} all time`
+            }
+            accent="teal"
+          />
+          <StatCard
+            label="Time to first key"
+            value={duration(keyed.medianMs ?? keyed.medianAllTimeMs)}
+            hint={
+              keyed.medianMs === null
+                ? keyed.medianAllTimeMs === null
+                  ? "nobody has connected a key yet"
+                  : `median signup → first key · all time (nobody activated in ${periodLabel})`
+                : `median signup → first key, ${keyed.users.toLocaleString()} account${keyed.users === 1 ? "" : "s"} · ${periodLabel} · ${duration(keyed.medianAllTimeMs)} all time`
+            }
+            accent="butter"
+          />
+        </div>
+      </section>
 
       {/* ---- Row 2: the rate over time ---------------------------------------- */}
       <Card>
@@ -324,9 +362,10 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         Connected means &ldquo;clicked one of our outbound product links while signed
         in&rdquo; — visits that start anywhere else are invisible here, and clicking is not
         signing up or paying, which will be measured separately. Links are counted when wrapped
-        in OutboundLink; today that is the Phantoms item in the dashboard nav. Added API keys
-        counts an account once, on its first provider or router key: the trial runs on our
-        shared keys, so pasting your own is the rung where an account stops costing us money.{" "}
+        in OutboundLink; today that is the Phantoms item in the dashboard nav. Activation counts
+        an account once, on its first provider or router key, and time to first key is a median
+        over the accounts that connected one — it says nothing about the ones that never did,
+        which is what the activation rate is for.{" "}
         <Link href="/admin/growth" className="underline">
           Back to growth
         </Link>

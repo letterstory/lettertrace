@@ -186,8 +186,27 @@ export interface KeyedStats {
   /** Users with at least one key, ever. */
   allTime: number;
   /** allTime / totalUsers as a percentage with one decimal, null until there is
-   *  anyone to divide by. Same one-decimal reasoning as the connected rate. */
+   *  anyone to divide by. Same one-decimal reasoning as the connected rate.
+   *  Deliberately all-time on both sides: activation is a STOCK — the share of
+   *  everyone who ever signed up that now has a key — and dividing a period's
+   *  converters by every signup ever would read as a collapsing rate. */
   rate: number | null;
+  /** Median milliseconds from signing up to connecting the first key, over the
+   *  users whose first key landed in the period. Null when that cohort is
+   *  empty, or when none of them can be matched to a signup time. */
+  medianMs: number | null;
+  /** The same median over everyone who ever connected a key — the stable
+   *  number, since a narrow period's median rests on very few people. */
+  medianAllTimeMs: number | null;
+}
+
+/** The middle value, averaging the two middles on an even count. Its own
+ *  function so the two medians above can't drift apart. */
+export function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
 
 /**
@@ -204,7 +223,7 @@ export interface KeyedStats {
  */
 export function shapeKeyedStats(
   keys: KeyRow[],
-  totalUsers: number,
+  profiles: GrowthProfileRow[],
   since: number | null,
 ): KeyedStats {
   const firstByUser = new Map<string, number>();
@@ -215,13 +234,35 @@ export function shapeKeyedStats(
     if (prev === undefined || t < prev) firstByUser.set(key.user_id, t);
   }
 
+  const signedUpAt = new Map<string, number>();
+  for (const profile of profiles) {
+    const t = Date.parse(profile.created_at);
+    if (Number.isFinite(t)) signedUpAt.set(profile.id, t);
+  }
+
   let inPeriod = 0;
-  for (const t of firstByUser.values()) if (since === null || t >= since) inPeriod += 1;
+  const gapsInPeriod: number[] = [];
+  const gapsAllTime: number[] = [];
+  for (const [userId, firstKeyAt] of firstByUser) {
+    const started = signedUpAt.get(userId);
+    // A key whose owner has no profile row (deleted account, or a profile the
+    // cap cut off) still counts as a key — it just can't contribute a gap.
+    // Negative gaps can't happen from a real signup, so they'd be clock skew:
+    // dropped rather than pulled toward zero.
+    const gap = started === undefined ? null : firstKeyAt - started;
+    if (gap !== null && gap >= 0) gapsAllTime.push(gap);
+    if (since === null || firstKeyAt >= since) {
+      inPeriod += 1;
+      if (gap !== null && gap >= 0) gapsInPeriod.push(gap);
+    }
+  }
 
   return {
     users: inPeriod,
     allTime: firstByUser.size,
-    rate: totalUsers > 0 ? Math.round((firstByUser.size / totalUsers) * 1000) / 10 : null,
+    rate: profiles.length > 0 ? Math.round((firstByUser.size / profiles.length) * 1000) / 10 : null,
+    medianMs: median(gapsInPeriod),
+    medianAllTimeMs: median(gapsAllTime),
   };
 }
 
@@ -406,7 +447,7 @@ export async function conversionsReport(
 
   return {
     stats: shapeConversionStats(clicks, profiles.length, since),
-    keyed: shapeKeyedStats(keys, profiles.length, since),
+    keyed: shapeKeyedStats(keys, profiles, since),
     series: shapeRateSeries(clicks, profiles, since, now),
     // The table reads through the same window: destinations, counts and
     // first/latest are period-scoped, so it always agrees with the cards.
