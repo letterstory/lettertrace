@@ -136,6 +136,18 @@ export function generateDeviceCode(): string {
   return `lt_dev_${crypto.randomBytes(32).toString("base64url")}`;
 }
 
+/**
+ * Team invitation token: single-use, ~7 days, travels in a URL to somebody's
+ * inbox. Same construction and same storage rule as everything above — hashed,
+ * never stored in plaintext — because an invite link is a bearer credential
+ * that admits its holder to somebody else's data, and mail is not a secure
+ * channel. 32 random bytes so guessing a live invite is hopeless even though
+ * the window is days rather than minutes.
+ */
+export function generateInviteToken(): string {
+  return `lt_inv_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
 // Crockford base32 (no I, L, O, U — the characters people misread). We map 40
 // random bits (5 bytes) onto exactly 8 characters, so there is no modulo bias.
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

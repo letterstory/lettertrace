@@ -2,6 +2,7 @@ import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret } from "@/lib/crypto";
 import { selectAll } from "@/lib/paging";
+import { memberProjectIds, projectAccessFilter } from "@/lib/project-access";
 import type {
   Project,
   Provider,
@@ -15,58 +16,59 @@ import type {
 // Read helpers are wrapped in React cache() so the layout and page of a single
 // request (which pass the same cached client) each hit the database only once.
 
-/** All of the user's projects (organizations), oldest first. */
+/** Every project (organization) the user can reach — the ones they created and
+ *  the ones a teammate invited them into — oldest first. */
 export const getProjects = cache(async function getProjects(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project[]> {
+  const filter = projectAccessFilter(userId, await memberProjectIds(supabase, userId));
   // Paged, because an account can hold more projects than a single PostgREST
   // read returns. One account per customer-fleet is a supported shape — every
   // client is a project on it — and the 1001st would otherwise vanish from the
   // org switcher, from `lettertrace projects`, and from the CLI's name lookup,
   // which would then report a real project as "no project called that".
-  return selectAll<Project>((from, to) =>
-    supabase
-      .from("projects")
-      .select("*")
-      .eq("user_id", userId)
+  return selectAll<Project>((from, to) => {
+    const q = supabase.from("projects").select("*");
+    return (filter ? q.or(filter) : q.eq("user_id", userId))
       .order("created_at", { ascending: true })
-      .range(from, to),
-  );
+      .range(from, to);
+  });
 });
 
 /**
  * The user's active project (organization): the one selected via the org
  * switcher (profiles.active_project_id), falling back to the earliest project
- * they created. Null when they have no projects yet.
+ * they can reach. Null when there is none.
+ *
+ * "Can reach" now spans two things — projects they created and projects a
+ * teammate invited them into — so the stale-pointer fallback matters more than
+ * it used to: being removed from a team leaves a pointer aimed at a project
+ * that is no longer visible, and landing on the next accessible one beats
+ * landing on an error.
  */
 export const getProject = cache(async function getProject(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<Project | null> {
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("active_project_id")
-    .eq("id", userId)
-    .maybeSingle();
-  const activeId = (profile as { active_project_id?: string | null } | null)
+  const [profileQ, memberIds] = await Promise.all([
+    supabase.from("profiles").select("active_project_id").eq("id", userId).maybeSingle(),
+    memberProjectIds(supabase, userId),
+  ]);
+  const activeId = (profileQ.data as { active_project_id?: string | null } | null)
     ?.active_project_id;
+  const filter = projectAccessFilter(userId, memberIds);
 
   if (activeId) {
-    const { data } = await supabase
-      .from("projects")
-      .select("*")
-      .eq("id", activeId)
-      .eq("user_id", userId)
-      .maybeSingle();
+    const q = supabase.from("projects").select("*").eq("id", activeId);
+    const { data } = await (filter ? q.or(filter) : q.eq("user_id", userId)).maybeSingle();
     if (data) return data as Project;
-    // Stale pointer (project deleted / not the user's): fall through.
+    // Stale pointer (project deleted, or they were removed from it): fall
+    // through to the oldest project they can still see.
   }
 
-  const { data } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("user_id", userId)
+  const q = supabase.from("projects").select("*");
+  const { data } = await (filter ? q.or(filter) : q.eq("user_id", userId))
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -74,7 +76,8 @@ export const getProject = cache(async function getProject(
 });
 
 /**
- * Point the dashboard at another of the user's organizations.
+ * Point the dashboard at another of the user's organizations — one they own,
+ * or one they were invited to.
  *
  * Goes through the set_active_project RPC, which is SECURITY DEFINER and first
  * guarantees a profile row exists — without that, an account whose profile row

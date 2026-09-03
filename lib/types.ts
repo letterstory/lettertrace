@@ -106,7 +106,9 @@ export interface Project {
   /** Times each active prompt is asked per run (1–10). >1 buys confidence in a "no mention". */
   replicates: number;
   last_run_at: string | null;
-  /** When the owner last opened this project's results. Null = never. */
+  /** When anyone on the team last opened this project's results. Null =
+   *  never. Shared, not per-person: the nudge asks "has this been looked at",
+   *  and a teammate reading a run is an answer to that. */
   results_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -239,6 +241,10 @@ export type LogCategory =
   // them would make "which credential did I change" unanswerable.
   | "router_key"
   | "api_key"
+  // Who is on an organization: invitations sent, accepted, revoked, and people
+  // removed. Its own bucket rather than "project" because the question "who
+  // got access to my data and when" has to be answerable on its own.
+  | "team"
   | "oauth"
   | "onboarding"
   | "settings"
