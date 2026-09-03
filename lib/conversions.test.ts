@@ -5,9 +5,12 @@ import {
   normalizeProductUrl,
   periodStart,
   productOf,
+  median,
   shapeConversionStats,
   shapeConnectedUsers,
+  shapeKeyedStats,
   shapeRateSeries,
+  type KeyRow,
   type OutboundClickRow,
 } from "./conversions";
 import type { GrowthProfileRow } from "./growth";
@@ -253,5 +256,97 @@ describe("shapeConnectedUsers", () => {
       expect(c.email).toBeNull();
       expect(c.emailClass).toBe("personal");
     }
+  });
+});
+
+describe("shapeKeyedStats", () => {
+  const keys: KeyRow[] = [
+    // u1 converted 40 days ago and added a second key inside the window; the
+    // period must still credit them to the older date, not count them twice.
+    { user_id: "u1", created_at: iso(40) },
+    { user_id: "u1", created_at: iso(3) },
+    { user_id: "u2", created_at: iso(5) },
+    { user_id: "u3", created_at: iso(0, 2) },
+  ];
+  // u1 took 10 days, u2 took 2 days, u3 took 1 hour. 47 more signups with no
+  // key, so the denominator is 50.
+  const keyed: GrowthProfileRow[] = [
+    { id: "u1", email: "a@x.com", created_at: iso(50) },
+    { id: "u2", email: "b@x.com", created_at: iso(7) },
+    { id: "u3", email: "c@x.com", created_at: iso(0, 3) },
+  ];
+  const profiles: GrowthProfileRow[] = [
+    ...keyed,
+    ...Array.from({ length: 47 }, (_, i) => ({
+      id: `n${i}`,
+      email: null,
+      created_at: iso(10),
+    })),
+  ];
+
+  it("counts a user by their first key, once", () => {
+    const stats = shapeKeyedStats(keys, profiles, NOW - 30 * DAY_MS);
+    expect(stats.users).toBe(2);
+    expect(stats.allTime).toBe(3);
+  });
+
+  it("counts everyone for an all-time period", () => {
+    expect(shapeKeyedStats(keys, profiles, null).users).toBe(3);
+  });
+
+  it("keeps the activation rate all-time on both sides of the fraction", () => {
+    // 3 of 50 accounts have a key, whatever window is being viewed.
+    expect(shapeKeyedStats(keys, profiles, NOW - 30 * DAY_MS).rate).toBe(6);
+    expect(shapeKeyedStats(keys, profiles, null).rate).toBe(6);
+  });
+
+  it("keeps one decimal so an early rate does not round to zero", () => {
+    const many = Array.from({ length: 2000 }, (_, i) => ({
+      id: `n${i}`,
+      email: null,
+      created_at: iso(5),
+    }));
+    expect(shapeKeyedStats([{ user_id: "n0", created_at: iso(1) }], many, null).rate).toBe(0.1);
+  });
+
+  it("medians the signup-to-first-key gap over the period cohort", () => {
+    // In the last 30 days: u2 (2 days) and u3 (1 hour). Two values, so the
+    // median averages them.
+    const stats = shapeKeyedStats(keys, profiles, NOW - 30 * DAY_MS);
+    expect(stats.medianMs).toBe(Math.round((2 * DAY_MS + 3_600_000) / 2));
+    // All time adds u1's 10 days, making three values with 2 days in the middle.
+    expect(stats.medianAllTimeMs).toBe(2 * DAY_MS);
+  });
+
+  it("nulls the period median when nobody activated in it, keeping the all-time one", () => {
+    const stats = shapeKeyedStats(keys, profiles, NOW + DAY_MS);
+    expect(stats.users).toBe(0);
+    expect(stats.medianMs).toBeNull();
+    expect(stats.medianAllTimeMs).toBe(2 * DAY_MS);
+  });
+
+  it("still counts a key whose owner has no profile row, but draws no gap from it", () => {
+    const orphan: KeyRow[] = [{ user_id: "gone", created_at: iso(1) }];
+    const stats = shapeKeyedStats(orphan, profiles, null);
+    expect(stats.allTime).toBe(1);
+    expect(stats.medianMs).toBeNull();
+  });
+
+  it("skips unparseable timestamps and nulls the rate with no users", () => {
+    expect(shapeKeyedStats([{ user_id: "u1", created_at: "nope" }], [], null)).toEqual({
+      users: 0,
+      allTime: 0,
+      rate: null,
+      medianMs: null,
+      medianAllTimeMs: null,
+    });
+  });
+});
+
+describe("median", () => {
+  it("takes the middle of an odd count and averages the two middles of an even one", () => {
+    expect(median([5, 1, 3])).toBe(3);
+    expect(median([4, 1, 3, 2])).toBe(3);
+    expect(median([])).toBeNull();
   });
 });
