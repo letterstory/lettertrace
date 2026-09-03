@@ -6,7 +6,7 @@ import { OutboundLink } from "@/components/outbound-link";
 
 /**
  * The cross-product CTA at the foot of the dashboard sidebar, and the only
- * route from lettertrace to Phantom Story: it replaces the "Phantoms" nav row,
+ * route from lettertrace to Phantomstory: it replaces the "Phantoms" nav row,
  * which sat among six page links in the same weight and colour and so read as
  * a page you had not opened yet rather than as an offer.
  *
@@ -33,7 +33,7 @@ export function ProductCta({ className }: { className?: string }) {
         <span className="block text-sm font-semibold leading-snug text-terracotta-dark">
           Automate Your Content Strategy
         </span>
-        <span className="mt-0.5 block truncate text-xs text-ink-faint">Phantom Story</span>
+        <span className="mt-0.5 block truncate text-xs text-ink-faint">Phantomstory</span>
       </span>
       <ArrowUpRight
         className="h-4 w-4 shrink-0 text-terracotta-dark transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
