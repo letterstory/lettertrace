@@ -1,18 +1,44 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import {
+  firecrawlEnabled,
+  firecrawlScrape,
+  MIN_CONTENT_CHARS,
+  TOO_LITTLE_CONTENT,
+  siteStatusError,
+} from "./firecrawl";
 
 // Best-effort domain scraper used during onboarding to learn what a brand does.
-// Returns visible text; the caller feeds it to the LLM to suggest topics. If it
-// can't fetch/parse the site, the caller falls back to manual entry.
+// Returns visible text plus whatever identity the page declares about itself;
+// the caller feeds the text to the LLM to suggest topics. If it can't
+// fetch/parse the site, the caller falls back to manual entry.
+//
+// Two readers, one result shape. Firecrawl runs when the operator has
+// configured it (it renders JavaScript, which this file's regex pass cannot),
+// and the built-in fetch below runs otherwise or when Firecrawl fails.
+//
+// Falling back rather than refusing is deliberate, and is the same exception
+// resolveKey documents: what a scrape produces is a list of SUGGESTIONS a human
+// reviews on the next screen, not a measurement that gets stored and charted.
+// Nothing here reaches a run. A monitoring run must never substitute a
+// different source for the one it was asked for.
 //
 // Because this fetches a URL the user supplies, it is hardened against SSRF:
 // only http/https, internal/private hosts blocked, DNS resolved and re-checked
-// on every redirect hop.
+// on every redirect hop. The check runs before the Firecrawl path too — handing
+// an internal address to a third party to fetch is the same exposure.
 
 export interface ScrapeResult {
   ok: boolean;
   url?: string;
   title?: string;
+  /** The site's own name for itself (og:site_name), when it declares one. */
+  siteName?: string;
+  /** The meta description, separately from `text`, for display rather than
+   *  for the model — `text` already folds it in. */
+  description?: string;
+  /** Absolute URL of the site's social card or favicon. */
+  imageUrl?: string;
   text?: string;
   error?: string;
 }
@@ -120,11 +146,43 @@ function htmlToText(html: string): string {
   return decodeEntities(stripped).trim();
 }
 
+// Reads the first of `keys` the page declares. Both attribute orders are tried:
+// `content` precedes `property` often enough in real markup that matching only
+// name-then-content silently missed og: tags.
+function metaTag(html: string, keys: string[]): string {
+  for (const key of keys) {
+    const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m =
+      html.match(new RegExp(`<meta[^>]+(?:name|property)=["']${k}["'][^>]*content=["']([^"']*)["']`, "i")) ||
+      html.match(new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${k}["']`, "i"));
+    const value = m ? decodeEntities(m[1]).trim() : "";
+    if (value) return value;
+  }
+  return "";
+}
+
 function metaDescription(html: string): string {
-  const m =
-    html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i) ||
-    html.match(/<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
-  return m ? decodeEntities(m[1]).trim() : "";
+  return metaTag(html, ["description", "og:description"]);
+}
+
+// og:image and favicon hrefs are routinely relative ("/og.png"), which is a
+// broken image once it is rendered on our origin instead of theirs.
+function absoluteUrl(raw: string, base: string): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return new URL(raw, base).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function iconFromHtml(html: string, baseUrl: string): string | undefined {
+  const og = metaTag(html, ["og:image", "twitter:image"]);
+  if (og) return absoluteUrl(og, baseUrl);
+  const link = html.match(
+    /<link[^>]+rel=["'][^"']*icon[^"']*["'][^>]*href=["']([^"']+)["']/i,
+  );
+  return link ? absoluteUrl(decodeEntities(link[1]).trim(), baseUrl) : undefined;
 }
 
 // Fetch with manual redirect handling so every hop is re-validated for SSRF.
@@ -152,15 +210,15 @@ async function safeFetch(startUrl: string, signal: AbortSignal): Promise<Respons
   throw new Error("Too many redirects.");
 }
 
-export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
-  const url = normalizeUrl(rawDomain);
-  if (!url) return { ok: false, error: "That doesn't look like a valid domain." };
-
+// The built-in reader: fetch the root URL and pull identity + visible text out
+// of the raw HTML. Used when Firecrawl isn't configured, and as the fallback
+// when it is but didn't return anything usable.
+async function fetchAndParse(url: string): Promise<ScrapeResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
     const res = await safeFetch(url, controller.signal);
-    if (!res.ok) return { ok: false, url, error: `Site returned ${res.status}.` };
+    if (!res.ok) return { ok: false, url, error: siteStatusError(res.status) };
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType.includes("html")) {
       return { ok: false, url, error: "That URL isn't an HTML page." };
@@ -170,10 +228,18 @@ export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
     const desc = metaDescription(html);
     const body = htmlToText(html);
     const text = `${desc ? desc + "\n\n" : ""}${body}`.slice(0, 6000);
-    if (text.replace(/\s/g, "").length < 40) {
-      return { ok: false, url, error: "Couldn't read enough content from the site." };
+    if (text.replace(/\s/g, "").length < MIN_CONTENT_CHARS) {
+      return { ok: false, url, error: TOO_LITTLE_CONTENT };
     }
-    return { ok: true, url, title: decodeEntities(title), text };
+    return {
+      ok: true,
+      url,
+      title: decodeEntities(title),
+      siteName: metaTag(html, ["og:site_name", "application-name"]) || undefined,
+      description: desc || undefined,
+      imageUrl: iconFromHtml(html, url),
+      text,
+    };
   } catch (err) {
     if (err instanceof Error && err.message === BLOCKED_HOST_ERROR) {
       return { ok: false, url, error: err.message };
@@ -186,4 +252,27 @@ export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
+  const url = normalizeUrl(rawDomain);
+  if (!url) return { ok: false, error: "That doesn't look like a valid domain." };
+
+  if (firecrawlEnabled()) {
+    // Firecrawl fetches from its own infrastructure, so our SSRF guards don't
+    // apply on their side — which is exactly why the address has to clear them
+    // HERE, before we ask a third party to reach it on our behalf.
+    const safe = await assertSafe(url);
+    if (!safe.ok) return { ok: false, url, error: safe.error };
+
+    const viaFirecrawl = await firecrawlScrape(url);
+    if (viaFirecrawl.ok) return viaFirecrawl;
+    // Deliberately fall through rather than surfacing Firecrawl's error: the
+    // built-in reader sometimes succeeds where Firecrawl doesn't, and its
+    // failure message describes the USER'S site ("Site returned 404.") rather
+    // than our vendor, which is the only thing they can act on.
+    console.warn("[scrape] firecrawl failed, falling back:", viaFirecrawl.error);
+  }
+
+  return fetchAndParse(url);
 }

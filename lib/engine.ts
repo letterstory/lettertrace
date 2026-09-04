@@ -9,6 +9,7 @@ import type {
   RouteInfo,
 } from "@/lib/types";
 import { runQuery, analyzeResponse, humanError, type AnalyzeEntity } from "@/lib/llm";
+import { hostOf } from "@/lib/brand-name";
 import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
 import { analysisModelFor, modelLabel } from "@/lib/models";
@@ -43,14 +44,11 @@ const CONCURRENCY = 8;
 const PROGRESS_EVERY = 4;
 
 // The brand's registrable web host, e.g. "notion.so" from a messy domain entry.
-export function hostOf(domain: string | null): string {
-  if (!domain) return "";
-  return domain
-    .replace(/^https?:\/\//i, "")
-    .split("/")[0]
-    .replace(/^www\./i, "")
-    .toLowerCase();
-}
+// Imported, not reimplemented: the wizard needs the same normalization and
+// cannot import this module (it pulls in node: builtins), so the one copy lives
+// in lib/brand-name.ts. Re-exported so existing importers of engine's hostOf
+// keep working.
+export { hostOf };
 
 // A cited source is "owned" when its domain is, or is a subdomain of, the host.
 /** Links written inline in the answer text (markdown targets + bare URLs),
