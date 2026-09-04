@@ -99,8 +99,16 @@ export function projectSummary(p: Project) {
   };
 }
 
-/** Fetch a project only if it belongs to the user. */
-export async function getOwnedProject(
+/**
+ * Fetch a project only if this user may act on it — they created it, or a
+ * teammate invited them into it.
+ *
+ * This is THE ownership boundary for the programmatic surface: `supabase` here
+ * is the service-role client, so RLS is off and the explicit check below is
+ * all there is. It was `.eq("user_id", userId)` before teams existed; the
+ * membership lookup is the same question asked of the wider set.
+ */
+export async function getAccessibleProject(
   supabase: SupabaseClient,
   userId: string,
   projectId: string,
@@ -109,9 +117,18 @@ export async function getOwnedProject(
     .from("projects")
     .select("*")
     .eq("id", projectId)
+    .maybeSingle();
+  const project = (data as Project | null) ?? null;
+  if (!project) return null;
+  if (project.user_id === userId) return project;
+
+  const { data: membership } = await supabase
+    .from("project_members")
+    .select("user_id")
+    .eq("project_id", projectId)
     .eq("user_id", userId)
     .maybeSingle();
-  return (data as Project | null) ?? null;
+  return membership ? project : null;
 }
 
 function toAliases(value: unknown): string[] {
@@ -248,7 +265,7 @@ export async function updateProject(
   projectId: string,
   input: Record<string, unknown>,
 ): Promise<UpdateProjectOutcome> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) {
     return { ok: false, code: "not_found", message: "Project not found." };
   }
@@ -361,7 +378,7 @@ export async function listProjectPrompts(
   userId: string,
   projectId: string,
 ): Promise<PromptSummary[] | null> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) return null;
   const { data } = await supabase
     .from("prompts")
@@ -396,7 +413,7 @@ export async function createPrompts(
   projectId: string,
   entries: unknown,
 ): Promise<CreatePromptsOutcome> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) {
     return { ok: false, code: "not_found", message: "Project not found." };
   }
@@ -594,7 +611,7 @@ export async function updatePrompt(
     return { ok: false, code: "not_found", message: "Prompt not found." };
   }
 
-  const project = await getOwnedProject(supabase, userId, prompt.project_id);
+  const project = await getAccessibleProject(supabase, userId, prompt.project_id);
   if (!project) {
     return { ok: false, code: "not_found", message: "Prompt not found." };
   }
@@ -645,7 +662,7 @@ export async function listProjectCompetitors(
   userId: string,
   projectId: string,
 ): Promise<CompetitorSummary[] | null> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) return null;
   const { data } = await supabase
     .from("competitors")
@@ -672,7 +689,7 @@ export async function createCompetitors(
   projectId: string,
   entries: unknown,
 ): Promise<CreateCompetitorsOutcome> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) {
     return { ok: false, code: "not_found", message: "Project not found." };
   }
@@ -745,7 +762,7 @@ export async function deleteCompetitor(
   const competitor = row as Competitor | null;
   if (!competitor) return null;
 
-  const project = await getOwnedProject(supabase, userId, competitor.project_id);
+  const project = await getAccessibleProject(supabase, userId, competitor.project_id);
   if (!project) return null;
 
   const { error } = await supabase
@@ -780,7 +797,7 @@ export async function discoverProjectCompetitors(
   userId: string,
   projectId: string,
 ): Promise<DiscoveredCompetitors | null> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) return null;
 
   const [{ data: responseRows }, { data: competitorRows }] = await Promise.all([
@@ -824,7 +841,7 @@ export async function listRuns(
   projectId: string,
   limit = 20,
 ): Promise<Run[] | null> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) return null;
   const { data } = await supabase
     .from("runs")
@@ -895,7 +912,7 @@ export async function getRunReport(
   const run = runRow as Run | null;
   if (!run) return null;
 
-  const project = await getOwnedProject(supabase, userId, run.project_id);
+  const project = await getAccessibleProject(supabase, userId, run.project_id);
   if (!project) return null;
 
   const results = await allOf({
@@ -1069,7 +1086,7 @@ export async function getRunResponses(
   const run = runRow as Run | null;
   if (!run) return null;
 
-  const project = await getOwnedProject(supabase, userId, run.project_id);
+  const project = await getAccessibleProject(supabase, userId, run.project_id);
   if (!project) return null;
 
   const results = await allOf({
@@ -1178,7 +1195,7 @@ export async function triggerRunForProject(
     background?: boolean;
   },
 ): Promise<TriggerOutcome> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) {
     return { ok: false, code: "not_found", message: "Project not found." };
   }
@@ -1278,7 +1295,7 @@ export async function getRunStatus(
     .maybeSingle();
   const run = runRow as Run | null;
   if (!run) return null;
-  const project = await getOwnedProject(supabase, userId, run.project_id);
+  const project = await getAccessibleProject(supabase, userId, run.project_id);
   if (!project) return null;
 
   // Settle a provably-dead run on the way past. The cron sweeper catches these
@@ -1340,7 +1357,7 @@ export async function getProjectHistory(
   projectId: string,
   limit = 30,
 ): Promise<ProjectHistory | null> {
-  const project = await getOwnedProject(supabase, userId, projectId);
+  const project = await getAccessibleProject(supabase, userId, projectId);
   if (!project) return null;
 
   const capped = Math.min(Math.max(Math.trunc(limit) || 30, 1), 100);

@@ -3,12 +3,12 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
-import { conversionsReport, isPeriod, type Period, type RatePoint } from "@/lib/conversions";
+import { conversionsReport, type RatePoint } from "@/lib/conversions";
+import { periodFrom, periodLabel, type Period } from "@/lib/periods";
 import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
-import { timeAgo } from "@/lib/utils";
-import { PeriodSelect } from "./period-select";
-import { PERIOD_OPTIONS } from "./periods";
+import { duration, timeAgo } from "@/lib/utils";
+import { PeriodSelect } from "../period-select";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -24,7 +24,7 @@ export const metadata = { robots: { index: false, follow: false } };
  * pays for a product — get their own words when we can measure them, which is
  * why nothing on this page says "converted" about a mere click.
  *
- * Deliberately small for now: one row of numbers, one table.
+ * Deliberately small for now: one row of numbers, one chart, one table.
  */
 
 const CLASS_TONE: Record<EmailClass, "teal" | "sand" | "terracotta"> = {
@@ -111,18 +111,13 @@ function RateChart({ series }: { series: RatePoint[] }) {
 
 type SP = Record<string, string | string[] | undefined>;
 
-function periodFrom(searchParams: SP): Period {
-  const raw = Array.isArray(searchParams.p) ? searchParams.p[0] : searchParams.p;
-  return isPeriod(raw) ? raw : "30d";
-}
-
 export default async function ConversionsPage({ searchParams }: { searchParams: SP }) {
   const admin = await requireAdmin();
   if (!admin) notFound();
 
-  const period = periodFrom(searchParams);
-  const periodLabel = PERIOD_OPTIONS.find((o) => o.value === period)!.label.toLowerCase();
-  const { stats, series, connected, degraded } = await conversionsReport(period);
+  const period: Period = periodFrom(searchParams.p);
+  const label = periodLabel(period);
+  const { stats, keyed, series, connected, degraded } = await conversionsReport(period);
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
   const today = new Date().toISOString().slice(0, 10);
@@ -131,7 +126,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
     <div className="space-y-10">
       <SectionHeading
         title="Conversions"
-        description="Who goes from lettertrace to another Letter Company product. Today this measures connected users — clicked one of our outbound links; signups and paying customers become their own rungs once we can measure them. Emails are in the clear: this is a cross-sell list."
+        description="The rungs an account climbs: connected — clicked one of our outbound links — and keyed, where they paste their own API key and stop running on our shared trial. Signups on the other products and paying customers get their own rungs once we can measure them. Emails are in the clear: this is a cross-sell list."
         action={<PeriodSelect value={period} />}
       />
 
@@ -144,12 +139,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         </Card>
       )}
 
-      {/* ---- Row 1: the numbers --------------------------------------------- */}
+      {/* ---- Row 1: the connected rung --------------------------------------- */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Connected · clicked out to another Letter product
+        </h3>
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Connected rate"
           value={stats.rate === null ? "—" : `${stats.rate}%`}
-          hint={`${stats.connectedUsers.toLocaleString()} of ${stats.totalUsers.toLocaleString()} signups clicked a Letter product · ${periodLabel}`}
+          hint={`${stats.connectedUsers.toLocaleString()} of ${stats.totalUsers.toLocaleString()} signups clicked a Letter product · ${label}`}
           accent="mint"
         />
         <StatCard
@@ -158,7 +157,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
           hint={
             period === "all"
               ? "distinct users, all time"
-              : `distinct users, ${periodLabel} · ${stats.connectedAllTime.toLocaleString()} all time`
+              : `distinct users, ${label} · ${stats.connectedAllTime.toLocaleString()} all time`
           }
           accent="teal"
         />
@@ -168,7 +167,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
           hint={
             period === "all"
               ? "all time"
-              : `${periodLabel} · ${stats.clicksAllTime.toLocaleString()} all time`
+              : `${label} · ${stats.clicksAllTime.toLocaleString()} all time`
           }
           accent="butter"
         />
@@ -200,19 +199,67 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
           }
           hint={
             stats.topProduct
-              ? `${stats.topProduct.clicks.toLocaleString()} click${stats.topProduct.clicks === 1 ? "" : "s"} · ${periodLabel}`
+              ? `${stats.topProduct.clicks.toLocaleString()} click${stats.topProduct.clicks === 1 ? "" : "s"} · ${label}`
               : `no clicks ${period === "all" ? "recorded yet" : "in this period"}`
           }
           accent="sand"
         />
-      </div>
+        </div>
+      </section>
+
+      {/* ---- Row 1b: the activation rung -------------------------------------
+          A rung up from a click: the trial runs on the operator's shared keys,
+          so pasting your own is where an account stops costing us money. The
+          rate is deliberately all-time on both sides — activation is a stock,
+          "how many of everyone who ever signed up now have a key", and
+          dividing this period's converters by every signup ever would read as
+          a rate that collapses whenever the window narrows. */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Activated · connected their own API key
+        </h3>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <StatCard
+            label="API-key activation"
+            value={keyed.rate === null ? "—" : `${keyed.rate}%`}
+            hint={
+              keyed.cohortSize === 0
+                ? `nobody signed up in ${label}`
+                : `${keyed.cohortKeyed.toLocaleString()} of the ${keyed.cohortSize.toLocaleString()} accounts that signed up ${period === "all" ? "ever" : `in the ${label.replace("last ", "")}`} have connected a key`
+            }
+            accent="terracotta"
+          />
+          <StatCard
+            label="Added API keys"
+            value={keyed.users.toLocaleString()}
+            hint={
+              period === "all"
+                ? "accounts, counted once on their first key"
+                : `first key in ${label} · ${keyed.allTime.toLocaleString()} all time`
+            }
+            accent="teal"
+          />
+          <StatCard
+            label="Time to first key"
+            value={duration(keyed.medianMs ?? keyed.medianAllTimeMs)}
+            hint={
+              keyed.medianMs === null
+                ? keyed.medianAllTimeMs === null
+                  ? "nobody has connected a key yet"
+                  : `median signup → first key · all time (nobody activated in ${label})`
+                : `median signup → first key, ${keyed.users.toLocaleString()} account${keyed.users === 1 ? "" : "s"} · ${label} · ${duration(keyed.medianAllTimeMs)} all time`
+            }
+            accent="butter"
+          />
+        </div>
+      </section>
 
       {/* ---- Row 2: the rate over time ---------------------------------------- */}
       <Card>
         <div className="flex flex-col px-5 pb-4 pt-5">
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="text-sm font-semibold text-ink">Connected rate over time</h3>
-            <span className="text-xs text-ink-faint">{periodLabel}</span>
+            <span className="text-xs text-ink-faint">{label}</span>
           </div>
           {series.length === 0 || !latest ? (
             <p className="py-8 text-sm text-ink-faint">
@@ -240,7 +287,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         <div>
           <h3 className="text-lg font-semibold text-ink">Connected users</h3>
           <p className="mt-1 max-w-3xl text-sm text-ink-faint">
-            Everyone who clicked out to a Letter Company product in this period ({periodLabel}),
+            Everyone who clicked out to a Letter Company product in this period ({label}),
             most recent first, with where they went.
           </p>
         </div>
@@ -314,7 +361,13 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         Connected means &ldquo;clicked one of our outbound product links while signed
         in&rdquo; — visits that start anywhere else are invisible here, and clicking is not
         signing up or paying, which will be measured separately. Links are counted when wrapped
-        in OutboundLink; today that is the Phantoms item in the dashboard nav.{" "}
+        in OutboundLink; today that is the Phantoms item in the dashboard nav. The two key
+        figures read the window differently on purpose: activation is a COHORT rate — of the
+        accounts that signed up in it, how many hold a key today — while Added API keys and
+        time to first key count the accounts whose first key LANDED in it. A cohort rate can
+        never exceed 100%; the obvious alternative (keys added over signups in the window)
+        can, because someone who signed up in March and pasted a key today belongs to only one
+        of those two sets. On all time the two definitions coincide.{" "}
         <Link href="/admin/growth" className="underline">
           Back to growth
         </Link>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
-import { getOwnedProject, projectSummary, updateProject } from "@/lib/api-service";
+import { getAccessibleProject, projectSummary, updateProject } from "@/lib/api-service";
 import { logApiRequest } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
 
@@ -15,7 +15,7 @@ export async function GET(
   const auth = await requireApiAuth(request, "projects:read", "v1");
   if (auth instanceof Response) return auth;
 
-  const project = await getOwnedProject(auth.supabase, auth.userId, params.id);
+  const project = await getAccessibleProject(auth.supabase, auth.userId, params.id);
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }

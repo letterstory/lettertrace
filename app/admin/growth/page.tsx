@@ -3,9 +3,11 @@ import Link from "next/link";
 import { ArrowUpRight, Flame } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { growthReport, type EmailClass, type Lead } from "@/lib/growth";
+import { periodFrom, periodLabel, type Period } from "@/lib/periods";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
 import { PeopleDirectory } from "../people";
+import { PeriodSelect } from "../period-select";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -96,8 +98,13 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
   const admin = await requireAdmin();
   if (!admin) notFound();
 
-  const report = await growthReport();
-  const { activity } = report;
+  // ?g= rather than ?p=: the lead list below already owns ?f=, and a second
+  // filter on the same page needs its own letter or the two overwrite each
+  // other. Defaults to 30d, matching the windows in the row above it.
+  const period: Period = periodFrom(searchParams.g);
+  const label = periodLabel(period);
+  const report = await growthReport(period);
+  const { activity, signups, retention } = report;
   const filter = leadFilterFrom(searchParams);
   const leads = report.leads.filter(filter.pick);
   const leadCounts = new Map(LEAD_FILTERS.map((f) => [f.key, report.leads.filter(f.pick).length]));
@@ -120,7 +127,10 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         </Card>
       )}
 
-      {/* ---- Row 1: the numbers --------------------------------------------- */}
+      {/* ---- Row 1: the fixed windows ---------------------------------------
+          These four are defined BY their windows — a "daily active" that
+          followed a year-to-date selector would not be daily active any more —
+          so they sit above the period control and never move. */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Daily active"
@@ -143,10 +153,47 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         <StatCard
           label="Stickiness"
           value={activity.stickiness === null ? "—" : `${activity.stickiness}%`}
-          hint={`DAU / MAU · ${report.totalUsers.toLocaleString()} signups total`}
+          hint={`DAU / MAU · ${signups.total.toLocaleString()} signups total`}
           accent="sand"
         />
       </div>
+
+      {/* ---- Row 2: the windowed numbers -------------------------------------
+          The two figures that mean something different over a week than over a
+          year, with the control that moves them sitting between the rows —
+          close enough to what it governs to be read as a caption on it rather
+          than as a page-level filter, which is what it would look like up in
+          the heading next to the People button. */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-end gap-3">
+          <span className="text-xs text-ink-faint">Sign-ups and retention over</span>
+          <PeriodSelect value={period} param="g" label="Sign-up and retention window" />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <StatCard
+            label="New sign-ups"
+            value={signups.count.toLocaleString()}
+            hint={
+              signups.change === null
+                ? `${label} · ${signups.total.toLocaleString()} accounts all time`
+                : `${label} · ${signups.change >= 0 ? "+" : ""}${signups.change}% vs the previous ${
+                    period === "ytd" ? "equivalent span" : label.replace("last ", "")
+                  } (${signups.previous?.toLocaleString()})`
+            }
+            accent="terracotta"
+          />
+          <StatCard
+            label="Returning users"
+            value={retention.rate === null ? "—" : `${retention.rate}%`}
+            hint={
+              retention.active === 0
+                ? `nobody ran in this window (${label})`
+                : `${retention.returning.toLocaleString()} of ${retention.active.toLocaleString()} active users ran on 2+ days · ${label}`
+            }
+            accent="mint"
+          />
+        </div>
+      </section>
 
       {/* ---- Row 2: the shape next to the names ------------------------------ */}
       <div className="grid gap-4 lg:grid-cols-5">
@@ -287,7 +334,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
             {LEAD_FILTERS.map((f) => (
               <Link
                 key={f.key}
-                href={`/admin/growth?f=${f.key}`}
+                href={`/admin/growth?f=${f.key}&g=${period}`}
                 scroll={false}
                 aria-current={f.key === filter.key ? "page" : undefined}
                 className={`rounded-sm px-2.5 py-1 text-xs transition ${
@@ -350,8 +397,14 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
       </section>
 
       <p className="text-xs text-ink-faint">
-        Active means “fired a run”, not “signed in”. Email classes: work = company domain,
-        personal = consumer providers, burner = disposable inboxes.{" "}
+        Active means “fired a run”, not “signed in”, and returning means “ran on two or
+        more separate days” — five runs in one afternoon is one evaluation session, not a
+        return, and a wider window raises the figure by construction, so read it next to the
+        window it names. New sign-ups is the one figure counted off accounts rather than runs:
+        the gap between it and daily active is the activation problem. The top row is fixed —
+        a “daily active” that followed the selector would no longer be daily active. Email
+        classes: work = company domain, personal = consumer providers, burner = disposable
+        inboxes.{" "}
         <Link href="/admin" className="underline">
           Back to operations
         </Link>

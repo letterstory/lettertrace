@@ -25,12 +25,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
   }
 
-  // Only switch to an organization the user actually owns.
+  // Only switch to an organization the user can actually reach — one they own
+  // or one a teammate invited them into. The cookie client's RLS already only
+  // returns those, so the lookup succeeding IS the check; a miss is
+  // indistinguishable from "no such project", which is the right answer to
+  // give someone who can't see it either way.
   const { data: project } = await supabase
     .from("projects")
     .select("id, name")
     .eq("id", projectId)
-    .eq("user_id", user.id)
     .maybeSingle();
   if (!project) {
     return NextResponse.json({ error: "Organization not found" }, { status: 404 });

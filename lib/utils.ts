@@ -26,6 +26,26 @@ export function timeAgo(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
+/**
+ * A span of time as a rounded, single-unit phrase: "3d", "14h", "6m".
+ *
+ * For durations that are ANSWERS rather than timestamps — how long something
+ * took — where timeAgo's "ago" would be wrong and a second decimal would be
+ * false precision. One unit only: a median of "2d 7h 14m" reads as a
+ * measurement of something it isn't.
+ */
+export function duration(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 60_000) return "<1m";
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h`;
+  const days = Math.round(hrs / 24);
+  if (days < 60) return `${days}d`;
+  return `${Math.round(days / 30)}mo`;
+}
+
 function isLoopback(url: string): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase();
