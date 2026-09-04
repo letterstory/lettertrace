@@ -123,10 +123,15 @@ export function Onboarding() {
         // We read the site — the identity below is filled in — but no topics
         // came back, so the copy must not claim the read itself failed.
         setTopics([{ name: "", prompts: [""] }]);
+        // Each reason names a different fix, so they can't share one line: a
+        // spent allowance is fixed in Settings, a slow model by trying again,
+        // and everything else only by typing a topic.
         setNote(
           data?.reason === "trial_exhausted"
             ? "Your free credits are used up, so add a key later. For now, add a topic and the questions to monitor."
-            : "We read your site but couldn't draft topics for it. Add a topic and a few questions people ask AI about it.",
+            : data?.reason === "ai_timeout"
+              ? "Your site read fine, but the AI took too long to draft topics. Add one below, or go back and try again in a minute."
+              : "We read your site but couldn't draft topics for it. Add a topic and a few questions people ask AI about it.",
         );
       }
       setStep("topics");

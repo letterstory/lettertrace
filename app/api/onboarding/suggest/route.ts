@@ -15,6 +15,37 @@ import { logDashboard } from "@/lib/activity";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
+// The model gets less than the route does, on purpose. googleFetch alone may
+// spend ~330s on one call (GOOGLE_MAX_ATTEMPTS 4 x GOOGLE_TIMEOUT_MS 60s, plus
+// a GOOGLE_RETRY_BUDGET_MS 90s sleep budget) because those constants are sized
+// for the run route's 300s — this route has 60s. Measured 2026-09-04: a
+// stripe.com suggest call took 136919ms end to end while Gemini was congested,
+// which in production is killed at 60s and returns NOTHING.
+//
+// That last part is what this guards. Identity comes from the page's own
+// metadata and had already arrived in ~1s; letting a slow model take the whole
+// request down costs the user their name, description and icon for no reason.
+// The same 60s-vs-330s mismatch exists in the other suggestion routes, but they
+// have no identity to lose and simply report a retryable error.
+const SUGGEST_DEADLINE_MS = 35_000;
+
+/** Resolves to null if `work` outruns `ms`. The losing call is abandoned rather
+ *  than aborted — its signal isn't ours to cancel — so any tokens it goes on to
+ *  spend are not metered. Accepted deliberately: the deadline sits far enough
+ *  inside the route budget that this is the rare case, and the alternative is
+ *  threading an AbortSignal through every adapter for one caller. */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // POST /api/onboarding/suggest { domain }
 // Reads the site and returns everything screen 2 needs: who the brand is (name,
 // description, icon) and what to monitor (topics with questions, competitors).
@@ -84,13 +115,25 @@ export async function POST(request: Request) {
   }
 
   try {
-    const suggestion = await suggestFromSite({
-      provider: key.provider,
-      model: key.model,
-      apiKey: key.apiKey,
-      brandName,
-      siteText: scrape.text,
-    });
+    const suggestion = await withDeadline(
+      suggestFromSite({
+        provider: key.provider,
+        model: key.model,
+        apiKey: key.apiKey,
+        brandName,
+        siteText: scrape.text,
+      }),
+      SUGGEST_DEADLINE_MS,
+    );
+    if (!suggestion) {
+      return NextResponse.json({
+        ...identity,
+        scraped: false,
+        topics: [],
+        competitors: [],
+        reason: "ai_timeout",
+      });
+    }
     // Metered even though no free RUN is consumed: these endpoints spend the
     // operator's key, so without this a script could call them forever.
     if (key.source === "trial") {

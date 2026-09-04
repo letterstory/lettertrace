@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Screen 1 asks for a URL and nothing else, so this route now has two jobs:
 // derive the brand's identity from the page, and suggest what to monitor. The
@@ -181,5 +181,59 @@ describe("POST /api/onboarding/suggest — an unreadable site", () => {
   it("treats a scrape that succeeded with no text as unreadable", async () => {
     scrapeDomain.mockResolvedValue({ ok: true, title: "Acme", text: "" });
     expect((await (await POST(req({ domain: "acme.com" }))).json()).reason).toBe("scrape_failed");
+  });
+});
+
+describe("POST /api/onboarding/suggest — a model that outruns the route", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // googleFetch may spend ~330s on one call because its retry constants are
+  // sized for the run route's 300s, while this route has 60s. Measured
+  // 2026-09-04: a stripe.com suggest call took 136919ms during a Gemini
+  // congestion spike, which production kills at 60s — returning nothing, not
+  // even the identity the scrape had already produced in ~1s.
+  it("gives up on the model and still returns the identity", async () => {
+    vi.useFakeTimers();
+    // Never settles: stands in for a call still retrying past the deadline.
+    suggestFromSite.mockReturnValue(new Promise(() => {}));
+
+    const pending = POST(req({ domain: "acme.com" }));
+    await vi.advanceTimersByTimeAsync(35_000);
+    const body = await (await pending).json();
+
+    expect(body.reason).toBe("ai_timeout");
+    expect(body.brandName).toBe("Acme");
+    expect(body.imageUrl).toBe("https://acme.com/card.png");
+    expect(body.description).toBe("Payments for the internet");
+    expect(body.topics).toEqual([]);
+    expect(body.competitors).toEqual([]);
+  });
+
+  // The deadline must not fire on a call that answered in time, or every
+  // successful suggestion would be thrown away.
+  it("keeps a suggestion that lands inside the deadline", async () => {
+    vi.useFakeTimers();
+    suggestFromSite.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                description: "Payment infrastructure.",
+                topics: [{ name: "payments", prompts: ["best processor?"] }],
+                competitors: [],
+                tokens: 10,
+              }),
+            5_000,
+          ),
+        ),
+    );
+
+    const pending = POST(req({ domain: "acme.com" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    const body = await (await pending).json();
+
+    expect(body.reason).toBeUndefined();
+    expect(body.topics).toHaveLength(1);
   });
 });
