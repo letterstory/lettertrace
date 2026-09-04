@@ -13,10 +13,13 @@ takes, and for the same reason: this repository is public and ships a prebuilt
 image, so a self-hosted install reports to nobody until its operator says so.
 The consequence for reading this store is worth stating plainly: **an absence
 of spans is only evidence of an outage on a deployment where the endpoint is
-known to be set.** On this org's Vercel Production deployment it is **not set
-yet** — the four variables under [Configuration](#configuration) are the last
-step of shipping this, and until someone adds them in Vercel, merging changes
-nothing observable. Delete this paragraph once they are set.
+known to be set.**
+
+On this org's Vercel **Production** deployment it *is* set, and has been since
+**15:43 UTC on 2026-08-19** — traces, metrics and logs have flowed continuously
+since. **Preview is not configured**, so PR builds still report nothing; that is
+a deliberate gap, not a fault, but it does mean a change cannot be observed
+until it reaches Production.
 
 ## What monitoring also exists
 
@@ -61,6 +64,13 @@ them see the Vercel cron runs that do the actual work.
     that change do it?" is a `GROUP BY service.version`, not a timeline guess.
   - Outbound `fetch` is instrumented by default, which covers Supabase and
     every provider call as client spans and propagates W3C trace context.
+    `lib/otel/redact-fetch.ts` renames those spans before export: the query
+    string is dropped and uuid / long hex / numeric path segments collapse to
+    `:id`, so a Supabase call arrives as
+    `fetch GET https://<ref>.supabase.co/rest/v1/api_keys` rather than carrying
+    row ids and key hashes in its name. Hostnames stay — including the brand
+    and competitor sites the onboarding suggester fetches — so group outbound
+    traffic by host, never by span name.
 - **Incoming (server):** Next.js App Router route handlers under `app/api/**` —
   the dashboard's own CRUD (`/api/runs`, `/api/topics`, `/api/prompts`,
   `/api/competitors`, `/api/keys`), the public programmatic API under
