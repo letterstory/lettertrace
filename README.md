@@ -184,10 +184,12 @@ docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
 | `ENCRYPTION_KEY` | Storing BYOK provider keys (32 bytes, base64) |
 | `NEXT_PUBLIC_SITE_URL` | Correct auth redirects and OG metadata — set it to the URL users actually visit |
 | `CRON_SECRET` | Only if you wire up scheduled runs (below) |
+| `FIRECRAWL_API_KEY` | Only to improve the site read during onboarding (below) |
 
 Everything else in [`.env.example`](./.env.example) is optional: the `TRIAL_*`
 keys exist to hand out free runs on your own provider account, the `ADMIN_*` /
-`RESEND_API_KEY` values only enable operator alerts, and `FOUNDER_CALL_URL`
+`RESEND_API_KEY` values only enable operator alerts, `FIRECRAWL_API_KEY`
+improves the site read during onboarding, and `FOUNDER_CALL_URL`
 offers new signups a setup call at a booking link of your choosing. Leave that
 last one unset — as `.env.example` does — and no such offer exists.
 
@@ -290,6 +292,30 @@ Set in your environment:
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
+
+## Reading a new customer's site (optional)
+
+Onboarding asks for one thing: a URL. Lettertrace reads that site and proposes
+the brand's name, description, icon, monitoring topics and competitors, and the
+user confirms them. Those defaults become the measured surface for every run the
+account ever does, so this single read matters more than its size suggests.
+
+The built-in reader fetches the page and parses the HTML directly. It has no
+dependencies and needs no configuration, but it cannot run JavaScript — a site
+that renders client-side gives it nothing, and the user ends up typing their
+topics in by hand.
+
+Set `FIRECRAWL_API_KEY` and [Firecrawl](https://firecrawl.dev) does the read
+instead: it renders the page first and returns clean text plus the site's own
+metadata, which is where the name, description and icon come from. One page is
+scraped per signup.
+
+The two are not exclusive. Firecrawl is tried first when the key is set, and the
+built-in reader runs whenever it is absent, out of credits or unreachable —
+so onboarding never depends on a third party being up. Falling back is safe here
+specifically because a scrape produces *suggestions a user reviews on the next
+screen*, never a stored measurement; monitoring runs are held to the stricter
+rule that they must refuse rather than substitute.
 
 ## Operator alerts (optional)
 

@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Badge, Button, Card, CardBody, Input, Label, Spinner, Textarea } from "@/components/ui";
+import { brandNameFromSite, hostOf } from "@/lib/brand-name";
 import { cn } from "@/lib/utils";
 
 interface Topic {
@@ -33,10 +34,15 @@ export function Onboarding() {
 
   const [step, setStep] = useState<Step>("brand");
 
-  // Step 1: brand & project
-  const [brandName, setBrandName] = useState("");
+  // Step 1: the URL is the only thing we ask for. Everything else on step 2 is
+  // read from the site and shown for confirmation.
   const [domain, setDomain] = useState("");
+
+  // Step 2: who the brand is. All editable before confirming.
+  const [brandName, setBrandName] = useState("");
   const [description, setDescription] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageBroken, setImageBroken] = useState(false);
 
   // Step 2: topics + competitors
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -51,10 +57,11 @@ export function Onboarding() {
   const [error, setError] = useState<string | null>(null);
 
   // --- Step 1 -> suggest -----------------------------------------------------
-  async function handleNext(e: React.FormEvent) {
-    e.preventDefault();
-    if (!brandName.trim()) {
-      setError("Tell us your brand name to continue.");
+  // Doubles as the Retry handler: re-submitting is the whole recovery.
+  async function handleNext(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!domain.trim()) {
+      setError("Add your website to continue.");
       return;
     }
     setError(null);
@@ -63,9 +70,25 @@ export function Onboarding() {
       const res = await fetch("/api/onboarding/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandName: brandName.trim(), domain: domain.trim() }),
+        body: JSON.stringify({ domain: domain.trim() }),
       });
       const data = await res.json();
+
+      // Advance only when we actually read the site. This used to run
+      // unconditionally, so a 404 or an unreadable page dropped the user onto
+      // an empty editor with no idea what had gone wrong — the failure was
+      // fetched and then discarded.
+      if (!res.ok || !data?.brandName) {
+        setError(
+          data?.error || "We couldn't read that site. Check the address and try again.",
+        );
+        return;
+      }
+
+      setBrandName(String(data.brandName));
+      setDescription(typeof data.description === "string" ? data.description : "");
+      setImageUrl(typeof data.imageUrl === "string" ? data.imageUrl : "");
+      setImageBroken(false);
 
       const suggested: Topic[] = Array.isArray(data?.topics)
         ? data.topics
@@ -77,10 +100,6 @@ export function Onboarding() {
             }))
             .filter((t: Topic) => t.name && t.prompts.length)
         : [];
-
-      if (data?.description && !description.trim()) {
-        setDescription(String(data.description));
-      }
 
       // Seeded from the same site read as the topics — no extra call.
       setCompetitors(
@@ -99,13 +118,15 @@ export function Onboarding() {
 
       if (suggested.length > 0) {
         setTopics(suggested);
-        setNote(`We read ${domain.trim() || "your site"} and drafted these. Edit anything before you start.`);
+        setNote("Here's what we found. Edit anything before you start.");
       } else {
+        // We read the site — the identity below is filled in — but no topics
+        // came back, so the copy must not claim the read itself failed.
         setTopics([{ name: "", prompts: [""] }]);
         setNote(
           data?.reason === "trial_exhausted"
             ? "Your free credits are used up, so add a key later. For now, add a topic and the questions to monitor."
-            : "We couldn't read your site automatically. Add a topic and a few questions people ask AI about it.",
+            : "We read your site but couldn't draft topics for it. Add a topic and a few questions people ask AI about it.",
         );
       }
       setStep("topics");
@@ -114,6 +135,20 @@ export function Onboarding() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The escape hatch from a site we can't read. Nothing is prefilled except a
+  // name derived from the domain, which keeps the required field non-empty so
+  // the user isn't blocked at the last step of setup.
+  function startManually() {
+    setError(null);
+    setBrandName(brandNameFromSite({ domain }));
+    setDescription("");
+    setImageUrl("");
+    setTopics([{ name: "", prompts: [""] }]);
+    setCompetitors([]);
+    setNote("Add a topic and a few questions people ask AI about it.");
+    setStep("topics");
   }
 
   // --- Step 2 editing --------------------------------------------------------
@@ -163,6 +198,11 @@ export function Onboarding() {
       prompts: t.prompts.map((p) => p.trim()).filter(Boolean),
     }));
 
+    if (!brandName.trim()) {
+      setError("Give your brand a name before you start.");
+      return;
+    }
+
     if (cleaned.length === 0) {
       setError("Add at least one topic with a question before you start.");
       return;
@@ -198,7 +238,10 @@ export function Onboarding() {
         body: JSON.stringify({
           brand_name: brandName.trim(),
           name: brandName.trim(),
-          brand_domains: domain.trim() ? [domain.trim()] : [],
+          // Store the host, not the raw paste. Screen 1 is a URL box now, so
+          // "https://acme.com/pricing" is ordinary input, and saving it whole
+          // showed a full URL with a path back in the Settings domain field.
+          brand_domains: hostOf(domain) ? [hostOf(domain)] : [],
           description: description.trim() || null,
           topics: cleaned,
           // Blank rows are just unused inputs, so drop them rather than
@@ -222,10 +265,13 @@ export function Onboarding() {
         setBusy(false);
         return;
       }
-      // The org (and, ideally, its first run) now exist and it's the active
-      // one. Land on the overview whether we came from first-run onboarding
-      // or from "New organization".
-      router.push("/dashboard");
+      // Land on the report the first run just produced — that report IS the
+      // thing they signed up to see. The runId has always been returned here
+      // and was previously discarded, which sent everyone to the overview.
+      // Falls back when no run fired (no key, or the trial allowance is gone):
+      // the overview explains that state, a run page for a run that does not
+      // exist would not.
+      router.push(data?.ran && data?.runId ? `/dashboard/runs/${data.runId}` : "/dashboard");
       router.refresh();
     } catch {
       setError("Network error while starting your first search.");
@@ -271,26 +317,15 @@ export function Onboarding() {
 
       {step === "brand" && (
         <div>
-          <h1 className="text-3xl font-semibold text-ink">Set up your brand</h1>
+          <h1 className="text-3xl font-semibold text-ink">What&apos;s your website?</h1>
           <p className="mt-2 text-ink-soft">
-            Let&apos;s start with your brand. We&apos;ll scan your website and predict what AI search
-            queries to look out for.
+            That&apos;s all we need. We&apos;ll read your site and set up everything else —
+            you just confirm it on the next screen.
           </p>
 
           <Card className="mt-6">
             <CardBody>
               <form onSubmit={handleNext} className="space-y-5">
-                <div>
-                  <Label htmlFor="ob-brand">Brand name</Label>
-                  <Input
-                    id="ob-brand"
-                    value={brandName}
-                    onChange={(e) => setBrandName(e.target.value)}
-                    placeholder="Acme"
-                    autoFocus
-                    required
-                  />
-                </div>
                 <div>
                   <Label htmlFor="ob-domain">Website</Label>
                   <div className="relative">
@@ -301,24 +336,37 @@ export function Onboarding() {
                       onChange={(e) => setDomain(e.target.value)}
                       placeholder="acme.com"
                       className="pl-9"
+                      autoFocus
+                      required
                     />
                   </div>
-                  <p className="mt-1.5 text-xs text-ink-faint">
-                    We read this to figure out what you do and draft your monitoring topics.
-                  </p>
                 </div>
 
-                {error && <p className="text-sm text-terracotta-dark">{error}</p>}
+                {error && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-terracotta-dark">{error}</p>
+                    {/* The site is the thing they can fix, so retrying is the
+                        primary move. Setting it up by hand stays available so
+                        an unreadable site can never dead-end signup. */}
+                    <button
+                      type="button"
+                      onClick={startManually}
+                      className="text-sm font-medium text-ink-soft underline underline-offset-4 transition hover:text-ink"
+                    >
+                      Or set it up manually
+                    </button>
+                  </div>
+                )}
 
                 <Button type="submit" size="lg" className="w-full" disabled={busy}>
                   {busy ? (
                     <>
                       <Spinner />
-                      Scanning your site...
+                      Reading your site...
                     </>
                   ) : (
                     <>
-                      Next
+                      {error ? "Try again" : "Continue"}
                       <ArrowRight className="h-4 w-4" />
                     </>
                   )}
@@ -331,10 +379,60 @@ export function Onboarding() {
 
       {step === "topics" && (
         <div>
-          <h1 className="text-3xl font-semibold text-ink">What should we monitor?</h1>
+          <h1 className="text-3xl font-semibold text-ink">Does this look right?</h1>
           {note && <p className="mt-2 text-ink-soft">{note}</p>}
 
-          <div className="mt-6 space-y-4">
+          {/* Identity read from the site. Editable, because a scrape gets the
+              name wrong often enough that a read-only summary would be a
+              dead end, and brand_name is what every later mention check
+              looks for. */}
+          <Card className="mt-6">
+            <CardBody>
+              <div className="flex items-start gap-4">
+                {imageUrl && !imageBroken && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded border border-ink/10 bg-paper object-contain"
+                    // Hotlinked from the customer's own domain, so it can 404
+                    // or be blocked. Hiding beats a broken-image icon as the
+                    // first thing they see of their own brand.
+                    onError={() => setImageBroken(true)}
+                  />
+                )}
+                <div className="min-w-0 flex-1 space-y-4">
+                  <div>
+                    <Label htmlFor="ob-brand">Brand name</Label>
+                    <Input
+                      id="ob-brand"
+                      value={brandName}
+                      onChange={(e) => setBrandName(e.target.value)}
+                      placeholder="Acme"
+                      className="font-medium"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ob-description">What you do</Label>
+                    <Textarea
+                      id="ob-description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="What does your brand do?"
+                    />
+                    <p className="mt-1.5 text-xs text-ink-faint">
+                      Used to sharpen your monitoring questions.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          <h2 className="mt-10 text-lg font-semibold text-ink">What should we monitor?</h2>
+
+          <div className="mt-4 space-y-4">
             {topics.map((topic, ti) => (
               <Card key={ti}>
                 <CardBody className="space-y-3">
