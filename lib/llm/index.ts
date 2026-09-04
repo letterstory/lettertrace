@@ -783,6 +783,14 @@ async function anthropicWebSearch(
 //   the Anthropic path's retrieved-but-not-cited results. That turns a
 //   searched-but-uncited answer from a false "ungrounded" (a real, billed
 //   browse discarded) into the grounded measurement it is.
+// Transient HTTP statuses on the Responses transport, worth another attempt.
+// 5xx is the provider itself failing; 424 is Concentrate's wrapper for the
+// same thing ("Provider errored" / code server_error) — the upstream provider
+// failed behind the router, and the request never reached a model.
+function isRetryableStatus(status: number): boolean {
+  return status >= 500 || status === 424;
+}
+
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -876,13 +884,19 @@ async function openaiWebSearch(
         const body = await res.json().catch(() => ({}));
         const err = new OpenAI.APIError(res.status, body, undefined, undefined);
         // Retry transient server errors; surface auth/quota immediately.
-        if (res.status >= 500) { lastErr = err; continue; }
+        // 424 is on the transient side: Concentrate reports an upstream
+        // provider failure as 424 Failed Dependency, so what a direct key
+        // would deliver as a retryable 5xx arrives from the router under 500.
+        // On 2026-08-27 that gap cost three runs 83 gpt-5.6-luna answers —
+        // 40% of the engine's calls failed on 424 while the other 60%
+        // succeeded in the same minutes, and none were retried.
+        if (isRetryableStatus(res.status)) { lastErr = err; continue; }
         throw err;
       }
       j = (await res.json()) as ResponsesBody;
     } catch (err) {
       lastErr = err;
-      if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
+      if (err instanceof OpenAI.APIError && err.status && !isRetryableStatus(err.status)) throw err;
     }
   }
   if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
@@ -1274,7 +1288,15 @@ const PERPLEXITY_RETRYABLE = new Set([429, 500, 502, 503, 504]);
 // Same shape as the Google limits, and for the same reason: a new Perplexity
 // key starts on a low usage tier, so 429s are a first-run experience, not an
 // edge case.
-const PERPLEXITY_MAX_RETRY_WAIT_MS = 45_000;
+//
+// 65s, not 45s — learned 2026-08-23, incident #108. Perplexity's rate limit is
+// per MINUTE, so the `Retry-After` on a 429 is ~60s: the one wait that actually
+// clears the limit was the one wait this cap refused, and the loop broke out
+// before its first sleep. A run of 76 questions lost 46 of them that way, every
+// failed span a single ~2.9s attempt with no backoff in it — the retry path
+// existed and never ran. It has to sit ABOVE the provider's window, not below.
+// The 90s budget below still bounds it to one honoured wait per call.
+const PERPLEXITY_MAX_RETRY_WAIT_MS = 65_000;
 // Perplexity rejects anything smaller with 400 "max_tokens must be at least 16"
 // — measured. The other adapters happily take a 4-8 token probe, so the tiny
 // verifyKey budget copied from them made a VALID key look broken. Clamped here
