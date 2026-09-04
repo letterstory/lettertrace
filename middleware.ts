@@ -1,7 +1,22 @@
-import { type NextRequest } from "next/server";
+import { type NextRequest, type NextFetchEvent } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { reportAccess } from "@/lib/owned-access";
 
-export async function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest, event: NextFetchEvent) {
+  // Owned-site access telemetry for the marketing blog. Middleware runs before
+  // the CDN cache, so it captures AI crawlers and search bots that never execute
+  // JS (the in-page beacon only sees humans). Fire-and-forget via waitUntil so
+  // it never delays the response; scoped to /blog so the authenticated app is
+  // never reported as public page access; and a no-op unless owned-access
+  // reporting is configured — inert on forks / self-hosted deployments.
+  if (request.nextUrl.pathname.startsWith("/blog")) {
+    event.waitUntil(
+      reportAccess({
+        path: request.nextUrl.pathname,
+        userAgent: request.headers.get("user-agent"),
+      })
+    );
+  }
   return updateSession(request);
 }
 
