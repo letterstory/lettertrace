@@ -399,7 +399,12 @@ export function Onboarding() {
                   <img
                     src={imageUrl}
                     alt=""
-                    className="h-12 w-12 shrink-0 rounded border border-ink/10 bg-paper object-contain"
+                    // Sized and offset to sit flush against the name field
+                    // rather than the label above it: mt clears the Label
+                    // (text-sm 20px line-height + mb-1.5 6px = 26px), and the
+                    // box matches the Input's own height (py-2.5 twice + 20px
+                    // line-height + 2px border = 42px).
+                    className="mt-[26px] h-[42px] w-[42px] shrink-0 rounded border border-ink/10 bg-paper object-contain"
                     // Hotlinked from the customer's own domain, so it can 404
                     // or be blocked. Hiding beats a broken-image icon as the
                     // first thing they see of their own brand.
