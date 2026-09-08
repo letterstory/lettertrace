@@ -115,11 +115,13 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
               <p className="text-sm text-ink-soft">
                 {live.stuck.length > 0 && `${live.stuck.length} run(s) stuck in flight. `}
                 {live.failures.length > 0 &&
-                  `${live.failures.length} distinct run failure${live.failures.length === 1 ? "" : "s"}. `}
+                  `${live.failures.length} distinct run failure${live.failures.length === 1 ? "" : "s"} on our key. `}
                 {!failing &&
                   (live.runs24h.total === 0
-                    ? `No runs in the last ${win.label}: nothing has failed, but nothing has been exercised either.`
-                    : `${live.runs24h.completed} of ${live.runs24h.completed + live.runs24h.failed} runs completed.`)}
+                    ? `No runs on our key in the last ${win.label}: nothing has failed, but nothing has been exercised either.`
+                    : `${live.runs24h.completed} of ${live.runs24h.completed + live.runs24h.failed} runs on our key completed.`)}
+                {live.theirs24h.failed > 0 &&
+                  ` ${live.theirs24h.failed} run${live.theirs24h.failed === 1 ? "" : "s"} failed on customers' own keys — their provider accounts, not counted here.`}
               </p>
               {live.degraded && (
                 <p className="text-sm text-terracotta-dark">
@@ -138,8 +140,8 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
           value={live.successRate === null ? "—" : `${live.successRate}%`}
           hint={
             live.successRate === null
-              ? "no runs settled"
-              : `${live.runs24h.completed} ok · ${live.runs24h.failed} failed`
+              ? `no runs on our key settled${live.theirs24h.failed > 0 ? ` · ${live.theirs24h.failed} failed on customer keys` : ""}`
+              : `${live.runs24h.completed} ok · ${live.runs24h.failed} failed on our key${live.theirs24h.failed > 0 ? ` · ${live.theirs24h.failed} on customer keys` : ""}`
           }
           accent={live.successRate !== null && live.successRate < 90 ? "terracotta" : "mint"}
         />
@@ -166,6 +168,7 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
       <Telemetry
         stuck={live.stuck}
         failures={live.failures}
+        theirFailures={live.theirFailures}
         problems={ops.problems}
         telemetryOn={ops.enabled}
       />
@@ -178,8 +181,8 @@ export default async function AdminPage({ searchParams }: { searchParams: SP }) 
             <span className="text-sm tabular-nums text-ink-faint">{live.engines.length}</span>
           </div>
           <p className="max-w-3xl text-sm text-ink-faint">
-            Where a failure sits. One engine failing while the rest succeed is a provider problem,
-            not ours.
+            Where a failure sits, on our key only. One engine failing while the rest succeed is a
+            provider problem, not ours.
           </p>
           <Card>
             <div className="max-h-72 divide-y divide-ink/5 overflow-y-auto">

@@ -247,6 +247,107 @@ describe("shapeLive", () => {
   });
 });
 
+describe("shapeLive — whose key paid", () => {
+  const now = new Date("2026-08-03T16:00:00.000Z").getTime();
+  const run = (over: Record<string, unknown> = {}) => ({
+    id: "aaaaaaaa-0000-0000-0000-000000000000",
+    status: "completed",
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    error: null,
+    prompt_count: 10,
+    completed_count: 10,
+    started_at: "2026-08-03T15:50:00.000Z",
+    created_at: "2026-08-03T15:50:00.000Z",
+    ...over,
+  });
+  const CREDIT = '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low"}}';
+
+  // The reported case: a customer's own Anthropic account ran dry, three
+  // scheduled runs failed, and the deployment read 98% with "2 distinct run
+  // failures" — an alarm about someone else's billing.
+  it("keeps a customer's own-key failure out of our figures, but still lists it", () => {
+    const r = shapeLive(
+      [
+        run({ key_source: "trial" }),
+        run({ key_source: "trial" }),
+        run({ status: "failed", error: CREDIT, key_source: "own" }),
+        run({ status: "failed", error: CREDIT, key_source: "own" }),
+        run({ status: "failed", error: CREDIT, key_source: "own" }),
+        run({ key_source: "own" }),
+      ],
+      now,
+      0,
+      0,
+      0,
+    );
+    expect(r.runs24h).toMatchObject({ completed: 2, failed: 0, total: 2 });
+    expect(r.successRate).toBe(100);
+    expect(r.failures).toEqual([]);
+    expect(r.theirs24h).toEqual({ completed: 1, failed: 3 });
+    expect(r.theirFailures).toHaveLength(1);
+    expect(r.theirFailures[0]).toMatchObject({ count: 3, engines: ["anthropic/claude-opus-4-8"] });
+    // Engines are ours only: their Opus 4.8 never appears as a failing engine.
+    expect(r.engines).toEqual([{ engine: "anthropic/claude-opus-4-8", completed: 2, failed: 0, rate: 100 }]);
+  });
+
+  it("counts a failure on our key against us", () => {
+    const r = shapeLive([run({ key_source: "trial" }), run({ status: "failed", error: "boom", key_source: "trial" })], now, 0, 0, 0);
+    expect(r.successRate).toBe(50);
+    expect(r.failures).toHaveLength(1);
+    expect(r.theirFailures).toEqual([]);
+  });
+
+  // Rows from before key_source existed carry null. Treating those as
+  // "theirs" would make the whole history vanish from the figures the day
+  // this shipped; treating them as ours keeps every old failure counted.
+  it("treats an unattributed run as ours", () => {
+    const r = shapeLive([run({ status: "failed", error: "boom", key_source: null }), run({ status: "failed", error: "boom" })], now, 0, 0, 0);
+    expect(r.runs24h.failed).toBe(2);
+    expect(r.failures[0].count).toBe(2);
+  });
+
+  it("flags a stuck run whoever paid — a dead invocation is ours", () => {
+    const r = shapeLive([run({ status: "running", started_at: "2026-08-03T14:00:00.000Z", key_source: "own" })], now, 0, 0, 0);
+    expect(r.stuck).toHaveLength(1);
+    // But it is not one of OUR settled runs.
+    expect(r.runs24h.total).toBe(0);
+  });
+});
+
+describe("shapeOps — whose key paid", () => {
+  it("demotes a run that failed on the customer's key to a warning and leaves it out of the failure count", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "run.failed", level: "error", signature: "run.failed:anthropic/claude-opus-4-8", occurrences: 3, sample: { provider: "anthropic", model: "claude-opus-4-8", key_source: "own" } }),
+        opsRow({ kind: "run.completed", level: "info", signature: "run.completed:anthropic/claude-haiku-4-5", occurrences: 20, sample: { provider: "anthropic", model: "claude-haiku-4-5", key_source: "trial" } }),
+      ],
+      24,
+      true,
+    );
+    expect(r.runs).toMatchObject({ completed: 20, failed: 0, successRate: 100 });
+    expect(r.errors).toBe(0);
+    expect(r.problems).toHaveLength(1);
+    expect(r.problems[0]).toMatchObject({ level: "warn", occurrences: 3 });
+    // Their engine does not appear in the per-engine table.
+    expect(r.engines).toEqual([{ engine: "anthropic/claude-haiku-4-5", completed: 20, failed: 0 }]);
+  });
+
+  it("keeps a failure on our key, or an unmarked older one, as an error", () => {
+    const r = shapeOps(
+      [
+        opsRow({ kind: "run.failed", level: "error", signature: "a", occurrences: 1, sample: { provider: "openai", model: "gpt-4o", key_source: "trial" } }),
+        opsRow({ kind: "run.failed", level: "error", signature: "b", occurrences: 1, sample: { provider: "openai", model: "gpt-4o" } }),
+      ],
+      24,
+      true,
+    );
+    expect(r.runs.failed).toBe(2);
+    expect(r.errors).toBe(2);
+    expect(r.problems.every((p) => p.level === "error")).toBe(true);
+  });
+});
+
 describe("isAdminEmail", () => {
   const original = process.env.ADMIN_EMAILS;
   afterEach(() => {

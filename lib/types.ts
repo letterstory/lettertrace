@@ -162,6 +162,9 @@ export interface Run {
   /** The LLM router that carried this run, or null for a direct provider key.
    *  `provider` above is still the engine that answered — see lib/routers.ts. */
   route: RouterId | null;
+  /** Whose credential paid: the operator's shared trial key, or the account's
+   *  own. Null on runs from before this was recorded. */
+  key_source: "own" | "trial" | null;
   /** Planned answers for this run: active prompts x replicates. */
   prompt_count: number;
   completed_count: number;

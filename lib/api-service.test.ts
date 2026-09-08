@@ -141,6 +141,7 @@ function makeRun(overrides: Partial<Run>): Run {
     model: "claude-sonnet-4-6",
     // Direct provider key, as every run before router support was.
     route: null,
+    key_source: null,
     prompt_count: 2,
     completed_count: 2,
     replicates: 1,

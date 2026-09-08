@@ -332,6 +332,7 @@ export async function firstSweep(opts: {
         model: k.model,
         apiKey: k.apiKey!,
         route: k.route,
+        keySource: k.source as "own" | "trial",
         budgetMicros: budget === null ? null : Math.floor(budget / Math.max(trialRuns, 1)),
         context: opts.context,
       };
