@@ -18,6 +18,7 @@ import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 import { InstallCli } from "@/components/install-cli";
 import { LetterCoTelemetry } from "@/components/letterco-telemetry";
+import { isBlogConfigured } from "@/lib/blog";
 import {
   FOUNDER_CALL_LANDING_SOURCE,
   founderCallUrl,
@@ -160,6 +161,9 @@ export default function LandingPage() {
   // not send its visitors to *our* founder's calendar. Unset means the section
   // does not exist.
   const bookingUrl = founderCallUrl();
+  // /blog is inert on forks / self-host (no CMS key + collection), so only
+  // surface the Blog link when the blog is actually configured.
+  const blogConfigured = isBlogConfigured();
 
   return (
     <div id="top" className="min-h-screen bg-paper text-ink">
@@ -174,6 +178,9 @@ export default function LandingPage() {
             <a href="#how" className="transition hover:text-ink">How it works</a>
             <a href="#features" className="transition hover:text-ink">Features</a>
             <a href="#open-source" className="transition hover:text-ink">Open source</a>
+            {blogConfigured ? (
+              <a href="/blog" className="transition hover:text-ink">Blog</a>
+            ) : null}
           </nav>
           <div className="flex items-center gap-2">
             <a
@@ -423,6 +430,7 @@ export default function LandingPage() {
               { label: "How it works", href: "#how" },
               { label: "Features", href: "#features" },
               { label: "Open source", href: "#open-source" },
+              ...(blogConfigured ? [{ label: "Blog", href: "/blog" }] : []),
             ]}
           />
           <FooterCol
