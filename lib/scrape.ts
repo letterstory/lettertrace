@@ -1,13 +1,28 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { firecrawlScrape, isFirecrawlConfigured } from "@/lib/firecrawl";
 
 // Best-effort domain scraper used during onboarding to learn what a brand does.
 // Returns visible text; the caller feeds it to the LLM to suggest topics. If it
 // can't fetch/parse the site, the caller falls back to manual entry.
 //
+// Two readers, tried in order:
+//   1. Firecrawl (lib/firecrawl), when FIRECRAWL_API_KEY is set: a real browser
+//      render, main content as markdown. Reads the JavaScript-rendered sites
+//      the plain fetch below sees only the shell of.
+//   2. A plain fetch with the tags stripped — the only reader on a deployment
+//      without a Firecrawl key, and the fallback when Firecrawl fails, times
+//      out, or returns nothing readable.
+//
 // Because this fetches a URL the user supplies, it is hardened against SSRF:
 // only http/https, internal/private hosts blocked, DNS resolved and re-checked
-// on every redirect hop.
+// on every redirect hop. The check runs BEFORE the URL is handed to Firecrawl
+// too: it fetches from its own infrastructure, but an internal address should
+// never leave this deployment at all.
+
+/** Which reader produced the text. Recorded on the onboarding log so a run of
+ *  thin suggestions can be traced to the reader that fed them. */
+export type ScrapeReader = "firecrawl" | "fetch";
 
 export interface ScrapeResult {
   ok: boolean;
@@ -15,7 +30,13 @@ export interface ScrapeResult {
   title?: string;
   text?: string;
   error?: string;
+  reader?: ScrapeReader;
 }
+
+/** What the model gets to read. suggestFromSite caps its input here too. */
+const MAX_TEXT_CHARS = 6000;
+/** Fewer non-space characters than this is a shell, not a page. */
+const MIN_TEXT_CHARS = 40;
 
 const MAX_REDIRECTS = 3;
 const BLOCKED_HOST_ERROR = "For security we can't fetch that host. Add your topics manually instead.";
@@ -152,9 +173,42 @@ async function safeFetch(startUrl: string, signal: AbortSignal): Promise<Respons
   throw new Error("Too many redirects.");
 }
 
+function readable(text: string): boolean {
+  return text.replace(/\s/g, "").length >= MIN_TEXT_CHARS;
+}
+
+/** The Firecrawl reader. Null means "use the plain scraper": the render failed,
+ *  timed out, or came back too thin to suggest anything from. */
+async function scrapeWithFirecrawl(url: string): Promise<ScrapeResult | null> {
+  try {
+    const page = await firecrawlScrape(url);
+    const text = `${page.description ? page.description + "\n\n" : ""}${page.markdown}`.slice(
+      0,
+      MAX_TEXT_CHARS,
+    );
+    if (!readable(text)) return null;
+    return { ok: true, url, title: page.title ?? "", text, reader: "firecrawl" };
+  } catch (err) {
+    console.warn(
+      `[scrape] firecrawl failed for ${url}, falling back to plain fetch: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
 export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
   const url = normalizeUrl(rawDomain);
   if (!url) return { ok: false, error: "That doesn't look like a valid domain." };
+
+  if (isFirecrawlConfigured()) {
+    // Same guard the plain path applies on every hop, applied before the URL
+    // leaves for Firecrawl. A blocked host is refused here and never reaches
+    // either reader.
+    const safe = await assertSafe(url);
+    if (!safe.ok) return { ok: false, url, error: safe.error };
+    const viaFirecrawl = await scrapeWithFirecrawl(url);
+    if (viaFirecrawl) return viaFirecrawl;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -169,11 +223,11 @@ export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
     const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? "").trim();
     const desc = metaDescription(html);
     const body = htmlToText(html);
-    const text = `${desc ? desc + "\n\n" : ""}${body}`.slice(0, 6000);
-    if (text.replace(/\s/g, "").length < 40) {
+    const text = `${desc ? desc + "\n\n" : ""}${body}`.slice(0, MAX_TEXT_CHARS);
+    if (!readable(text)) {
       return { ok: false, url, error: "Couldn't read enough content from the site." };
     }
-    return { ok: true, url, title: decodeEntities(title), text };
+    return { ok: true, url, title: decodeEntities(title), text, reader: "fetch" };
   } catch (err) {
     if (err instanceof Error && err.message === BLOCKED_HOST_ERROR) {
       return { ok: false, url, error: err.message };

@@ -45,7 +45,16 @@ import {
   type RunContext,
   type RunResult,
 } from "@/lib/engine";
-import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
+import {
+  pickDefaultProvider,
+  resolveRunKeyFor,
+  engineKeyMessage,
+  consumeTrialRunFor,
+  recordTrialSpendFor,
+  recordTrialUsageFor,
+  runBudgetMicros,
+  trialRunLimit,
+} from "@/lib/trial";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
 // Operations behind the programmatic surface, shared by the REST v1 routes and
@@ -131,7 +140,7 @@ export async function getAccessibleProject(
   return membership ? project : null;
 }
 
-function toAliases(value: unknown): string[] {
+export function toAliases(value: unknown): string[] {
   const parts =
     Array.isArray(value)
       ? value
@@ -151,7 +160,7 @@ function toNullableString(value: unknown): string | null {
 
 // Brand domains, first = primary. Accepts an array or a comma-separated
 // string; deduped case-insensitively, order preserved.
-function toDomains(value: unknown): string[] {
+export function toDomains(value: unknown): string[] {
   const seen = new Set<string>();
   return toAliases(value).filter((d) => {
     const key = d.toLowerCase();
@@ -1166,20 +1175,49 @@ export interface BackgroundRunStart {
   promptCount: number;
 }
 
+/** Who paid for the run, and on which engine it actually ran. Echoed on every
+ *  accepted trigger so a caller can tell a free run from one on the owner's
+ *  key without re-deriving it — a trial forces the provider's cheap model, and
+ *  a router may be carrying the call. */
+export interface RunFunding {
+  keySource: "own" | "trial";
+  provider: Provider;
+  model: string;
+  route: string | null;
+  /** Free runs left on the owner's allowance after this one, for a trial run. */
+  trial?: { remaining: number; limit: number };
+}
+
 export type TriggerOutcome =
-  | { ok: true; result: RunResult | BackgroundRunStart }
+  | { ok: true; result: (RunResult | BackgroundRunStart) & RunFunding }
   // `invalid_engine` is the caller's request being malformed (a model the
   // provider doesn't offer), distinct from `no_key` which is about billing —
-  // routes map them to 400 and 402 respectively.
-  | { ok: false; code: "not_found" | "no_key" | "invalid_engine"; message: string };
+  // routes map them to 400 and 402 respectively. `trial_exhausted` is the
+  // billing case with a different fix: the allowance is spent, and the owner
+  // needs to bring a key (the message says which).
+  | {
+      ok: false;
+      code: "not_found" | "no_key" | "trial_exhausted" | "invalid_engine";
+      message: string;
+    };
 
 /**
  * Execute a monitoring run for one of the user's projects.
  *
- * Programmatic runs are BYOK-only: the free-trial gate lives in
- * auth.uid()-scoped RPCs that a service-role request can't consume, and
- * keeping the trial off the API surface also keeps it from being farmed
- * by scripts. Dashboard runs are unaffected.
+ * Funded exactly as a dashboard run is: the OWNER's own provider or router key
+ * when they hold one for the engine, else a free run off the owner's trial
+ * allowance while it lasts — consumed atomically before the engine is asked,
+ * metered after. Programmatic runs used to be BYOK-only, on the grounds that
+ * the trial's self-scoped RPCs were unreachable from a service-role request
+ * and that a trial off the API couldn't be farmed by scripts. The scheduler
+ * has since had the *_for meters, and the allowance is per account and capped
+ * in dollars either way — an onboarded organization driven over the API gets
+ * the same fifteen runs the wizard gives, and hands over to the owner's key the
+ * moment they add one.
+ *
+ * The owner pays, whoever fired the run: a teammate's key would not pay for
+ * the owner's project, and the account that set the project up is the one
+ * that agreed to spend.
  */
 export async function triggerRunForProject(
   supabase: SupabaseClient,
@@ -1217,20 +1255,42 @@ export async function triggerRunForProject(
     return { ok: false, code: "invalid_engine", message: override.message };
   }
 
-  const key = await resolveRunKeyFor(supabase, userId, override.provider, override.model, {
+  const payer = project.user_id;
+  const key = await resolveRunKeyFor(supabase, payer, override.provider, override.model, {
     webSearch: project.use_web_search,
   });
-  if (key.source !== "own") {
-    const providerLabel = PROVIDERS[key.requested.provider].label;
+  if (key.source === "exhausted") {
+    return { ok: false, code: "trial_exhausted", message: engineKeyMessage(key) };
+  }
+  if (key.source !== "own" && key.source !== "trial") {
+    return { ok: false, code: "no_key", message: engineKeyMessage(key) };
+  }
+
+  // Atomically consume a free run BEFORE executing, so concurrent requests
+  // can't all slip past the gate while the counter lags. A consumed run counts
+  // even if it later fails.
+  if (key.source === "trial" && !(await consumeTrialRunFor(supabase, payer))) {
     return {
       ok: false,
-      code: "no_key",
-      message:
-        key.source === "mismatch"
-          ? `${engineKeyMessage(key)} (API-triggered runs are BYOK; free-trial runs are dashboard-only.)`
-          : `API-triggered runs require your own ${providerLabel} key. Add one in Settings (free-trial runs are dashboard-only).`,
+      code: "trial_exhausted",
+      message: engineKeyMessage({ ...key, source: "exhausted", limit: trialRunLimit() }),
     };
   }
+
+  const funding: RunFunding = {
+    keySource: key.source,
+    provider: key.provider,
+    model: key.model,
+    route: key.route?.router ?? null,
+    ...(key.source === "trial"
+      ? {
+          trial: {
+            remaining: Math.max(0, (key.remaining ?? 1) - 1),
+            limit: key.limit ?? trialRunLimit(),
+          },
+        }
+      : {}),
+  };
 
   const runParams = {
     supabase,
@@ -1239,7 +1299,18 @@ export async function triggerRunForProject(
     model: key.model,
     apiKey: key.apiKey!,
     route: key.route,
+    budgetMicros: runBudgetMicros(key),
     context: options?.context,
+  };
+
+  // Bill the operator's shared key once the cost is known. Tokens for
+  // visibility, dollars for the ceiling — the run may already have stopped
+  // itself on that ceiling, but it still has to be recorded or the next run
+  // starts from a stale total.
+  const meter = async (result: RunResult) => {
+    if (key.source !== "trial") return;
+    await recordTrialUsageFor(supabase, payer, result.tokensUsed);
+    await recordTrialSpendFor(supabase, payer, result.spendMicros);
   };
 
   if (options?.background) {
@@ -1251,29 +1322,37 @@ export async function triggerRunForProject(
     // fails, and this was the one call site that would have taken background
     // runs down with it.
     fireAndForget(
-      resumeRun(prepared, runParams).catch(async (err) => {
-        // resumeRun never rejects for per-prompt failures, so reaching here
-        // means the settle itself failed — and swallowing that left the row
-        // reading "running" forever, with the status endpoint reporting it to
-        // a poller that would never see a terminal state. Settle it here
-        // instead. Only a killed invocation can still strand a row, which is
-        // what the cron sweeper is for.
-        recordOpsError("api-service.background-run", err, { run_id: prepared.runId });
-        await settleAbandonedRun(
-          supabase,
-          prepared.runId,
-          `The run stopped unexpectedly: ${err instanceof Error ? err.message : "unknown error"}`,
-        ).catch(() => {});
-      }),
+      resumeRun(prepared, runParams)
+        .then(meter)
+        .catch(async (err) => {
+          // resumeRun never rejects for per-prompt failures, so reaching here
+          // means the settle itself failed — and swallowing that left the row
+          // reading "running" forever, with the status endpoint reporting it to
+          // a poller that would never see a terminal state. Settle it here
+          // instead. Only a killed invocation can still strand a row, which is
+          // what the cron sweeper is for.
+          recordOpsError("api-service.background-run", err, { run_id: prepared.runId });
+          await settleAbandonedRun(
+            supabase,
+            prepared.runId,
+            `The run stopped unexpectedly: ${err instanceof Error ? err.message : "unknown error"}`,
+          ).catch(() => {});
+        }),
     );
     return {
       ok: true,
-      result: { runId: prepared.runId, status: "running", promptCount: prepared.jobs.length },
+      result: {
+        runId: prepared.runId,
+        status: "running",
+        promptCount: prepared.jobs.length,
+        ...funding,
+      },
     };
   }
 
   const result = await executeRun(runParams);
-  return { ok: true, result };
+  await meter(result);
+  return { ok: true, result: { ...result, ...funding } };
 }
 
 /**

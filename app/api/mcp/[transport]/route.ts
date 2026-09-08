@@ -226,7 +226,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "trigger_run",
-      "Execute a monitoring run now for a project: queries the configured AI assistant with every active prompt and stores mention data. Requires the account's own provider key (free-trial runs are dashboard-only). Can take a few minutes.",
+      "Execute a monitoring run now for a project: queries the configured AI assistant with every active prompt and stores mention data. Runs on the account's own provider key, or on one free trial run while the allowance lasts. Can take a few minutes.",
       {
         project_id: z.string().uuid().describe("Project id from list_projects"),
       },

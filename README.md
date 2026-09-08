@@ -280,16 +280,18 @@ The endpoint uses the Supabase **service role** to find due projects across all 
 
 ## Free trial (optional)
 
-By default Lettertrace is bring-your-own-key: a user must add a key before running anything. You can optionally let people try it on **your** shared keys first — a configurable number of free monitoring runs (default **5**) — then prompt them to add their own.
+By default Lettertrace is bring-your-own-key: a user must add a key before running anything. You can optionally let people try it on **your** shared keys first — a configurable number of free monitoring runs (default **15**) — then prompt them to add their own.
 
 Set in your environment:
 
 - `TRIAL_ANTHROPIC_API_KEY` / `TRIAL_OPENAI_API_KEY` / `TRIAL_GOOGLE_API_KEY`: the shared key(s) to lend out (set the provider(s) you want to offer). Leave unset to keep the app BYOK-only.
-- `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `5`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap).
+- `TRIAL_RUN_LIMIT`: free monitoring runs per user before they must add their own key (default `15`). **This is the configurable threshold.** A run counts when it starts (consumed atomically, so parallel requests can't exceed the cap). Every engine in a sweep is its own run, so onboarding on three engines costs three.
 - `TRIAL_ANTHROPIC_MODEL` / `TRIAL_OPENAI_MODEL` / `TRIAL_GOOGLE_MODEL`: optional cheaper models to cap your cost during the trial (default to the user's selected model).
 - `NEXT_PUBLIC_BYOK_VIDEO_URL`: optional embeddable video URL explaining the BYOK model, shown once the free runs are used up.
 
-While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key. Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely. Scheduled (cron) runs always use the owner's own key, never the trial.
+While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key — whether they start from the dashboard, the scheduler, the REST API, MCP, or the one-shot [onboarding endpoint](#onboarding-a-url-in-one-call). Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely: the owner's own provider or router key always beats the trial, so an organization set up on the free runs hands over to the owner's key the moment they add one, with no transfer step.
+
+- `FIRECRAWL_API_KEY`: optional. When set, onboarding reads a brand's site through [Firecrawl](https://firecrawl.dev) (a real browser render, main content as markdown) before suggesting topics, so JavaScript-rendered sites are read rather than seen as an empty shell. The plain fetch remains the fallback, and the only reader when the key is unset. Internal and private hosts are refused before a URL ever leaves for Firecrawl.
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the `project_members`
 > and `project_invites` tables plus the `can_access_project` / `is_project_owner`
@@ -443,7 +445,9 @@ curl -X PATCH https://your-app.com/api/v1/prompts/<prompt-id> \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"is_active": false}'
 
-# Recent runs for a project / trigger a run now
+# Recent runs for a project / trigger a run now. Funded like a dashboard run:
+# the owner's own key for the engine, else one free trial run (402 once the
+# allowance is spent). The response says which: keySource "own" | "trial".
 # (optional body {"provider", "model"} overrides the project default for that run)
 curl https://your-app.com/api/v1/projects/<project-id>/runs \
   -H "Authorization: Bearer lt_live_..."
@@ -471,6 +475,36 @@ curl https://your-app.com/api/v1/projects/<project-id>/history?limit=30 \
 curl https://your-app.com/api/v1/runs/<run-id>/responses \
   -H "Authorization: Bearer lt_live_..."
 ```
+
+### Onboarding a URL in one call
+
+`POST /api/v1/onboard` does what the dashboard wizard does, from a URL: reads the site (Firecrawl when configured), has the model suggest topics, prompts and competitors, creates the organization, saves everything, and starts the first sweep on every engine the account can fund — the owner's own keys first, the free trial while it lasts. Each trial-funded engine consumes one free run, exactly as the Run button does. Runs start in the background by default; the response is `202` with their ids to poll.
+
+```bash
+# Into your own account
+curl -X POST https://your-app.com/api/v1/onboard \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"url": "acme.io", "brand_name": "Acme"}'
+
+# Bring your own topics (skips the suggestion step), turn on a cadence, or
+# only create the organization without running anything.
+curl -X POST https://your-app.com/api/v1/onboard \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"url": "acme.io", "topics": [{"name": "CRM", "prompts": ["best crm for startups"]}], "schedule": "weekly"}'
+curl -X POST https://your-app.com/api/v1/onboard \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"url": "acme.io", "run": false}'
+```
+
+Operators (accounts on `ADMIN_USER_IDS` / `ADMIN_EMAILS`) can onboard a URL **into another account** by sending `email`. The account is adopted when it exists and created when it doesn't; the organization is created under it, the sweep spends *that* account's free runs, and a Lettertrace API key is minted for it and returned once in `api_key.key`. That key is how the new owner (or a system onboarding on their behalf) adds their own provider key with `PUT /api/v1/keys/<provider>` and keeps monitoring after the trial.
+
+```bash
+curl -X POST https://your-app.com/api/v1/onboard \
+  -H "Authorization: Bearer lt_live_operator..." -H "Content-Type: application/json" \
+  -d '{"url": "acme.io", "brand_name": "Acme", "email": "jo@acme.io", "key": {"name": "Letterbrace"}}'
+```
+
+The response carries `project`, `site` (what was read and by which reader), `suggestion`, `saved` counts, `runs` (each with `keySource`), `trial` (used / limit / remaining), and — for a transfer — `account` and `api_key`. `needsKey` + `keyMessage` explain a sweep that could not start; `sweep_skipped: "no_prompts"` means nothing was suggested and nothing was sent to ask.
 
 The run report carries four blocks. Read them in this order:
 

@@ -1,36 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getConfiguredProviders, getRouterKeysPublic, setActiveProject } from "@/lib/data";
-import { executeRun } from "@/lib/engine";
-import { humanError } from "@/lib/llm";
+import { setActiveProject } from "@/lib/data";
 import {
-  resolveRunKey,
-  resolveRunKeyFor,
-  consumeTrialRun,
-  recordTrialUsage,
-  recordTrialSpend,
-  runBudgetMicros,
-  pickDefaultProvider,
-  engineKeyMessage,
-  trialCoveredProviders,
-  trialRunLimit,
-  getTrialUsage,
-  type ResolvedKey,
-} from "@/lib/trial";
-import { trialSpendLimitMicros } from "@/lib/pricing";
-import { defaultModelFor } from "@/lib/models";
-import { coveredProviders } from "@/lib/routers";
+  firstSweep,
+  persistOnboarding,
+  pickProjectEngine,
+  sessionTrialMeter,
+  type TopicInput,
+} from "@/lib/onboard";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
-
-interface TopicInput {
-  name: string;
-  prompts: string[];
-}
 
 function toStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -49,6 +32,10 @@ function toStringArray(value: unknown): string[] {
 // Creates an organization (project) + topics + prompts, makes it the active
 // one, then immediately runs the first monitor so the user lands on results.
 // Also used to add additional organizations. Returns { projectId, ran, runId }.
+//
+// The work itself — which engine to start on, what to save, the first sweep
+// and how it spends the free trial — lives in lib/onboard, shared with the
+// API's one-shot POST /api/v1/onboard so the two can't drift.
 export async function POST(request: Request) {
   const supabase = createClient();
   const {
@@ -75,7 +62,6 @@ export async function POST(request: Request) {
   // org, so extra orgs can't spend more than the allowance either way. All the
   // gate actually did was block someone from setting up the brands they wanted
   // to monitor before deciding to bring a key.
-  const providers = await getConfiguredProviders(supabase, user.id);
   const name =
     typeof body.name === "string" && body.name.trim() ? body.name.trim() : brand_name;
   // First entry = primary domain; the rest are phantom sites for the brand.
@@ -125,27 +111,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // Start the project on an engine this user can actually run. Runs no longer
-  // substitute another provider's key, so defaulting purely on the operator's
-  // trial config would hand a BYOK user a project whose first monitor can't
-  // execute — with a perfectly good key sitting in Settings. Their own key wins
-  // over the trial; the env default applies only when they have none.
-  //
-  // A router key counts here exactly as a direct key does. It used to not, so a
-  // user whose only credential was a gateway got a project pinned to the env
-  // default and a first run refused for a key they had deliberately replaced.
-  // New projects are created grounded (use_web_search defaults on in the
-  // database), so coverage is asked for the grounded case.
-  const routerKeys = await getRouterKeysPublic(supabase, user.id);
-  const runnable = coveredProviders({
-    direct: providers,
-    routers: routerKeys.map((k) => ({ router: k.router, searchVerified: k.search_verified ?? [] })),
-    webSearch: true,
-  });
-  const envDefault = pickDefaultProvider();
-  const provider =
-    runnable.length === 0 || runnable.includes(envDefault) ? envDefault : runnable[0];
-  const model = defaultModelFor(provider);
+  // Start the project on an engine this user can actually run — the user's
+  // own key wins over the trial; the env default applies only when they have
+  // none. See pickProjectEngine.
+  const engine = await pickProjectEngine(supabase, user.id);
+  const { provider, model } = engine;
 
   const { data: projRow, error: projErr } = await supabase
     .from("projects")
@@ -188,145 +158,51 @@ export async function POST(request: Request) {
     metadata: { topics: topics.length, competitors: competitors.length, brand_name },
   });
 
-  // Persist competitors before the first run: executeRun reads them to detect
-  // rival mentions, so seeding them after the run would leave that run's
-  // answers scored against the brand alone and no share of voice to show.
-  if (competitors.length > 0) {
-    const { error: compErr } = await supabase.from("competitors").insert(
-      competitors.map((c) => ({
-        project_id: project.id,
-        name: c.name,
-        aliases: c.aliases,
-        domain: c.domain,
-      })),
-    );
-    // Non-fatal: the project and its topics are already real, and the user can
-    // add competitors from the Competitors page. Losing them shouldn't cost
-    // them the whole onboarding they just completed.
-    if (compErr) {
-      console.error("[onboarding] competitor insert failed:", compErr.message);
+  // Competitors first, then topics + prompts: executeRun reads competitors to
+  // detect rival mentions, so they must exist before the first run.
+  await persistOnboarding(supabase, project, { topics, competitors });
+
+  // First measurement is a sweep across every engine the account can fund:
+  // the user's own coverage plus the trial's while the allowance lasts. Each
+  // trial-funded engine atomically consumes one free run before it starts —
+  // the same deal as the Run button, so a 3-engine sweep costs 3 of the 15.
+  const outcome = await firstSweep({
+    supabase,
+    userId: user.id,
+    project,
+    runnable: engine.runnable,
+    meter: sessionTrialMeter(supabase),
+    context: {
+      channel: "dashboard",
+      actorType: "user",
+      actorId: user.id,
+      actorLabel: user.email ?? "You",
+    },
+  });
+
+  if (!outcome.ran) {
+    if ("error" in outcome) {
+      return NextResponse.json(
+        { projectId: project.id, ran: false, error: outcome.error },
+        { status: 200 },
+      );
     }
-  }
-
-  // Persist topics + their prompts.
-  for (const topic of topics) {
-    const { data: topicRow } = await supabase
-      .from("topics")
-      .insert({ project_id: project.id, name: topic.name, description: null })
-      .select("id")
-      .single();
-    if (!topicRow) continue;
-    const rows = topic.prompts.map((text) => ({
-      project_id: project.id,
-      topic_id: topicRow.id as string,
-      text,
-      source: "ai" as const,
-      is_active: true,
-    }));
-    if (rows.length) await supabase.from("prompts").insert(rows);
-  }
-
-  // First measurement is a SWEEP: one run per engine the account can fund —
-  // the user's own coverage, plus the trial's while the allowance lasts — in
-  // parallel, so the wall clock stays roughly one run. Probing every engine on
-  // the first run maximizes the chance of finding a mention at all, which is
-  // the moment the product proves itself.
-  const usage = await getTrialUsage(supabase, user.id);
-  const trialActive =
-    usage.runs < trialRunLimit() && usage.spendMicros < trialSpendLimitMicros();
-  const sweep = Array.from(
-    new Set([...runnable, ...(trialActive ? trialCoveredProviders(true) : [])]),
-  );
-  // The project's own engine leads: its run is the one the response points at.
-  sweep.sort((a, b) =>
-    a === project.default_provider ? -1 : b === project.default_provider ? 1 : 0,
-  );
-
-  const keys: ResolvedKey[] = [];
-  for (const p of sweep) {
-    const k = await resolveRunKeyFor(supabase, user.id, p, defaultModelFor(p), {
-      webSearch: true,
-    });
-    if ((k.source === "own" || k.source === "trial") && k.apiKey) keys.push(k);
-  }
-
-  if (keys.length === 0) {
-    const key = await resolveRunKey(supabase, user.id, project);
     return NextResponse.json({
       projectId: project.id,
       ran: false,
       // 'mismatch' = they have a key, just not for the engine this project was
       // created with, so the message points at the engine rather than at signup.
-      needsKey: key.source === "own" || key.source === "trial" ? "none" : key.source,
-      keyMessage: engineKeyMessage(key),
+      needsKey: outcome.needsKey,
+      keyMessage: outcome.keyMessage,
     });
-  }
-
-  // Atomically consume a free run per trial-funded engine BEFORE executing
-  // (see /api/runs). Sequential on purpose: the sweep stops being granted runs
-  // at exactly the engine where the allowance ran out.
-  const funded: ResolvedKey[] = [];
-  for (const k of keys) {
-    if (k.source === "trial" && !(await consumeTrialRun(supabase))) continue;
-    funded.push(k);
-  }
-  if (funded.length === 0) {
-    return NextResponse.json({
-      projectId: project.id,
-      ran: false,
-      needsKey: "exhausted",
-    });
-  }
-
-  // Trial-funded runs share the remaining spend budget rather than each
-  // claiming all of it — the recorded overshoot past the cap is otherwise
-  // multiplied by however many runs launched from the same snapshot.
-  const trialRuns = funded.filter((k) => k.source === "trial").length;
-
-  const settled = await Promise.allSettled(
-    funded.map(async (k) => {
-      const budget = runBudgetMicros(k);
-      const result = await executeRun({
-        supabase,
-        project,
-        provider: k.provider,
-        model: k.model,
-        apiKey: k.apiKey!,
-        route: k.route,
-        budgetMicros: budget === null ? null : Math.floor(budget / Math.max(trialRuns, 1)),
-        context: {
-          channel: "dashboard",
-          actorType: "user",
-          actorId: user.id,
-          actorLabel: user.email ?? "You",
-        },
-      });
-      if (k.source === "trial") {
-        await recordTrialUsage(supabase, result.tokensUsed);
-        await recordTrialSpend(supabase, result.spendMicros);
-      }
-      return { provider: k.provider, runId: result.runId, status: result.status };
-    }),
-  );
-
-  const runs = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
-
-  if (runs.length === 0) {
-    const firstFailure = settled.find(
-      (s): s is PromiseRejectedResult => s.status === "rejected",
-    );
-    return NextResponse.json(
-      { projectId: project.id, ran: false, error: humanError(firstFailure?.reason) },
-      { status: 200 },
-    );
   }
 
   return NextResponse.json({
     projectId: project.id,
     ran: true,
     // The default engine's run (the sweep is sorted so it launched first).
-    runId: runs[0].runId,
-    status: runs[0].status,
-    runs,
+    runId: outcome.runs[0].runId,
+    status: outcome.runs[0].status,
+    runs: outcome.runs,
   });
 }
