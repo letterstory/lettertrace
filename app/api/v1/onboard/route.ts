@@ -212,7 +212,6 @@ export async function POST(request: Request) {
       targetId: outcome.project.id,
       metadata: {
         host: outcome.site.host,
-        reader: outcome.site.reader,
         scraped: outcome.site.scraped,
         topics: outcome.saved.topics,
         prompts: outcome.saved.prompts,

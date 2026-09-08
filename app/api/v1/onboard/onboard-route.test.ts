@@ -82,7 +82,7 @@ const TRIAL = { used: 1, limit: 15, remaining: 14, spendMicros: 0, capMicros: 5_
 function outcome(over: Partial<Awaited<ReturnType<typeof onboard.onboardFromUrl>>> = {}) {
   return {
     project: PROJECT as never,
-    site: { host: "acme.com", url: "https://acme.com/", title: "Acme", reader: "firecrawl" as const, scraped: true },
+    site: { host: "acme.com", url: "https://acme.com/", title: "Acme", siteName: "Acme", scraped: true },
     suggestion: { description: "d", topics: 2, competitors: 1, keySource: "trial" as const, tokens: 10 },
     saved: { topics: 2, prompts: 6, competitors: 1 },
     topics: [],
@@ -174,7 +174,7 @@ describe("POST /api/v1/onboard — into the caller's own account", () => {
       ran: true,
       runs: [{ runId: "run-1", keySource: "trial" }],
       trial: TRIAL,
-      site: { reader: "firecrawl" },
+      site: { siteName: "Acme" },
     });
     expect(body.account).toBeUndefined();
     expect(body.api_key).toBeUndefined();

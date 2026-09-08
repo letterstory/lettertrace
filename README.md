@@ -185,11 +185,13 @@ docker run -p 3000:3000 --env-file .env ghcr.io/letterstory/lettertrace
 | `ENCRYPTION_KEY` | Storing BYOK provider keys (32 bytes, base64) |
 | `NEXT_PUBLIC_SITE_URL` | Correct auth redirects and OG metadata — set it to the URL users actually visit |
 | `CRON_SECRET` | Only if you wire up scheduled runs (below) |
+| `FIRECRAWL_API_KEY` | Only to improve the site read during onboarding (below) |
 
 Everything else in [`.env.example`](./.env.example) is optional: the `TRIAL_*`
 keys exist to hand out free runs on your own provider account, the `ADMIN_*` /
 `RESEND_API_KEY` values enable operator alerts and the mail that carries
-[team invitations](#teams), and `FOUNDER_CALL_URL`
+[team invitations](#teams), `FIRECRAWL_API_KEY` improves the site read during
+onboarding, and `FOUNDER_CALL_URL`
 offers new signups a setup call at a booking link of your choosing. Leave that
 last one unset — as `.env.example` does — and no such offer exists.
 
@@ -291,7 +293,6 @@ Set in your environment:
 
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key — whether they start from the dashboard, the scheduler, the REST API, MCP, or the one-shot [onboarding endpoint](#onboarding-a-url-in-one-call). Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely: the owner's own provider or router key always beats the trial, so an organization set up on the free runs hands over to the owner's key the moment they add one, with no transfer step.
 
-- `FIRECRAWL_API_KEY`: optional. When set, onboarding reads a brand's site through [Firecrawl](https://firecrawl.dev) (a real browser render, main content as markdown) before suggesting topics, so JavaScript-rendered sites are read rather than seen as an empty shell. The plain fetch remains the fallback, and the only reader when the key is unset. Internal and private hosts are refused before a URL ever leaves for Firecrawl.
 
 > After upgrading, re-run `supabase/schema.sql`. It adds the `project_members`
 > and `project_invites` tables plus the `can_access_project` / `is_project_owner`
@@ -338,6 +339,31 @@ RLS policy on the project's tables now calls.
 Invitations need mail configured (`RESEND_API_KEY` and a verified
 `ADMIN_ALERT_FROM`, below). Without it the invite form reports that it could
 not send rather than silently creating an invitation nobody was told about.
+
+## Reading a new customer's site (optional)
+
+Onboarding asks for one thing: a URL. Lettertrace reads that site and proposes
+the brand's name, description, icon, monitoring topics and competitors, and the
+user confirms them. Those defaults become the measured surface for every run the
+account ever does, so this single read matters more than its size suggests.
+
+The built-in reader fetches the page and parses the HTML directly. It has no
+dependencies and needs no configuration, but it cannot run JavaScript — a site
+that renders client-side gives it nothing. Measured 2026-09-04: excalidraw.com
+serves 30 characters of text in its raw HTML and tldraw.com 78, against
+stripe.com's 11044.
+
+Set `FIRECRAWL_API_KEY` and [Firecrawl](https://firecrawl.dev) does the read
+instead: it renders the page first and returns clean text plus the site's own
+metadata, which is where the name, description and icon come from. One page is
+scraped per signup.
+
+The two are not exclusive. Firecrawl is tried first when the key is set, and the
+built-in reader runs whenever it is absent, out of credits or unreachable — so
+onboarding never depends on a third party being up. Falling back is safe here
+specifically because a scrape produces *suggestions a user reviews on the next
+screen*, never a stored measurement; monitoring runs are held to the stricter
+rule that they must refuse rather than substitute.
 
 ## Operator alerts (optional)
 
@@ -504,7 +530,7 @@ curl -X POST https://your-app.com/api/v1/onboard \
   -d '{"url": "acme.io", "brand_name": "Acme", "email": "jo@acme.io", "key": {"name": "Letterbrace"}}'
 ```
 
-The response carries `project`, `site` (what was read and by which reader), `suggestion`, `saved` counts, `runs` (each with `keySource`), `trial` (used / limit / remaining), and — for a transfer — `account` and `api_key`. `needsKey` + `keyMessage` explain a sweep that could not start; `sweep_skipped: "no_prompts"` means nothing was suggested and nothing was sent to ask.
+The response carries `project`, `site` (what was read), `suggestion`, `saved` counts, `runs` (each with `keySource`), `trial` (used / limit / remaining), and — for a transfer — `account` and `api_key`. `needsKey` + `keyMessage` explain a sweep that could not start; `sweep_skipped: "no_prompts"` means nothing was suggested and nothing was sent to ask.
 
 The run report carries four blocks. Read them in this order:
 

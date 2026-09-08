@@ -34,7 +34,8 @@ import { defaultModelFor } from "@/lib/models";
 import { fireAndForget } from "@/lib/notify";
 import { recordOpsError } from "@/lib/ops";
 import { generateApiKey, hashApiKey, keyHint } from "@/lib/crypto";
-import { scrapeDomain, type ScrapeReader } from "@/lib/scrape";
+import { scrapeDomain } from "@/lib/scrape";
+import { brandNameFromSite } from "@/lib/brand-name";
 import { suggestFromSite, humanError } from "@/lib/llm";
 import { normalizeCompetitorList, type CompetitorInput } from "@/lib/competitors";
 import type { Project, Provider, Schedule } from "@/lib/types";
@@ -383,15 +384,6 @@ export async function firstSweep(opts: {
 
 // ---------- the brand behind a URL -------------------------------------------
 
-const GENERIC_TITLE_WORDS = new Set([
-  "home",
-  "homepage",
-  "welcome",
-  "official site",
-  "official website",
-  "website",
-]);
-
 /** "https://www.acme.com/pricing" -> "acme.com". Null when unparseable. */
 export function hostOfUrl(raw: string): string | null {
   const trimmed = (raw || "").trim();
@@ -407,32 +399,23 @@ export function hostOfUrl(raw: string): string | null {
 }
 
 /**
- * A brand name when the caller didn't send one: the page title's brand
- * segment when there is one, else the host's label. Deliberately modest —
- * the caller (a person, or the system that knows the company) should send the
- * name, and the model's description is what actually explains the company.
+ * A brand name when the caller didn't send one: the site's own name for
+ * itself, else the title with its tagline trimmed, else the domain — the same
+ * derivation the dashboard wizard uses (lib/brand-name).
  */
 export function brandNameFrom(opts: {
   brandName?: string | null;
+  siteName?: string | null;
   title?: string | null;
   host: string;
 }): string {
   const given = opts.brandName?.trim();
   if (given) return given;
-
-  const label = opts.host.split(".")[0] ?? opts.host;
-  const fromHost = label ? label.charAt(0).toUpperCase() + label.slice(1) : opts.host;
-
-  const segments = (opts.title ?? "")
-    .split(/\s+[|–—:\-·]\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && s.length <= 40 && !GENERIC_TITLE_WORDS.has(s.toLowerCase()));
-  if (segments.length === 0) return fromHost;
-  // Prefer the segment that names the host ("Acme" for acme.com), else the
-  // shortest — titles put the brand in the short part and the pitch in the
-  // long one.
-  const named = segments.find((s) => s.toLowerCase().replace(/\s+/g, "").includes(label));
-  return named ?? segments.reduce((a, b) => (b.length < a.length ? b : a));
+  return brandNameFromSite({
+    siteName: opts.siteName ?? undefined,
+    title: opts.title ?? undefined,
+    domain: opts.host,
+  });
 }
 
 // ---------- the one-shot flow ------------------------------------------------
@@ -471,7 +454,8 @@ export interface SiteRead {
   host: string;
   url: string | null;
   title: string | null;
-  reader: ScrapeReader | null;
+  /** The site's own name for itself (og:site_name), when it declares one. */
+  siteName: string | null;
   scraped: boolean;
   error?: string;
 }
@@ -530,12 +514,17 @@ export async function onboardFromUrl(opts: {
     host,
     url: scrape.url ?? null,
     title: scrape.title || null,
-    reader: scrape.reader ?? null,
+    siteName: scrape.siteName || null,
     scraped: scrape.ok && !!scrape.text,
     ...(scrape.ok ? {} : { error: scrape.error }),
   };
 
-  const brand_name = brandNameFrom({ brandName: input.brandName, title: site.title, host });
+  const brand_name = brandNameFrom({
+    brandName: input.brandName,
+    siteName: site.siteName,
+    title: site.title,
+    host,
+  });
   const brand_aliases = (input.brandAliases ?? []).map((a) => a.trim()).filter(Boolean);
   const name = input.name?.trim() || brand_name;
 

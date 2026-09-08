@@ -1,110 +1,271 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Every host in these tests resolves to a public address, so the SSRF guard
-// lets it through; the guard's own blocking is exercised with a literal
-// loopback hostname below, which never reaches DNS.
-vi.mock("node:dns/promises", () => ({
-  default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
+const lookup = vi.fn();
+vi.mock("node:dns/promises", () => ({ default: { lookup: (...a: unknown[]) => lookup(...a) } }));
+
+const firecrawlEnabled = vi.fn();
+const firecrawlScrape = vi.fn();
+vi.mock("@/lib/firecrawl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/firecrawl")>()),
+  firecrawlEnabled: () => firecrawlEnabled(),
+  firecrawlScrape: (url: string) => firecrawlScrape(url),
 }));
-vi.mock("@/lib/firecrawl", () => ({
-  isFirecrawlConfigured: vi.fn(() => false),
-  firecrawlScrape: vi.fn(),
-}));
 
-const { isFirecrawlConfigured, firecrawlScrape } = await import("@/lib/firecrawl");
-const { scrapeDomain } = await import("@/lib/scrape");
+import { scrapeDomain } from "@/lib/scrape";
 
-const LONG = "Acme builds payroll software for platform teams. ".repeat(10);
-const HTML = `<html><head><title>Acme &amp; Co</title><meta name="description" content="Payroll for platform teams"></head><body><h1>Acme</h1><p>${LONG}</p></body></html>`;
+const BLOCKED = "For security we can't fetch that host. Add your topics manually instead.";
 
-const fetchMock = vi.fn();
+function html(body: string, head = "") {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+    text: async () => `<html><head>${head}</head><body>${body}</body></html>`,
+  } as unknown as Response;
+}
+
+const PARAGRAPH =
+  "<p>Acme builds payment infrastructure for the internet, used by millions of businesses.</p>";
+
+let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-  fetchMock.mockReset().mockResolvedValue(
-    new Response(HTML, { status: 200, headers: { "content-type": "text/html" } }),
-  );
-  vi.mocked(isFirecrawlConfigured).mockReset().mockReturnValue(false);
-  vi.mocked(firecrawlScrape).mockReset();
+  firecrawlEnabled.mockReturnValue(false);
+  firecrawlScrape.mockReset();
+  // Public by default; individual tests point DNS inward.
+  lookup.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 });
-afterEach(() => vi.unstubAllGlobals());
 
-describe("scrapeDomain — reader order", () => {
-  it("reads with the plain fetch when Firecrawl is not configured", async () => {
-    const result = await scrapeDomain("acme.com");
-    expect(result).toMatchObject({ ok: true, url: "https://acme.com/", reader: "fetch" });
-    expect(result.title).toBe("Acme & Co");
-    expect(result.text).toMatch(/^Payroll for platform teams\n\n/);
-    expect(firecrawlScrape).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
-  it("prefers Firecrawl when configured, and never touches the plain fetch", async () => {
-    vi.mocked(isFirecrawlConfigured).mockReturnValue(true);
-    vi.mocked(firecrawlScrape).mockResolvedValue({
-      markdown: `# Acme\n\n${LONG}`,
+describe("scrapeDomain: choosing a reader", () => {
+  it("uses Firecrawl and never touches the built-in reader when it succeeds", async () => {
+    firecrawlEnabled.mockReturnValue(true);
+    firecrawlScrape.mockResolvedValue({
+      ok: true,
+      url: "https://acme.com/",
       title: "Acme",
-      description: "Payroll for platform teams",
+      siteName: "Acme",
+      description: "Payments",
+      imageUrl: "https://acme.com/card.png",
+      text: "a".repeat(200),
     });
 
-    const result = await scrapeDomain("https://www.acme.com/");
-    expect(result).toMatchObject({ ok: true, reader: "firecrawl", title: "Acme" });
-    expect(result.text).toBe(`Payroll for platform teams\n\n# Acme\n\n${LONG}`.slice(0, 6000));
-    expect(firecrawlScrape).toHaveBeenCalledWith("https://www.acme.com/");
+    const res = await scrapeDomain("acme.com");
+    expect(res.ok).toBe(true);
+    expect(res.siteName).toBe("Acme");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the plain fetch when Firecrawl fails", async () => {
-    vi.mocked(isFirecrawlConfigured).mockReturnValue(true);
-    vi.mocked(firecrawlScrape).mockRejectedValue(new Error("Firecrawl scrape failed (402)"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  // The point of the fallback: a Firecrawl outage, an expired key or an
+  // exhausted balance must not take onboarding down with it.
+  it("falls back to the built-in reader when Firecrawl fails", async () => {
+    firecrawlEnabled.mockReturnValue(true);
+    firecrawlScrape.mockResolvedValue({ ok: false, error: "Firecrawl is out of credits." });
+    fetchMock.mockResolvedValue(html(PARAGRAPH, "<title>Acme</title>"));
 
-    const result = await scrapeDomain("acme.com");
-    expect(result).toMatchObject({ ok: true, reader: "fetch" });
+    const res = await scrapeDomain("acme.com");
+    expect(res.ok).toBe(true);
+    expect(res.title).toBe("Acme");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/firecrawl failed.*falling back/));
-    warn.mockRestore();
   });
 
-  // A render that came back as a shell is not a read: the plain scraper gets
-  // its turn rather than the model being handed forty characters of nav.
-  it("falls back when Firecrawl returns too little to suggest from", async () => {
-    vi.mocked(isFirecrawlConfigured).mockReturnValue(true);
-    vi.mocked(firecrawlScrape).mockResolvedValue({ markdown: "Home Login", title: "Acme", description: null });
+  // A user can only act on a message about their own site. Surfacing
+  // "Firecrawl is out of credits" to them would name our problem, not theirs.
+  it("surfaces the site's failure, not the vendor's, when both readers fail", async () => {
+    firecrawlEnabled.mockReturnValue(true);
+    firecrawlScrape.mockResolvedValue({ ok: false, error: "Firecrawl is out of credits." });
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 404,
+      headers: new Headers(),
+      text: async () => "",
+    } as unknown as Response);
 
-    const result = await scrapeDomain("acme.com");
-    expect(result).toMatchObject({ ok: true, reader: "fetch" });
+    const res = await scrapeDomain("acme.com");
+    expect(res.error).toBe("Site returned 404.");
   });
 
-  it("reports the plain scraper's failure when both readers come up empty", async () => {
-    vi.mocked(isFirecrawlConfigured).mockReturnValue(true);
-    vi.mocked(firecrawlScrape).mockResolvedValue({ markdown: "", title: null, description: null });
-    fetchMock.mockResolvedValue(new Response("nope", { status: 503 }));
-
-    const result = await scrapeDomain("acme.com");
-    expect(result).toMatchObject({ ok: false, error: "Site returned 503." });
+  it("never calls Firecrawl when it isn't configured", async () => {
+    fetchMock.mockResolvedValue(html(PARAGRAPH));
+    await scrapeDomain("acme.com");
+    expect(firecrawlScrape).not.toHaveBeenCalled();
   });
 });
 
-describe("scrapeDomain — SSRF guard applies to both readers", () => {
-  it("refuses an internal host before it can reach Firecrawl", async () => {
-    vi.mocked(isFirecrawlConfigured).mockReturnValue(true);
-
-    const result = await scrapeDomain("http://app.localhost:3000");
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/can't fetch that host/);
+describe("scrapeDomain: SSRF guards", () => {
+  // Firecrawl fetches from its own network, where our guards don't apply. An
+  // internal address has to be refused before we ask a third party to reach it.
+  it("blocks an internal host before handing the URL to Firecrawl", async () => {
+    firecrawlEnabled.mockReturnValue(true);
+    const res = await scrapeDomain("10.0.0.5");
+    expect(res.error).toBe(BLOCKED);
     expect(firecrawlScrape).not.toHaveBeenCalled();
+  });
+
+  // Two gates refuse these, and which one fires depends only on whether the
+  // host has a dot: normalizeUrl drops dotless non-IP names ("localhost") as
+  // malformed, assertSafe drops the rest as internal. Both are refusals with
+  // no request made, which is the property that matters.
+  it.each([
+    ["localhost", "localhost"],
+    ["a .localhost subdomain", "api.localhost"],
+    ["loopback v4", "127.0.0.1"],
+    ["cloud metadata", "169.254.169.254"],
+    ["private v4", "10.0.0.5"],
+    ["CGNAT", "100.64.0.1"],
+    ["a .internal name", "vault.internal"],
+    ["a .local name", "printer.local"],
+    ["GCP metadata by name", "metadata.google.internal"],
+    ["loopback v6", "[::1]"],
+  ])("never requests %s", async (_label, host) => {
+    const res = await scrapeDomain(host);
+    expect(res.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a private address with the plain reader too", async () => {
-    const result = await scrapeDomain("http://169.254.169.254/latest/meta-data");
-    expect(result.ok).toBe(false);
+  it.each([
+    ["a .localhost subdomain", "api.localhost"],
+    ["loopback v4", "127.0.0.1"],
+    ["cloud metadata", "169.254.169.254"],
+    ["a .internal name", "vault.internal"],
+    ["GCP metadata by name", "metadata.google.internal"],
+  ])("names %s as a blocked host rather than a typo", async (_label, host) => {
+    expect((await scrapeDomain(host)).error).toBe(BLOCKED);
+  });
+
+  // The hostname is public; only DNS says otherwise. Checking the name alone
+  // is what a rebinding attack relies on.
+  it("refuses a public hostname whose DNS points inward", async () => {
+    lookup.mockResolvedValue([{ address: "10.1.2.3", family: 4 }]);
+    const res = await scrapeDomain("evil.example.com");
+    expect(res.error).toBe(BLOCKED);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects something that isn't a domain at all", async () => {
-    const result = await scrapeDomain("not a url");
-    expect(result).toEqual({ ok: false, error: "That doesn't look like a valid domain." });
+  it("refuses when only one of several A records is internal", async () => {
+    lookup.mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ]);
+    expect((await scrapeDomain("evil.example.com")).error).toBe(BLOCKED);
+  });
+
+  // Every hop is re-validated: a public URL that 302s inward is the same
+  // exposure as typing the internal address directly.
+  it("refuses a redirect that lands on an internal host", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 302,
+      headers: new Headers({ location: "http://127.0.0.1/admin" }),
+      text: async () => "",
+    } as unknown as Response);
+
+    const res = await scrapeDomain("acme.com");
+    expect(res.error).toBe(BLOCKED);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up rather than following a redirect loop forever", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 302,
+      headers: new Headers({ location: "https://acme.com/again" }),
+      text: async () => "",
+    } as unknown as Response);
+
+    const res = await scrapeDomain("acme.com");
+    expect(res.ok).toBe(false);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("scrapeDomain: input handling", () => {
+  it("assumes https for a bare domain", async () => {
+    fetchMock.mockResolvedValue(html(PARAGRAPH));
+    await scrapeDomain("acme.com");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://acme.com/");
+  });
+
+  it.each([["", "  "], ["no dot", "acme"], ["wrong scheme", "ftp://acme.com"]])(
+    "rejects %s",
+    async (_label, input) => {
+      const res = await scrapeDomain(input);
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe("That doesn't look like a valid domain.");
+    },
+  );
+});
+
+describe("scrapeDomain: parsing", () => {
+  it("pulls out the identity a site declares about itself", async () => {
+    fetchMock.mockResolvedValue(
+      html(
+        PARAGRAPH,
+        `<title>Acme — Payments</title>
+         <meta name="description" content="Payments for the internet">
+         <meta property="og:site_name" content="Acme">
+         <meta property="og:image" content="/card.png">`,
+      ),
+    );
+
+    const res = await scrapeDomain("acme.com");
+    expect(res.title).toBe("Acme — Payments");
+    expect(res.siteName).toBe("Acme");
+    expect(res.description).toBe("Payments for the internet");
+    // Relative in the markup; a broken image once rendered on our origin.
+    expect(res.imageUrl).toBe("https://acme.com/card.png");
+  });
+
+  it("reads a meta tag whose content attribute comes first", async () => {
+    fetchMock.mockResolvedValue(
+      html(PARAGRAPH, `<meta content="Acme" property="og:site_name">`),
+    );
+    expect((await scrapeDomain("acme.com")).siteName).toBe("Acme");
+  });
+
+  it("falls back to the favicon link when there is no social card", async () => {
+    fetchMock.mockResolvedValue(
+      html(PARAGRAPH, `<link rel="shortcut icon" href="https://cdn.acme.com/f.ico">`),
+    );
+    expect((await scrapeDomain("acme.com")).imageUrl).toBe("https://cdn.acme.com/f.ico");
+  });
+
+  it("strips script and style content out of the text", async () => {
+    fetchMock.mockResolvedValue(
+      html(`<script>var secret = "tracking";</script><style>.a{color:red}</style>${PARAGRAPH}`),
+    );
+    const res = await scrapeDomain("acme.com");
+    expect(res.text).not.toContain("tracking");
+    expect(res.text).not.toContain("color:red");
+    expect(res.text).toContain("payment infrastructure");
+  });
+
+  it("refuses a page that isn't HTML", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/pdf" }),
+      text: async () => "%PDF",
+    } as unknown as Response);
+    expect((await scrapeDomain("acme.com")).error).toBe("That URL isn't an HTML page.");
+  });
+
+  // A near-empty page scans as a successful read and produces invented topics.
+  it("refuses a 200 carrying almost no text", async () => {
+    fetchMock.mockResolvedValue(html("<p>Hi.</p>"));
+    expect((await scrapeDomain("acme.com")).error).toBe(
+      "Couldn't read enough content from the site.",
+    );
+  });
+
+  it("reports an unreachable site rather than throwing", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    expect((await scrapeDomain("acme.com")).error).toBe("Couldn't reach the site.");
   });
 });

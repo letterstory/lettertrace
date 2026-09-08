@@ -425,18 +425,8 @@ describe("the brand behind a URL", () => {
     );
   });
 
-  it("takes the title segment that names the host", () => {
-    expect(brandNameFrom({ title: "Payroll for platform teams | Acme", host: "acme.com" })).toBe("Acme");
-  });
-
-  it("takes the short segment when nothing names the host", () => {
-    expect(brandNameFrom({ title: "Wonderfab — Furniture that lasts a lifetime", host: "wfab.co" })).toBe(
-      "Wonderfab",
-    );
-  });
-
-  it("skips generic title words and falls back to the host label", () => {
-    expect(brandNameFrom({ title: "Home", host: "acme.com" })).toBe("Acme");
+  it("otherwise derives it the way the wizard does: site name, then title, then domain", () => {
+    expect(brandNameFrom({ siteName: "Acme", title: "Payroll | Acme", host: "acme.com" })).toBe("Acme");
     expect(brandNameFrom({ title: null, host: "getacme.io" })).toBe("Getacme");
   });
 });
@@ -457,8 +447,8 @@ describe("onboardFromUrl", () => {
       ok: true,
       url: "https://acme.com/",
       title: "Acme — payroll",
+      siteName: "Acme",
       text: "Acme does payroll for platform teams.",
-      reader: "firecrawl",
     });
     vi.mocked(trial.resolveKey).mockResolvedValue(trialKey("anthropic"));
     vi.mocked(suggestFromSite).mockResolvedValue({
@@ -481,7 +471,7 @@ describe("onboardFromUrl", () => {
       input: { url: "https://www.acme.com/", background: false },
     });
 
-    expect(outcome.site).toMatchObject({ host: "acme.com", reader: "firecrawl", scraped: true });
+    expect(outcome.site).toMatchObject({ host: "acme.com", siteName: "Acme", scraped: true });
     expect(outcome.suggestion).toMatchObject({ topics: 1, competitors: 2, keySource: "trial", tokens: 800 });
     // The suggestion spent the operator's key: tokens + dollars recorded, no run consumed for it.
     expect(m.recordUsage).toHaveBeenCalledWith(800);
@@ -541,7 +531,7 @@ describe("onboardFromUrl", () => {
   });
 
   it("does not start a sweep with nothing to ask", async () => {
-    vi.mocked(scrapeDomain).mockResolvedValue({ ok: true, url: "https://acme.com/", text: "x", reader: "fetch" });
+    vi.mocked(scrapeDomain).mockResolvedValue({ ok: true, url: "https://acme.com/", text: "x" });
     vi.mocked(trial.resolveKey).mockResolvedValue({ ...none("anthropic"), source: "exhausted" });
     const db = happyDb();
 
