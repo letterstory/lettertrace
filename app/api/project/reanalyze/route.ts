@@ -82,6 +82,10 @@ export async function POST(request: Request) {
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
+      // A router credential (the Concentrate-funded free tier) only works
+      // through its gateway; resolveKey says which. Dropping this sent the
+      // router key straight to the provider, which refused it as invalid.
+      route: key.route,
       brandName: project.brand_name,
       siteText,
       description: project.description,
