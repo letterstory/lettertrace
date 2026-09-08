@@ -14,13 +14,28 @@ import {
   updatePrompt,
   triggerRunForProject,
 } from "@/lib/api-service";
-import { pickDefaultProvider, resolveRunKeyFor, engineKeyMessage } from "@/lib/trial";
-import { executeRun } from "@/lib/engine";
+import {
+  pickDefaultProvider,
+  resolveRunKeyFor,
+  engineKeyMessage,
+  consumeTrialRunFor,
+  recordTrialUsageFor,
+  recordTrialSpendFor,
+} from "@/lib/trial";
+import { executeRun, prepareRun, resumeRun } from "@/lib/engine";
 
 vi.mock("@/lib/trial", () => ({
   pickDefaultProvider: vi.fn(),
   resolveRunKeyFor: vi.fn(),
   engineKeyMessage: vi.fn(),
+  consumeTrialRunFor: vi.fn(),
+  recordTrialUsageFor: vi.fn(),
+  recordTrialSpendFor: vi.fn(),
+  trialRunLimit: () => 15,
+  // The real arithmetic: cap minus spent for a trial key, nothing to ration
+  // otherwise. Inlined so the budget a trial run is handed can be asserted.
+  runBudgetMicros: (key: { source: string; capMicros?: number; spentMicros?: number }) =>
+    key.source === "trial" ? Math.max(0, (key.capMicros ?? 0) - (key.spentMicros ?? 0)) : null,
 }));
 // Only the run EXECUTORS are stubbed. The abandoned-run helpers stay real:
 // they are the thing under test in getRunStatus, and mocking them would assert
@@ -164,6 +179,11 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation((k) => `engine message for ${k.requested.provider}`);
   vi.mocked(executeRun).mockReset();
+  vi.mocked(prepareRun).mockReset();
+  vi.mocked(resumeRun).mockReset();
+  vi.mocked(consumeTrialRunFor).mockReset().mockResolvedValue(true);
+  vi.mocked(recordTrialUsageFor).mockReset();
+  vi.mocked(recordTrialSpendFor).mockReset();
 });
 
 /** The values handed to .insert() on the first matching recorded query. */
@@ -395,6 +415,25 @@ describe("getRunReport", () => {
 });
 
 describe("triggerRunForProject", () => {
+  const TRIAL_KEY = {
+    source: "trial" as const,
+    apiKey: "sk-ant-operator-key",
+    provider: "anthropic" as const,
+    model: "claude-haiku-4-5",
+    requested: { provider: "anthropic" as const, model: "claude-sonnet-4-6" },
+    remaining: 15,
+    limit: 15,
+    spentMicros: 1_000_000,
+    capMicros: 5_000_000,
+  };
+  const COMPLETED = {
+    runId: "run-9",
+    status: "completed" as const,
+    totalResponses: 4,
+    tokensUsed: 1234,
+    spendMicros: 250_000,
+  };
+
   it("404s for a project the user doesn't own", async () => {
     const db = fakeDb({ projects: () => ({ data: null }) });
     const outcome = await triggerRunForProject(db as never, "user-2", "proj-1");
@@ -402,8 +441,8 @@ describe("triggerRunForProject", () => {
     expect(executeRun).not.toHaveBeenCalled();
   });
 
-  it.each(["trial", "none", "exhausted", "mismatch"] as const)(
-    "refuses to run on key source %s (BYOK-only)",
+  it.each(["none", "mismatch", "unroutable"] as const)(
+    "refuses to run on key source %s",
     async (source) => {
       const db = fakeDb({ projects: () => ({ data: PROJECT }) });
       vi.mocked(resolveRunKeyFor).mockResolvedValue({
@@ -415,10 +454,30 @@ describe("triggerRunForProject", () => {
       const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
       expect(outcome).toMatchObject({ ok: false, code: "no_key" });
       expect(executeRun).not.toHaveBeenCalled();
+      expect(consumeTrialRunFor).not.toHaveBeenCalled();
     },
   );
 
-  it("executes with the user's own key", async () => {
+  // A spent allowance is its own refusal: the fix (bring a key) is the same as
+  // 'none', but the reason isn't, and a caller onboarding on the trial needs to
+  // tell "never had a key" from "used the fifteen up".
+  it("reports a spent trial as trial_exhausted", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
+      source: "exhausted",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      requested: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      remaining: 0,
+      limit: 15,
+      exhaustedBy: "runs",
+    });
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
+    expect(outcome).toMatchObject({ ok: false, code: "trial_exhausted" });
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+
+  it("executes with the user's own key, consuming nothing", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
     vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "own",
@@ -427,23 +486,128 @@ describe("triggerRunForProject", () => {
       model: "claude-sonnet-4-6",
       requested: { provider: "anthropic", model: "claude-sonnet-4-6" },
     });
-    vi.mocked(executeRun).mockResolvedValue({
-      runId: "run-9",
-      status: "completed",
-      totalResponses: 4,
-      tokensUsed: 1234,
-      spendMicros: 0,
-    });
+    vi.mocked(executeRun).mockResolvedValue({ ...COMPLETED, spendMicros: 0 });
 
     const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
-    expect(outcome).toMatchObject({ ok: true, result: { runId: "run-9" } });
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { runId: "run-9", keySource: "own", provider: "anthropic", route: null },
+    });
     expect(executeRun).toHaveBeenCalledWith(
       expect.objectContaining({
         project: PROJECT,
         provider: "anthropic",
         apiKey: "sk-ant-user-key",
+        // Nothing to ration on the user's own money.
+        budgetMicros: null,
       }),
     );
+    expect(consumeTrialRunFor).not.toHaveBeenCalled();
+    expect(recordTrialUsageFor).not.toHaveBeenCalled();
+    expect(recordTrialSpendFor).not.toHaveBeenCalled();
+  });
+
+  // The change this file used to assert the opposite of: an API-triggered run
+  // is funded exactly as a dashboard run — one free run taken atomically before
+  // the engine is asked, the operator's spend recorded after.
+  it("funds a run from the owner's trial: consume before, meter after", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue(TRIAL_KEY);
+    const order: string[] = [];
+    vi.mocked(consumeTrialRunFor).mockImplementation(async () => {
+      order.push("consume");
+      return true;
+    });
+    vi.mocked(executeRun).mockImplementation(async () => {
+      order.push("run");
+      return COMPLETED;
+    });
+    vi.mocked(recordTrialSpendFor).mockImplementation(async () => {
+      order.push("spend");
+    });
+
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: {
+        runId: "run-9",
+        keySource: "trial",
+        // The trial's cheaper model is what actually ran, and the caller is told.
+        model: "claude-haiku-4-5",
+        trial: { remaining: 14, limit: 15 },
+      },
+    });
+    expect(order).toEqual(["consume", "run", "spend"]);
+    // Billed to the OWNER (project.user_id), by id, on the service client.
+    expect(consumeTrialRunFor).toHaveBeenCalledWith(db, "user-1");
+    expect(recordTrialUsageFor).toHaveBeenCalledWith(db, "user-1", 1234);
+    expect(recordTrialSpendFor).toHaveBeenCalledWith(db, "user-1", 250_000);
+    // Rationed: what's left under the spend ceiling.
+    expect(executeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-ant-operator-key", budgetMicros: 4_000_000 }),
+    );
+  });
+
+  it("refuses when the atomic gate finds the allowance already spent", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue(TRIAL_KEY);
+    vi.mocked(consumeTrialRunFor).mockResolvedValue(false);
+
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1");
+    expect(outcome).toMatchObject({ ok: false, code: "trial_exhausted" });
+    expect(executeRun).not.toHaveBeenCalled();
+    expect(recordTrialSpendFor).not.toHaveBeenCalled();
+  });
+
+  // Teams: a member may trigger, but the owner's credential pays. The resolver
+  // is asked about the OWNER, not the caller.
+  it("resolves the key for the project's owner, whoever triggered it", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      project_members: () => ({ data: { user_id: "user-2" } }),
+    });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue(TRIAL_KEY);
+    vi.mocked(executeRun).mockResolvedValue(COMPLETED);
+
+    await triggerRunForProject(db as never, "user-2", "proj-1");
+    expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "anthropic", "claude-sonnet-4-6", {
+      webSearch: PROJECT.use_web_search,
+    });
+    expect(consumeTrialRunFor).toHaveBeenCalledWith(db, "user-1");
+  });
+
+  // A background trial run is metered when it finishes, inside the chain that
+  // outlives the response — not at acceptance, when the cost isn't known.
+  it("meters a background trial run after it settles", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue(TRIAL_KEY);
+    vi.mocked(prepareRun).mockResolvedValue({
+      runId: "run-bg",
+      jobs: [{}, {}, {}] as never,
+      competitors: [],
+      attribution: {} as never,
+      startedMs: 0,
+    });
+    let finish!: (r: typeof COMPLETED) => void;
+    vi.mocked(resumeRun).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
+      background: true,
+    });
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { runId: "run-bg", status: "running", promptCount: 3, keySource: "trial" },
+    });
+    expect(consumeTrialRunFor).toHaveBeenCalledTimes(1);
+    expect(recordTrialSpendFor).not.toHaveBeenCalled();
+
+    finish({ ...COMPLETED, runId: "run-bg" });
+    await vi.waitFor(() => expect(recordTrialSpendFor).toHaveBeenCalledWith(db, "user-1", 250_000));
+    expect(recordTrialUsageFor).toHaveBeenCalledWith(db, "user-1", 1234);
   });
 
   it("resolves a caller-sent provider/model instead of the project default", async () => {
@@ -455,13 +619,7 @@ describe("triggerRunForProject", () => {
       model: "gpt-4o-mini",
       requested: { provider: "openai", model: "gpt-4o-mini" },
     });
-    vi.mocked(executeRun).mockResolvedValue({
-      runId: "run-10",
-      status: "completed",
-      totalResponses: 4,
-      tokensUsed: 1234,
-      spendMicros: 0,
-    });
+    vi.mocked(executeRun).mockResolvedValue({ ...COMPLETED, runId: "run-10", spendMicros: 0 });
 
     const outcome = await triggerRunForProject(db as never, "user-1", "proj-1", {
       provider: "openai",
@@ -495,13 +653,7 @@ describe("triggerRunForProject", () => {
       model: "gpt-4o",
       requested: { provider: "openai", model: "gpt-4o" },
     });
-    vi.mocked(executeRun).mockResolvedValue({
-      runId: "run-11",
-      status: "completed",
-      totalResponses: 1,
-      tokensUsed: 10,
-      spendMicros: 0,
-    });
+    vi.mocked(executeRun).mockResolvedValue({ ...COMPLETED, runId: "run-11", spendMicros: 0 });
 
     await triggerRunForProject(db as never, "user-1", "proj-1", { provider: "openai" });
     expect(resolveRunKeyFor).toHaveBeenCalledWith(db, "user-1", "openai", "gpt-4o", {
@@ -522,7 +674,9 @@ describe("triggerRunForProject", () => {
     expect(executeRun).not.toHaveBeenCalled();
   });
 
-  it("names the requested provider when an override has no own key", async () => {
+  // The refusal is the resolver's own wording (engineKeyMessage), which names
+  // the engine that has no key — the same sentence the dashboard shows.
+  it("explains a missing key with the resolver's message", async () => {
     const db = fakeDb({ projects: () => ({ data: PROJECT }) });
     vi.mocked(resolveRunKeyFor).mockResolvedValue({
       source: "none",
@@ -534,7 +688,7 @@ describe("triggerRunForProject", () => {
       provider: "openai",
     });
     expect(outcome).toMatchObject({ ok: false, code: "no_key" });
-    expect((outcome as { message: string }).message).toContain("OpenAI");
+    expect((outcome as { message: string }).message).toBe("engine message for openai");
     expect(executeRun).not.toHaveBeenCalled();
   });
 

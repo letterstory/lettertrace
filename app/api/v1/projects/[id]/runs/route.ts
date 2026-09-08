@@ -34,7 +34,9 @@ export async function GET(
   return NextResponse.json({ runs });
 }
 
-// POST /api/v1/projects/:id/runs — execute a monitoring run now (BYOK-only).
+// POST /api/v1/projects/:id/runs — execute a monitoring run now, funded the
+// way a dashboard run is: the owner's own key for the engine, else one free
+// run off the owner's trial allowance (402 once it is spent).
 // Optional body { provider?, model?, background? } — provider/model override
 // the project default for this run; background: true returns 202 as soon as
 // the run row exists (a run takes minutes; poll GET /v1/runs/:id/status).
@@ -84,7 +86,8 @@ export async function POST(
       { ...options, context: apiActor(auth, "v1") },
     );
     if (!outcome.ok) {
-      // not_found -> 404, a bad engine override -> 400, no key -> 402 (billing).
+      // not_found -> 404, a bad engine override -> 400, no key or a spent
+      // trial -> 402 (billing).
       const status =
         outcome.code === "not_found" ? 404 : outcome.code === "invalid_engine" ? 400 : 402;
       await logApiRequest(auth, request, "v1", {
