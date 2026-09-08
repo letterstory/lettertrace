@@ -37,7 +37,7 @@ const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 // Body: { url, brand_name?, name?, description?, brand_aliases?,
 //         brand_domains?, topics?: [{name, prompts[]}], competitors?,
 //         schedule? ("off" default), run? (true), background? (true),
-//         email?, key?: boolean | { name } }
+//         email?, key?: boolean | { name }, seat?: boolean }
 //
 // `email` is the transfer: it onboards the URL into THAT account — adopted
 // when it exists, created when it doesn't — funds the sweep from that
@@ -45,6 +45,13 @@ const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 // `api_key.key`). Operators only: the caller's account must be on the admin
 // allowlist (ADMIN_USER_IDS / ADMIN_EMAILS). Without `email` the URL is
 // onboarded into the caller's own account.
+//
+// A transfer also seats the CALLER on the new organization as a team member
+// (`seat: false` declines). That seat is how a system onboarding on the
+// client's behalf keeps driving the project with its own key — prompts,
+// competitors, runs, reports — while every run it triggers is billed to the
+// owner: their trial, then their key. Members can't delete the project,
+// manage its team, or touch the owner's keys.
 //
 // 202 when runs were started in the background, 201 otherwise.
 export async function POST(request: Request) {
@@ -153,6 +160,19 @@ export async function POST(request: Request) {
       },
     });
 
+    // The operator's seat on the transferred organization, unless declined.
+    let seated = false;
+    if (account && ownerId !== auth.userId && body.seat !== false) {
+      const { error: seatErr } = await auth.supabase
+        .from("project_members")
+        .upsert(
+          { project_id: outcome.project.id, user_id: auth.userId, invited_by: auth.userId },
+          { onConflict: "project_id,user_id", ignoreDuplicates: true },
+        );
+      if (seatErr) console.error("[onboard] operator seat failed:", seatErr.message);
+      else seated = true;
+    }
+
     // The key the new owner drives the organization with. Default on when
     // transferring; `key: false` skips it, `key: { name }` names it.
     let apiKey: { id: string; name: string; hint: string; key: string } | null = null;
@@ -216,7 +236,10 @@ export async function POST(request: Request) {
       {
         project: projectSummary(outcome.project),
         ...(account
-          ? { account: { user_id: account.userId, email: account.email, created: account.created } }
+          ? {
+              account: { user_id: account.userId, email: account.email, created: account.created },
+              seated,
+            }
           : {}),
         ...(apiKey ? { api_key: apiKey } : {}),
         ...(apiKeyError ? { api_key_error: apiKeyError } : {}),

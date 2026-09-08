@@ -6,6 +6,15 @@ import { FULL_SCOPES } from "@/lib/api-auth";
 // route decides: who may transfer, what is passed through, and what comes back.
 
 const fakeSupabase = { from: vi.fn() };
+const seatUpsert = vi.fn(async () => ({ error: null }));
+/** Default tables: the caller's profile row (for the email gate) and the seat upsert. */
+function stubTables(profileEmail: string | null = null) {
+  fakeSupabase.from.mockImplementation((table: string) =>
+    table === "project_members"
+      ? { upsert: seatUpsert }
+      : { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: profileEmail ? { email: profileEmail } : null }) }) }) },
+  );
+}
 const ctx = {
   supabase: fakeSupabase,
   userId: "caller-1",
@@ -100,6 +109,8 @@ beforeEach(() => {
   vi.mocked(activity.logActivity).mockReset();
   vi.mocked(activity.logApiRequest).mockReset();
   fakeSupabase.from.mockReset();
+  seatUpsert.mockClear();
+  stubTables();
   ctx.scopes = [...FULL_SCOPES];
 });
 
@@ -233,6 +244,13 @@ describe("POST /api/v1/onboard — the transfer (email)", () => {
     expect(res.status).toBe(202);
     const body = await res.json();
     expect(body.account).toEqual({ user_id: "client-7", email: "jo@acme.com", created: true });
+    // The operator keeps a seat: a member of the client's organization, so its
+    // own key can keep driving the project while the owner is billed.
+    expect(body.seated).toBe(true);
+    expect(seatUpsert).toHaveBeenCalledWith(
+      { project_id: "proj-1", user_id: "caller-1", invited_by: "caller-1" },
+      { onConflict: "project_id,user_id", ignoreDuplicates: true },
+    );
     expect(body.api_key).toEqual({ id: "k1", name: "Onboarding (acme.com)", hint: "lt_live_…abcd", key: "lt_live_secret" });
 
     // The CLIENT owns the organization and pays with the client's trial.
@@ -258,9 +276,7 @@ describe("POST /api/v1/onboard — the transfer (email)", () => {
   it("gates by email when ids are not configured", async () => {
     vi.mocked(admin.adminGate).mockReturnValue("email");
     vi.mocked(admin.isAdminEmail).mockImplementation((e) => e === "ops@letterstory.com");
-    fakeSupabase.from.mockReturnValue({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { email: "ops@letterstory.com" } }) }) }),
-    });
+    stubTables("ops@letterstory.com");
     vi.mocked(onboard.resolveOnboardingAccount).mockResolvedValue({ userId: "client-7", email: "jo@acme.com", created: false });
     vi.mocked(onboard.mintApiKey).mockResolvedValue({ ok: false, error: "This account already has 10 API keys. Remove one first." });
 
@@ -270,6 +286,16 @@ describe("POST /api/v1/onboard — the transfer (email)", () => {
     expect(body.account.created).toBe(false);
     expect(body.api_key).toBeUndefined();
     expect(body.api_key_error).toMatch(/10 API keys/);
+  });
+
+  it("declines the seat on seat: false", async () => {
+    vi.mocked(admin.adminGate).mockReturnValue("user-id");
+    vi.mocked(admin.isAdminUserId).mockReturnValue(true);
+    vi.mocked(onboard.resolveOnboardingAccount).mockResolvedValue({ userId: "client-7", email: "jo@acme.com", created: false });
+    vi.mocked(onboard.mintApiKey).mockResolvedValue({ ok: true, id: "k1", name: "n", hint: "h", key: "k" });
+    const res = await POST(req({ url: "acme.com", email: "jo@acme.com", seat: false }));
+    expect((await res.json()).seated).toBe(false);
+    expect(seatUpsert).not.toHaveBeenCalled();
   });
 
   it("names the key when asked, and skips it on key: false", async () => {

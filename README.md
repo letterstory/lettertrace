@@ -496,7 +496,7 @@ curl -X POST https://your-app.com/api/v1/onboard \
   -d '{"url": "acme.io", "run": false}'
 ```
 
-Operators (accounts on `ADMIN_USER_IDS` / `ADMIN_EMAILS`) can onboard a URL **into another account** by sending `email`. The account is adopted when it exists and created when it doesn't; the organization is created under it, the sweep spends *that* account's free runs, and a Lettertrace API key is minted for it and returned once in `api_key.key`. That key is how the new owner (or a system onboarding on their behalf) adds their own provider key with `PUT /api/v1/keys/<provider>` and keeps monitoring after the trial.
+Operators (accounts on `ADMIN_USER_IDS` / `ADMIN_EMAILS`) can onboard a URL **into another account** by sending `email`. The account is adopted when it exists and created when it doesn't; the organization is created under it, the sweep spends *that* account's free runs, and a Lettertrace API key is minted for it and returned once in `api_key.key`. That key is how the new owner adds their own provider key with `PUT /api/v1/keys/<provider>` and keeps monitoring after the trial. The operator is also seated on the organization as a team member (`seat: false` declines), so a system onboarding on the client's behalf keeps driving the project with its own key while every run it triggers is billed to the owner: their trial, then their key.
 
 ```bash
 curl -X POST https://your-app.com/api/v1/onboard \
