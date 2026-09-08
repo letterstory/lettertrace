@@ -30,7 +30,8 @@ vi.mock("@/lib/trial", () => ({
   recordTrialSpend: vi.fn(),
 }));
 vi.mock("@/lib/pricing", () => ({ spendMicros: () => 0 }));
-vi.mock("@/lib/activity", () => ({ logDashboard: vi.fn() }));
+const logDashboard = vi.fn();
+vi.mock("@/lib/activity", () => ({ logDashboard: (...a: unknown[]) => logDashboard(...a) }));
 
 const { POST } = await import("@/app/api/onboarding/suggest/route");
 
@@ -235,5 +236,95 @@ describe("POST /api/onboarding/suggest — a model that outruns the route", () =
 
     expect(body.reason).toBeUndefined();
     expect(body.topics).toHaveLength(1);
+  });
+});
+
+// The free tier in production is funded through a Concentrate ROUTER key.
+// resolveKey returns that key together with `route` (which gateway to call);
+// this route used to drop the route and send the router key straight to
+// Anthropic, which refused it as an invalid key — every trial user's
+// onboarding then arrived with the identity filled in and no topics, and the
+// feed showed nothing at all, since only successes were logged.
+describe("POST /api/onboarding/suggest — router-funded trial", () => {
+  const ROUTED_TRIAL_KEY = {
+    source: "trial",
+    apiKey: "sk-cn-operator",
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    route: { router: "concentrate", baseUrl: null },
+  };
+
+  it("hands the resolved route to the model call, not just the key", async () => {
+    resolveKey.mockResolvedValue(ROUTED_TRIAL_KEY);
+    const res = await POST(req({ domain: "acme.com" }));
+    expect((await res.json()).topics).toHaveLength(1);
+    expect(suggestFromSite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "sk-cn-operator",
+        model: "claude-haiku-4-5",
+        route: { router: "concentrate", baseUrl: null },
+      }),
+    );
+  });
+
+  it("still passes no route for a direct key", async () => {
+    await POST(req({ domain: "acme.com" }));
+    const call = suggestFromSite.mock.calls[0][0] as { route?: unknown };
+    expect(call.route).toBeUndefined();
+  });
+});
+
+describe("POST /api/onboarding/suggest — failures leave a trace", () => {
+  it("logs a model failure with the error text, and still answers 200 with the identity", async () => {
+    suggestFromSite.mockRejectedValue(new Error("Invalid API key."));
+    const res = await POST(req({ domain: "acme.com" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ reason: "ai_failed", brandName: "Acme", topics: [] });
+    expect(logDashboard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "user-1" }),
+      expect.anything(),
+      expect.objectContaining({
+        action: "onboarding.suggest_failed",
+        status: "failure",
+        metadata: expect.objectContaining({ reason: "ai_failed", error: "Error: Invalid API key.", domain: "acme.com" }),
+      }),
+    );
+  });
+
+  it("logs a spent trial and a missing key by their reason", async () => {
+    resolveKey.mockResolvedValue({ source: "exhausted", provider: "anthropic", model: "m" });
+    await POST(req({ domain: "acme.com" }));
+    expect(logDashboard).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ metadata: expect.objectContaining({ reason: "trial_exhausted" }) }),
+    );
+    resolveKey.mockResolvedValue({ source: "none", provider: "anthropic", model: "m" });
+    await POST(req({ domain: "acme.com" }));
+    expect(logDashboard).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ metadata: expect.objectContaining({ reason: "no_key" }) }),
+    );
+  });
+
+  it("logs an unreadable site with the scraper's own error", async () => {
+    scrapeDomain.mockResolvedValue({ ok: false, error: "Site returned 503." });
+    await POST(req({ domain: "acme.com" }));
+    expect(logDashboard).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ metadata: expect.objectContaining({ reason: "scrape_failed", error: "Site returned 503." }) }),
+    );
+  });
+
+  it("never lets a logging failure change the response", async () => {
+    suggestFromSite.mockRejectedValue(new Error("boom"));
+    logDashboard.mockRejectedValue(new Error("activity table down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await POST(req({ domain: "acme.com" }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).reason).toBe("ai_failed");
+    err.mockRestore();
   });
 });

@@ -46,6 +46,32 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | null> 
   }
 }
 
+/**
+ * Record why a suggestion did NOT happen. Every failure below answers 200 with
+ * a `reason` so the wizard can keep the identity it already has, which also
+ * meant none of them left a trace: a broken free tier looked, from the feed,
+ * exactly like nobody onboarding. Best-effort, never blocks the response.
+ */
+async function logSuggestFailure(
+  user: { id: string; email?: string | null },
+  request: Request,
+  domain: string,
+  reason: string,
+  detail?: string | null,
+): Promise<void> {
+  try {
+    await logDashboard(user, request, {
+      category: "onboarding",
+      action: "onboarding.suggest_failed",
+      status: "failure",
+      summary: `Could not suggest topics for ${domain}: ${reason}${detail ? ` (${detail})` : ""}`,
+      metadata: { domain, reason, ...(detail ? { error: detail } : {}) },
+    });
+  } catch (err) {
+    console.error("[onboarding] suggest failure log failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
 // POST /api/onboarding/suggest { domain }
 // Reads the site and returns everything screen 2 needs: who the brand is (name,
 // description, icon) and what to monitor (topics with questions, competitors).
@@ -82,6 +108,7 @@ export async function POST(request: Request) {
   // filled in. Reporting "no key" for a site we could not read would also point
   // them at Settings when the thing they can actually fix is the URL.
   if (!scrape.ok || !scrape.text) {
+    await logSuggestFailure(user, request, domain, "scrape_failed", scrape.error);
     return NextResponse.json({
       scraped: false,
       brandName: "",
@@ -105,6 +132,12 @@ export async function POST(request: Request) {
 
   const key = await resolveKey(supabase, user.id, pickDefaultProvider());
   if (!key.apiKey) {
+    await logSuggestFailure(
+      user,
+      request,
+      domain,
+      key.source === "exhausted" ? "trial_exhausted" : "no_key",
+    );
     return NextResponse.json({
       ...identity,
       scraped: false,
@@ -120,12 +153,17 @@ export async function POST(request: Request) {
         provider: key.provider,
         model: key.model,
         apiKey: key.apiKey,
+        // The credential may be a router key (the Concentrate-funded free tier
+        // is one), and a router key sent straight to the provider is just an
+        // invalid key. resolveKey says where the call has to go; pass it on.
+        route: key.route,
         brandName,
         siteText: scrape.text,
       }),
       SUGGEST_DEADLINE_MS,
     );
     if (!suggestion) {
+      await logSuggestFailure(user, request, domain, "ai_timeout", `${SUGGEST_DEADLINE_MS}ms`);
       return NextResponse.json({
         ...identity,
         scraped: false,
@@ -167,6 +205,7 @@ export async function POST(request: Request) {
       competitors: suggestion.competitors,
     });
   } catch (e) {
+    await logSuggestFailure(user, request, domain, "ai_failed", humanError(e));
     return NextResponse.json({
       ...identity,
       scraped: false,

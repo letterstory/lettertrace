@@ -76,6 +76,10 @@ export async function POST(
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
+      // A router credential (the Concentrate-funded free tier) only works
+      // through its gateway; resolveKey says which. Dropping this sent the
+      // router key straight to the provider, which refused it as invalid.
+      route: key.route,
       topicName: topic.name,
       topicDescription: topic.description,
       // The Settings blurb has promised this field "helps generate better
