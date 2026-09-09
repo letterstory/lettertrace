@@ -48,7 +48,7 @@ export default async function AdminRunPage({ params }: { params: { id: string } 
   const { data: run } = await svc
     .from("runs")
     .select(
-      "id, project_id, status, provider, model, prompt_count, completed_count, replicates, route, error, created_at, finished_at",
+      "id, project_id, status, provider, model, prompt_count, completed_count, replicates, route, key_source, error, created_at, finished_at",
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -144,7 +144,7 @@ export default async function AdminRunPage({ params }: { params: { id: string } 
         <StatCard
           label="Engine"
           value={<span className="font-mono text-xl">{run.provider}</span>}
-          hint={`${run.model}${run.route ? ` · via ${run.route}` : ""}`}
+          hint={`${run.model}${run.route ? ` · via ${run.route}` : ""}${run.key_source === "own" ? " · their key" : run.key_source === "trial" ? " · our key" : ""}`}
           accent="teal"
         />
         <StatCard

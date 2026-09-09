@@ -141,6 +141,7 @@ export async function POST(request: Request) {
       model: key.model,
       apiKey: key.apiKey!,
       route: key.route,
+      keySource: key.source,
       budgetMicros: runBudgetMicros(key),
       context: {
         channel: "dashboard",

@@ -65,16 +65,24 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
     const n = r.occurrences ?? 0;
     if (!latest || r.last_seen_at > latest) latest = r.last_seen_at;
 
+    // A run that failed on the CUSTOMER'S own key is their provider account,
+    // not our outage: it is kept as a warning (visible, searchable) and left
+    // out of the failure count and the error headline. Events from before
+    // key_source was sampled carry no marker and stay errors, as they were.
+    const theirKey = asRecord(r.sample).key_source === "own";
+    const level: "info" | "warn" | "error" =
+      r.kind === "run.failed" && theirKey ? "warn" : r.level;
+
     if (r.kind === "run.completed") completed += n;
-    else if (r.kind === "run.failed") failed += n;
+    else if (r.kind === "run.failed" && !theirKey) failed += n;
     else if (r.kind === "run.abandoned") abandoned += n;
 
     // Warnings are included, not just errors. A warn is something the code
     // deliberately chose to report; dropping it here would mean it could never
     // be seen anywhere, which makes recording it pointless. Only `errors`
     // counts strictly errors, since that is what the headline figure means.
-    if (r.level === "error" || r.level === "warn") {
-      if (r.level === "error") errors += n;
+    if (level === "error" || level === "warn") {
+      if (level === "error") errors += n;
       const existing = problems.get(r.signature);
       const sample = asRecord(r.sample);
       const source = String(sample.source ?? r.kind);
@@ -85,7 +93,7 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
         problems.set(r.signature, {
           signature: r.signature,
           kind: r.kind,
-          level: r.level === "error" ? "error" : "warn",
+          level: level === "error" ? "error" : "warn",
           occurrences: n,
           lastSeen: r.last_seen_at,
           source,
@@ -94,7 +102,7 @@ export function shapeOps(rows: OpsRow[], hours: number, enabled: boolean): OpsRe
       }
     }
 
-    if (r.kind === "run.completed" || r.kind === "run.failed") {
+    if ((r.kind === "run.completed" || r.kind === "run.failed") && !theirKey) {
       const sample = asRecord(r.sample);
       const engine = `${sample.provider ?? "?"}/${sample.model ?? "?"}`;
       const e = engines.get(engine) ?? { completed: 0, failed: 0 };

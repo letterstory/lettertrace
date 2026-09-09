@@ -122,6 +122,7 @@ async function sweepAndRun(span: Span) {
         model: key.model,
         apiKey: key.apiKey!,
         route: key.route,
+        keySource: key.source === "trial" ? "trial" : "own",
         budgetMicros: runBudgetMicros(key),
         context: {
           channel: "cron",

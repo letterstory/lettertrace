@@ -205,6 +205,14 @@ export interface ExecuteRunParams {
   /** Attribution for the activity log. Defaults to the internal system. */
   context?: RunContext;
   /**
+   * Whose credential `apiKey` is: the operator's shared trial key or the
+   * account's own. Recorded on the run so the operations page can tell a
+   * customer's provider account running dry (their billing) from our own key
+   * failing (our outage). Optional only so a caller that doesn't know can say
+   * so honestly with null rather than guess.
+   */
+  keySource?: "own" | "trial" | null;
+  /**
    * How much operator money this run may spend, in micro-dollars. Omit (or
    * null) for a run on the user's own key, where there is nothing for us to
    * ration.
@@ -295,6 +303,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
       // Null for a direct provider key. Never a substitute for `provider`: the
       // engine that answered is what the run measured.
       route: route?.router ?? null,
+      key_source: params.keySource ?? null,
       // Planned ANSWERS, not prompts — this is what the UI counts against.
       prompt_count: jobs.length,
       completed_count: 0,
@@ -637,6 +646,9 @@ async function resumeRunMeasured(
       provider,
       model,
       route: route?.router ?? "direct",
+      // "own" = the customer's credential failed, which is theirs to fix;
+      // "trial" = ours. The report demotes own-key failures to warnings.
+      key_source: params.keySource ?? "unknown",
       planned: jobs.length,
       stored: succeeded,
       failed: jobs.length - succeeded,
