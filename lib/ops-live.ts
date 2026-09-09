@@ -38,13 +38,32 @@ export interface FailureGroup {
   engines: string[];
 }
 
+/** Whose credential a run ran on. "ours" covers the shared trial key AND rows
+ *  from before key_source was recorded: an unattributed failure must keep
+ *  counting against us rather than quietly vanish from the figures. */
+export type KeyOwner = "ours" | "theirs";
+
+export function keyOwnerOf(keySource: string | null | undefined): KeyOwner {
+  return keySource === "own" ? "theirs" : "ours";
+}
+
 export interface LiveHealth {
+  /** Runs on OUR key (the shared trial key, plus unattributed rows). This is
+   *  what the health figures are computed from. */
   runs24h: { completed: number; failed: number; running: number; pending: number; total: number };
+  /** Runs on the CUSTOMER'S own key. A failure here is their provider
+   *  account — out of credit, over quota, key revoked — and is theirs to fix,
+   *  so it is reported but never counted against the deployment. */
+  theirs24h: { completed: number; failed: number };
   successRate: number | null;
   /** Runs that say "running" but have not moved in a long time — the failure
    *  mode where an invocation dies without ever writing a status. */
   stuck: StuckRun[];
+  /** Failures on our key: the ones that mean something is wrong with us. */
   failures: FailureGroup[];
+  /** Failures on customers' own keys: worth seeing, not worth an alarm. */
+  theirFailures: FailureGroup[];
+  /** Per engine, on our key only — "is this provider failing for us". */
   engines: { engine: string; completed: number; failed: number; rate: number | null }[];
   signups24h: number;
   totalUsers: number;
@@ -68,6 +87,7 @@ interface RunRow {
   completed_count: number;
   started_at: string | null;
   created_at: string;
+  key_source?: string | null;
 }
 
 export function shapeLive(
@@ -78,36 +98,52 @@ export function shapeLive(
   apiErrors24h: number,
   degraded: string | null = null,
 ): LiveHealth {
-  const counts = { completed: 0, failed: 0, running: 0, pending: 0, total: runs.length };
+  const counts = { completed: 0, failed: 0, running: 0, pending: 0, total: 0 };
+  const theirs = { completed: 0, failed: 0 };
   const failures = new Map<string, FailureGroup>();
+  const theirFailures = new Map<string, FailureGroup>();
   const engines = new Map<string, { completed: number; failed: number }>();
   const stuck: StuckRun[] = [];
   let lastRunAt: string | null = null;
 
   for (const r of runs) {
     if (!lastRunAt || r.created_at > lastRunAt) lastRunAt = r.created_at;
-    if (r.status === "completed") counts.completed += 1;
-    else if (r.status === "failed") counts.failed += 1;
-    else if (r.status === "running") counts.running += 1;
-    else counts.pending += 1;
+    const owner = keyOwnerOf(r.key_source);
+
+    // A customer's own key: counted on its own line, never in ours. Their
+    // provider account running dry was, before this split, three "run
+    // failures" and a dented success rate on a deployment that was fine.
+    if (owner === "theirs") {
+      if (r.status === "completed") theirs.completed += 1;
+      else if (r.status === "failed") theirs.failed += 1;
+    } else {
+      counts.total += 1;
+      if (r.status === "completed") counts.completed += 1;
+      else if (r.status === "failed") counts.failed += 1;
+      else if (r.status === "running") counts.running += 1;
+      else counts.pending += 1;
+    }
 
     const engine = `${r.provider}/${r.model}`;
-    const e = engines.get(engine) ?? { completed: 0, failed: 0 };
-    if (r.status === "completed") e.completed += 1;
-    if (r.status === "failed") e.failed += 1;
-    engines.set(engine, e);
+    if (owner === "ours") {
+      const e = engines.get(engine) ?? { completed: 0, failed: 0 };
+      if (r.status === "completed") e.completed += 1;
+      if (r.status === "failed") e.failed += 1;
+      engines.set(engine, e);
+    }
 
     if (r.status === "failed" && r.error) {
       // Group by the SHAPE of the message, so one provider outage is one line
       // with a count rather than fifty near-identical rows.
       const sig = signatureOf(r.error);
-      const g = failures.get(sig);
+      const bucket = owner === "theirs" ? theirFailures : failures;
+      const g = bucket.get(sig);
       if (g) {
         g.count += 1;
         if (r.created_at > g.lastSeen) g.lastSeen = r.created_at;
         if (!g.engines.includes(engine)) g.engines.push(engine);
       } else {
-        failures.set(sig, {
+        bucket.set(sig, {
           signature: sig,
           count: 1,
           lastSeen: r.created_at,
@@ -117,6 +153,7 @@ export function shapeLive(
       }
     }
 
+    // A stuck run is stuck whoever paid: an invocation that died is ours.
     if (r.status === "running" || r.status === "pending") {
       const started = r.started_at ?? r.created_at;
       const minutes = Math.floor((now - new Date(started).getTime()) / 60000);
@@ -135,15 +172,17 @@ export function shapeLive(
   }
 
   const settled = counts.completed + counts.failed;
+  const byCount = (a: FailureGroup, b: FailureGroup) =>
+    b.count - a.count || b.lastSeen.localeCompare(a.lastSeen);
   return {
     runs24h: counts,
+    theirs24h: theirs,
     // Null, not 100, when nothing settled — see ops-report for why that
     // distinction is the whole point of this number.
     successRate: settled > 0 ? Math.round((counts.completed / settled) * 100) : null,
     stuck: stuck.sort((a, b) => b.minutes - a.minutes),
-    failures: [...failures.values()].sort(
-      (a, b) => b.count - a.count || b.lastSeen.localeCompare(a.lastSeen),
-    ),
+    failures: [...failures.values()].sort(byCount),
+    theirFailures: [...theirFailures.values()].sort(byCount),
     engines: [...engines.entries()]
       // Only engines that have actually settled something. A row of zeroes says
       // nothing about health and pushes the real rows down.
@@ -176,7 +215,9 @@ export async function liveHealth(hours = 24): Promise<LiveHealth> {
     const [runsRes, signupRes, usersRes, apiErrRes] = await Promise.all([
       admin
         .from("runs")
-        .select("id, status, provider, model, error, prompt_count, completed_count, started_at, created_at")
+        .select(
+          "id, status, provider, model, error, prompt_count, completed_count, started_at, created_at, key_source",
+        )
         .gte("created_at", sinceIso)
         .order("created_at", { ascending: false })
         .limit(2000),

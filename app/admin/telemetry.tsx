@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, CheckCircle2, Clock, Search, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock, KeyRound, Search, XCircle } from "lucide-react";
 import { Badge, Card } from "@/components/ui";
 import type { StuckRun, FailureGroup } from "@/lib/ops-live";
 import type { Problem } from "@/lib/ops-report";
@@ -40,11 +40,14 @@ const matches = (needle: string, ...fields: (string | number | null | undefined)
 export function Telemetry({
   stuck,
   failures,
+  theirFailures = [],
   problems,
   telemetryOn,
 }: {
   stuck: StuckRun[];
   failures: FailureGroup[];
+  /** Failures on customers' own keys: listed, never alarmed. */
+  theirFailures?: FailureGroup[];
   problems: Problem[];
   telemetryOn: boolean;
 }) {
@@ -65,6 +68,13 @@ export function Telemetry({
         : failures.filter((f) => matches(needle, f.example, f.signature, f.engines.join(" "))),
     [failures, needle, filtering],
   );
+  const shownTheirs = useMemo(
+    () =>
+      !filtering
+        ? theirFailures
+        : theirFailures.filter((f) => matches(needle, f.example, f.signature, f.engines.join(" "))),
+    [theirFailures, needle, filtering],
+  );
   const shownProblems = useMemo(() => {
     const byLevel = level === "all" ? problems : problems.filter((p) => p.level === level);
     return !filtering
@@ -72,7 +82,8 @@ export function Telemetry({
       : byLevel.filter((p) => matches(needle, p.signature, p.source, JSON.stringify(p.sample)));
   }, [problems, needle, filtering, level]);
 
-  const totalShown = shownStuck.length + shownFailures.length + shownProblems.length;
+  const totalShown =
+    shownStuck.length + shownFailures.length + shownTheirs.length + shownProblems.length;
   const errorCount = problems.filter((p) => p.level === "error").length;
   const warnCount = problems.filter((p) => p.level === "warn").length;
 
@@ -158,15 +169,18 @@ export function Telemetry({
         </Section>
       )}
 
-      {/* ---- Run failures --------------------------------------------------- */}
+      {/* ---- Run failures (our key) ---------------------------------------- */}
       <Section
         icon={<XCircle className="h-4 w-4 text-terracotta" aria-hidden />}
         title="Run failures"
         total={failures.length}
         shown={shownFailures.length}
         filtering={filtering}
+        hint="On our key. These are ours to fix and count against the figures above."
         empty={
-          failures.length === 0 ? "No failed runs in the window." : `Nothing matches “${q}”.`
+          failures.length === 0
+            ? "No failed runs on our key in the window."
+            : `Nothing matches “${q}”.`
         }
       >
         {shownFailures.map((f) => (
@@ -183,6 +197,33 @@ export function Telemetry({
           </Row>
         ))}
       </Section>
+
+      {/* ---- Run failures on customers' own keys ---------------------------- */}
+      {theirFailures.length > 0 && (
+        <Section
+          icon={<KeyRound className="h-4 w-4 text-ink-faint" aria-hidden />}
+          title="On customers' own keys"
+          total={theirFailures.length}
+          shown={shownTheirs.length}
+          filtering={filtering}
+          hint="Their provider account, not ours: out of credit, over quota, a revoked key. Shown so you can see it; not counted in the figures above."
+          empty={`Nothing matches “${q}”.`}
+        >
+          {shownTheirs.map((f) => (
+            <Row key={f.signature}>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-ink-soft">{f.example}</p>
+                <p className="mt-0.5 truncate font-mono text-xs text-ink-faint">
+                  {f.engines.join(", ")} · {timeAgo(f.lastSeen)} · their key
+                </p>
+              </div>
+              <Badge tone="neutral">
+                <span className="tabular-nums">{f.count}</span>
+              </Badge>
+            </Row>
+          ))}
+        </Section>
+      )}
 
       {/* ---- Recorded issues ------------------------------------------------ */}
       <Section

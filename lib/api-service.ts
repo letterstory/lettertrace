@@ -1299,6 +1299,7 @@ export async function triggerRunForProject(
     model: key.model,
     apiKey: key.apiKey!,
     route: key.route,
+    keySource: key.source,
     budgetMicros: runBudgetMicros(key),
     context: options?.context,
   };

@@ -532,6 +532,17 @@ alter table public.runs drop constraint if exists runs_route_check;
 alter table public.runs
   add constraint runs_route_check check (route is null or route in ('concentrate', 'openrouter'));
 
+-- Whose credential paid for this run: 'trial' = the operator's shared key,
+-- 'own' = the account's own provider or router key. Null on rows from before
+-- the column existed. The operations page keeps its health figures to runs on
+-- OUR key: a customer's own Anthropic account running out of credit is their
+-- billing, not our outage, and it was counting against our success rate.
+-- Same add-column + named-constraint split as `route`, for the same reason.
+alter table public.runs add column if not exists key_source text;
+alter table public.runs drop constraint if exists runs_key_source_check;
+alter table public.runs
+  add constraint runs_key_source_check check (key_source is null or key_source in ('own', 'trial'));
+
 -- ---------- responses ------------------------------------------------
 create table if not exists public.responses (
   id uuid primary key default gen_random_uuid(),
