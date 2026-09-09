@@ -188,16 +188,17 @@ export default async function DashboardLayout({
             <SignOutButton className="w-full justify-start" />
           </div>
 
-          <div className="flex items-center justify-between gap-2 border-t border-ink/10 pt-4 md:hidden">
-            <div className="flex min-w-0 flex-col gap-1">
-              <WhyFree />
-              <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
-                {user.email}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <ThemeToggle />
+          {/* Pinned to the foot of the drawer (mt-auto), below whatever space
+              the nav and the CTA leave, so the account controls sit where a
+              thumb expects them rather than mid-drawer above a blank half. */}
+          <div className="mt-auto flex flex-col gap-3 border-t border-ink/10 pt-4 md:hidden">
+            <WhyFree />
+            <p className="truncate text-xs text-ink-faint" title={user.email ?? undefined}>
+              {user.email}
+            </p>
+            <div className="flex items-center justify-between gap-2">
               <SignOutButton className="whitespace-nowrap" />
+              <ThemeToggle />
             </div>
           </div>
       </SidebarShell>
