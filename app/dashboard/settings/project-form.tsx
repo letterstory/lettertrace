@@ -11,7 +11,13 @@ import {
   engineCoverage,
   type RouterCoverage,
 } from "@/lib/routers";
-import { article, SCHEDULE_LABELS } from "@/lib/utils";
+import {
+  article,
+  CUSTOM_INTERVAL_MAX,
+  CUSTOM_INTERVAL_MIN,
+  SCHEDULE_LABELS,
+  SCHEDULES,
+} from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
 
 // The answer engine is stored as a (provider, model) pair; the picker packs
@@ -66,6 +72,7 @@ export default function ProjectForm({
   );
   const [description, setDescription] = useState(project?.description ?? "");
   const [schedule, setSchedule] = useState<Schedule>(project?.schedule ?? "off");
+  const [intervalDays, setIntervalDays] = useState<number>(project?.schedule_interval_days ?? 14);
   const [useWebSearch, setUseWebSearch] = useState(project?.use_web_search ?? true);
   const [engine, setEngine] = useState(
     project ? `${project.default_provider}:${project.default_model}` : DEFAULT_ENGINE,
@@ -137,6 +144,9 @@ export default function ProjectForm({
           brand_domains: brandDomains,
           description,
           schedule,
+          // Only meaningful for 'custom' - the route ignores it (and stores
+          // null) for every other schedule, so no clamping is needed here.
+          intervalDays,
           use_web_search: useWebSearch,
           default_provider,
           default_model,
@@ -222,20 +232,38 @@ export default function ProjectForm({
         </div>
         <div>
           <Label htmlFor="p-schedule">Monitoring schedule</Label>
-          <Select
-            id="p-schedule"
-            value={schedule}
-            onChange={(e) => {
-              setSchedule(e.target.value as Schedule);
-              setSaved(false);
-            }}
-          >
-            {(["off", "daily", "weekly"] as Schedule[]).map((s) => (
-              <option key={s} value={s}>
-                {SCHEDULE_LABELS[s]}
-              </option>
-            ))}
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select
+              id="p-schedule"
+              value={schedule}
+              onChange={(e) => {
+                setSchedule(e.target.value as Schedule);
+                setSaved(false);
+              }}
+            >
+              {SCHEDULES.map((s) => (
+                <option key={s} value={s}>
+                  {SCHEDULE_LABELS[s]}
+                </option>
+              ))}
+            </Select>
+            {schedule === "custom" && (
+              <input
+                type="number"
+                id="p-schedule-interval"
+                aria-label="Days between runs"
+                min={CUSTOM_INTERVAL_MIN}
+                max={CUSTOM_INTERVAL_MAX}
+                value={intervalDays}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  if (Number.isFinite(next)) setIntervalDays(next);
+                  setSaved(false);
+                }}
+                className="w-16 rounded border border-ink/15 bg-paper px-2 py-1.5 text-sm text-ink"
+              />
+            )}
+          </div>
         </div>
       </div>
 

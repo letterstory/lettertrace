@@ -5,9 +5,8 @@ import { isProvider, resolveEngine } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
+import { CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN, SCHEDULES } from "@/lib/utils";
 import type { Provider, Schedule } from "@/lib/types";
-
-const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 
 function toAliases(value: unknown): string[] {
   const parts =
@@ -89,6 +88,20 @@ export async function POST(request: Request) {
       ? (b.schedule as Schedule)
       : "off";
 
+  // Only meaningful for 'custom' - every other schedule carries its interval
+  // in its own name. Clamped rather than rejected, matching this route's
+  // existing forgiving-default posture for `schedule` above (an unrecognised
+  // value falls back to "off" rather than erroring). Null for anything but
+  // 'custom' so a stale interval left over from a previous selection can't
+  // resurface if the user picks 'custom' again later without a fresh number.
+  const scheduleIntervalDays =
+    schedule === "custom"
+      ? Math.min(
+          CUSTOM_INTERVAL_MAX,
+          Math.max(CUSTOM_INTERVAL_MIN, Math.trunc(Number(b.intervalDays)) || 14),
+        )
+      : null;
+
   const baseFields = {
     name,
     brand_name,
@@ -96,6 +109,7 @@ export async function POST(request: Request) {
     brand_domains: toDomains(b.brand_domains),
     description: toNullableString(b.description),
     schedule,
+    schedule_interval_days: scheduleIntervalDays,
     ...(typeof b.use_web_search === "boolean" ? { use_web_search: b.use_web_search } : {}),
   };
 
@@ -145,7 +159,7 @@ export async function POST(request: Request) {
         projectId: existing.id,
         targetType: "project",
         targetId: existing.id,
-        metadata: { schedule },
+        metadata: { schedule, schedule_interval_days: scheduleIntervalDays },
       });
       return NextResponse.json(data);
     }

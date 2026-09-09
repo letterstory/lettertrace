@@ -442,6 +442,39 @@ alter table public.projects
 alter table public.projects
   add column if not exists results_seen_at timestamptz;
 
+-- An earlier draft of this file allowed 'every_3_days'. It is gone; the
+-- constraint below cannot be added while a row still holds it, so fold those
+-- rows into the nearest surviving cadence (weekly never increases anyone's
+-- spend). A no-op on any deployment that never ran that draft.
+update public.projects set schedule = 'weekly' where schedule = 'every_3_days';
+
+-- Widen the schedule allow-list with 'custom': any interval a user names, in
+-- days (see schedule_interval_days below). Safe to re-run.
+alter table public.projects drop constraint if exists projects_schedule_check;
+alter table public.projects
+  add constraint projects_schedule_check
+  check (schedule in ('off', 'daily', 'weekly', 'custom'));
+
+-- Days between runs when schedule = 'custom'; unused (and expected null) for
+-- every other schedule, which already carries its interval in its own name.
+-- Split into add-column + named constraint (same shape as runs.route further
+-- down): an inline check on `add column if not exists` is skipped once the
+-- column exists, which would leave the range unenforced on a deployment
+-- upgrading from an earlier version of this file. Safe to re-run.
+alter table public.projects add column if not exists schedule_interval_days integer;
+alter table public.projects drop constraint if exists projects_schedule_interval_check;
+alter table public.projects
+  add constraint projects_schedule_interval_check
+  check (schedule_interval_days is null or schedule_interval_days between 1 and 90);
+
+-- A 'custom' row with no interval would fall through to the cron's daily
+-- branch and run up to 90x more often than the user asked for, silently, on
+-- their own key. Refusing the write is cheaper than debugging the spend.
+alter table public.projects drop constraint if exists projects_custom_needs_interval;
+alter table public.projects
+  add constraint projects_custom_needs_interval
+  check (schedule <> 'custom' or schedule_interval_days is not null);
+
 -- ---------- competitors ----------------------------------------------
 create table if not exists public.competitors (
   id uuid primary key default gen_random_uuid(),

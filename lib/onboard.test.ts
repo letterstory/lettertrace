@@ -116,6 +116,7 @@ const PROJECT: Project = {
   default_model: "claude-sonnet-4-6",
   results_seen_at: null,
   schedule: "off",
+  schedule_interval_days: null,
   use_web_search: true,
   replicates: 1,
   last_run_at: null,

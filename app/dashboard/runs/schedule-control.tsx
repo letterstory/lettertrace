@@ -5,16 +5,25 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { Card, CardBody, Select } from "@/components/ui";
-import { SCHEDULE_LABELS } from "@/lib/utils";
+import {
+  CUSTOM_INTERVAL_MAX,
+  CUSTOM_INTERVAL_MIN,
+  SCHEDULE_LABELS,
+  SCHEDULES,
+  scheduleLabel,
+} from "@/lib/utils";
 import type { KeySource } from "@/lib/trial";
 import type { Schedule } from "@/lib/types";
 
 export function ScheduleControl({
   schedule: saved,
+  scheduleIntervalDays: savedIntervalDays,
   keySource,
   providerLabel,
 }: {
   schedule: Schedule;
+  /** Days between runs when schedule is 'custom'; ignored otherwise. */
+  scheduleIntervalDays: number | null;
   /** Whose key the next run would use. Scheduled runs are strictly self-funded
    *  (the cron skips anything but 'own'), so any other source means a schedule
    *  set here silently never fires — the exact state this control exists to
@@ -24,29 +33,42 @@ export function ScheduleControl({
 }) {
   const router = useRouter();
   const [schedule, setSchedule] = useState<Schedule>(saved);
+  // Kept separately from `schedule` because picking 'custom' in the select and
+  // typing its interval are two different edits, made in either order, and
+  // only one of them should trigger the save.
+  const [intervalDays, setIntervalDays] = useState<number>(savedIntervalDays ?? 14);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function save(next: Schedule) {
+  async function save(next: Schedule, nextIntervalDays: number) {
     const previous = schedule;
+    const previousIntervalDays = intervalDays;
     setSchedule(next);
+    if (next === "custom") setIntervalDays(nextIntervalDays);
     setSaving(true);
     setError(null);
     try {
       const res = await fetch("/api/project/schedule", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ schedule: next }),
+        body: JSON.stringify({
+          schedule: next,
+          // Only meaningful for 'custom' - the route nulls this column for
+          // every other schedule, so a stale interval can't resurface later.
+          intervalDays: next === "custom" ? nextIntervalDays : null,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) {
         setSchedule(previous);
+        setIntervalDays(previousIntervalDays);
         setError(data?.error ?? "Couldn't save the schedule.");
         return;
       }
       router.refresh();
     } catch {
       setSchedule(previous);
+      setIntervalDays(previousIntervalDays);
       setError("Network error, please try again.");
     } finally {
       setSaving(false);
@@ -74,13 +96,14 @@ export function ScheduleControl({
             )}
             {scheduled && keySource === "own" && (
               <p className="text-xs text-ink-faint">
-                Runs {schedule} around 8:00 UTC on your own key.
+                Runs {scheduleLabel(schedule, intervalDays).toLowerCase()} around 8:00 UTC on your
+                own key.
               </p>
             )}
             {scheduled && keySource === "trial" && (
               <p className="text-xs text-ink-faint">
-                Runs {schedule} around 8:00 UTC on complimentary tokens while
-                they last. Add your {providerLabel} key in{" "}
+                Runs {scheduleLabel(schedule, intervalDays).toLowerCase()} around 8:00 UTC on
+                complimentary tokens while they last. Add your {providerLabel} key in{" "}
                 <Link
                   href="/dashboard/settings"
                   className="text-terracotta-dark hover:text-terracotta"
@@ -95,8 +118,7 @@ export function ScheduleControl({
                 in its own JSON response and a span attribute. */}
             {scheduled && !willFire && (
               <p className="text-xs text-terracotta">
-                This {SCHEDULE_LABELS[schedule].toLowerCase()} schedule
-                won&apos;t run
+                This {scheduleLabel(schedule, intervalDays).toLowerCase()} schedule won&apos;t run
                 {keySource === "exhausted"
                   ? ": your free runs are used up. "
                   : ": no usable key for your answer engine. "}
@@ -113,19 +135,45 @@ export function ScheduleControl({
             {error && <p className="text-xs text-terracotta">{error}</p>}
           </div>
         </div>
-        <Select
-          aria-label="Monitoring schedule"
-          value={schedule}
-          disabled={saving}
-          onChange={(e) => save(e.target.value as Schedule)}
-          className="w-auto"
-        >
-          {(["off", "daily", "weekly"] as Schedule[]).map((s) => (
-            <option key={s} value={s}>
-              {SCHEDULE_LABELS[s]}
-            </option>
-          ))}
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select
+            aria-label="Monitoring schedule"
+            value={schedule}
+            disabled={saving}
+            onChange={(e) => save(e.target.value as Schedule, intervalDays)}
+            className="w-auto"
+          >
+            {SCHEDULES.map((s) => (
+              <option key={s} value={s}>
+                {SCHEDULE_LABELS[s]}
+              </option>
+            ))}
+          </Select>
+          {schedule === "custom" && (
+            <input
+              type="number"
+              aria-label="Days between runs"
+              min={CUSTOM_INTERVAL_MIN}
+              max={CUSTOM_INTERVAL_MAX}
+              value={intervalDays}
+              disabled={saving}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setIntervalDays(next);
+              }}
+              // Saved on blur, not per keystroke: typing "14" would otherwise
+              // PATCH "1" first and schedule a daily run for a moment.
+              onBlur={(e) => {
+                const clamped = Math.min(
+                  CUSTOM_INTERVAL_MAX,
+                  Math.max(CUSTOM_INTERVAL_MIN, Number(e.target.value) || CUSTOM_INTERVAL_MIN),
+                );
+                save("custom", clamped);
+              }}
+              className="w-16 rounded border border-ink/15 bg-paper px-2 py-1.5 text-sm text-ink"
+            />
+          )}
+        </div>
       </CardBody>
     </Card>
   );

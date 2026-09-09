@@ -6,7 +6,8 @@ import { classifyEmail } from "@/lib/growth";
 import { deriveCompany } from "@/lib/accounts";
 import { createServiceClient } from "@/lib/supabase/service";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
-import { formatDate, timeAgo } from "@/lib/utils";
+import { formatDate, scheduleLabel, timeAgo } from "@/lib/utils";
+import type { Schedule } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -24,7 +25,7 @@ export const metadata = { robots: { index: false, follow: false } };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY_MS = 86_400_000;
 
-const SCHEDULE_TONE = { off: "sand", daily: "mint", weekly: "teal" } as const;
+const SCHEDULE_TONE = { off: "sand", daily: "mint", weekly: "teal", custom: "neutral" } as const;
 
 interface ProjectRow {
   id: string;
@@ -32,7 +33,8 @@ interface ProjectRow {
   brand_name: string;
   brand_domains: string[];
   description: string | null;
-  schedule: "off" | "daily" | "weekly";
+  schedule: Schedule;
+  schedule_interval_days: number | null;
   default_provider: string;
   default_model: string;
   replicates: number;
@@ -157,7 +159,7 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
   const { data: projectRows } = await svc
     .from("projects")
     .select(
-      "id, name, brand_name, brand_domains, description, schedule, default_provider, default_model, replicates, use_web_search, last_run_at, created_at",
+      "id, name, brand_name, brand_domains, description, schedule, schedule_interval_days, default_provider, default_model, replicates, use_web_search, last_run_at, created_at",
     )
     .eq("user_id", profile.id)
     .order("created_at", { ascending: true });
@@ -392,7 +394,9 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
                           {p.brand_domains.length > 0 ? p.brand_domains.join(" · ") : "no domains"}
                         </p>
                       </div>
-                      <Badge tone={SCHEDULE_TONE[p.schedule] ?? "sand"}>{p.schedule}</Badge>
+                      <Badge tone={SCHEDULE_TONE[p.schedule] ?? "sand"}>
+                        {scheduleLabel(p.schedule, p.schedule_interval_days)}
+                      </Badge>
                     </div>
                     {p.description && (
                       <p className="line-clamp-2 text-xs text-ink-soft">{p.description}</p>

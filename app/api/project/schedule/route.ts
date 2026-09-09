@@ -3,9 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
+import { CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN, SCHEDULES } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
-
-const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 
 // Schedule-only write, so the Runs page can offer the toggle where people
 // actually go looking for it. POST /api/project is a full-form upsert —
@@ -29,10 +28,35 @@ export async function PATCH(request: Request) {
   }
   const schedule = (body as { schedule?: unknown } | null)?.schedule;
   if (typeof schedule !== "string" || !SCHEDULES.includes(schedule as Schedule)) {
+    // Built from SCHEDULES rather than typed out again, so this message can't
+    // fall out of step with what the check above actually accepts.
     return NextResponse.json(
-      { error: "schedule must be one of off, daily or weekly" },
+      { error: `schedule must be one of ${SCHEDULES.join(", ")}` },
       { status: 400 },
     );
+  }
+
+  // Only 'custom' reads this; every other schedule carries its interval in its
+  // own name. Nulled below for anything but 'custom' so a stale interval left
+  // over from a previous 'custom' selection can't resurface if the user picks
+  // 'custom' again later without re-entering a number.
+  let intervalDays: number | null = null;
+  if (schedule === "custom") {
+    const raw = (body as { intervalDays?: unknown } | null)?.intervalDays;
+    if (
+      typeof raw !== "number" ||
+      !Number.isInteger(raw) ||
+      raw < CUSTOM_INTERVAL_MIN ||
+      raw > CUSTOM_INTERVAL_MAX
+    ) {
+      return NextResponse.json(
+        {
+          error: `intervalDays must be a whole number of days between ${CUSTOM_INTERVAL_MIN} and ${CUSTOM_INTERVAL_MAX}`,
+        },
+        { status: 400 },
+      );
+    }
+    intervalDays = raw;
   }
 
   try {
@@ -43,7 +67,11 @@ export async function PATCH(request: Request) {
 
     const { data, error } = await supabase
       .from("projects")
-      .update({ schedule, updated_at: new Date().toISOString() })
+      .update({
+        schedule,
+        schedule_interval_days: intervalDays,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", project.id)
       .eq("user_id", user.id)
       .select("*")
@@ -56,11 +84,14 @@ export async function PATCH(request: Request) {
     await logDashboard(user, request, {
       category: "project",
       action: "project.updated",
-      summary: `Set monitoring schedule to ${schedule}`,
+      summary:
+        schedule === "custom"
+          ? `Set monitoring schedule to every ${intervalDays} days`
+          : `Set monitoring schedule to ${schedule}`,
       projectId: project.id,
       targetType: "project",
       targetId: project.id,
-      metadata: { schedule },
+      metadata: { schedule, schedule_interval_days: intervalDays },
     });
     return NextResponse.json(data);
   } catch (e) {

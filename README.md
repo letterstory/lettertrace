@@ -19,7 +19,7 @@ Lettertrace is a self-hostable AEO tool, focused purely on **diagnosing and moni
 - ⚔️ **Competitor benchmarking**, ingest competitors and see how often each shows up.
 - 🏢 **Multiple organizations**, one account can track many brands/domains and switch between them from the sidebar.
 - 🔎 **Web search + source attribution**, query the models with their native web search on and capture the exact sources they cite, so you can see which posts drove an answer, and whether your own site is being used, even when you aren't named.
-- ⏱️ **Scheduled monitoring**, daily/weekly runs via a cron endpoint.
+- ⏱️ **Scheduled monitoring**, daily/weekly/custom-interval runs via a cron endpoint.
 
 ## Core concepts
 
@@ -268,7 +268,7 @@ Router keys are encrypted at rest exactly like provider keys, and resolution ord
 
 ## Scheduled monitoring
 
-Set a project's schedule to **Daily** or **Weekly** in Settings, then hit the cron endpoint on an interval:
+Set a project's schedule to **Daily**, **Weekly**, or a **custom** number of days (1–90) in Settings — or, for a new account, at the end of onboarding — then hit the cron endpoint on an interval:
 
 ```bash
 curl -X POST https://your-app.com/api/cron/run \
@@ -298,7 +298,7 @@ While a user has free runs left and no key of their own, monitoring runs and var
 > and `project_invites` tables plus the `can_access_project` / `is_project_owner`
 > helpers behind [Teams](#teams) — which every project-scoped RLS policy now
 > calls, so an older deployment keeps single-person behaviour until it is
-> applied. It also adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), and widens the `provider` allow-list on `provider_keys` and `projects` to include `google` (all safe to re-run).
+> applied. It also adds the trial columns (`trial_runs_used`, `trial_tokens_used`), their increment functions, the multi-organization column `profiles.active_project_id`, the `router_keys` table and `runs.route` for [LLM routers](#llm-routers-one-key-several-assistants), widens the `provider` allow-list on `provider_keys` and `projects` to include `google`, and widens `projects.schedule` to add `custom` plus the `schedule_interval_days` column `custom` reads (all safe to re-run).
 
 ## Teams
 

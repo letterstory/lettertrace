@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Badge, Button, Card, CardBody, Input, Label, Spinner, Textarea } from "@/components/ui";
+import { CadencePicker, type OnboardingCadence } from "@/components/dashboard/cadence-picker";
 import { brandNameFromSite, hostOf } from "@/lib/brand-name";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +56,13 @@ export function Onboarding() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Cadence for the project about to be created. Defaults on, at daily — the
+  // schedule this route used to hard-code. The toggle is the off switch;
+  // "Custom" is a day count, not off. See CadencePicker.
+  const [scheduleOn, setScheduleOn] = useState(true);
+  const [cadence, setCadence] = useState<OnboardingCadence>("daily");
+  const [customDays, setCustomDays] = useState(14);
 
   // --- Step 1 -> suggest -----------------------------------------------------
   // Doubles as the Retry handler: re-submitting is the whole recovery.
@@ -248,6 +256,8 @@ export function Onboarding() {
           // showed a full URL with a path back in the Settings domain field.
           brand_domains: hostOf(domain) ? [hostOf(domain)] : [],
           description: description.trim() || null,
+          schedule: scheduleOn ? cadence : "off",
+          intervalDays: scheduleOn && cadence === "custom" ? customDays : null,
           topics: cleaned,
           // Blank rows are just unused inputs, so drop them rather than
           // blocking the submit — a nameless competitor holds nothing else.
@@ -617,6 +627,17 @@ export function Onboarding() {
               <Check className="h-4 w-4" />
               Start monitoring
             </Button>
+          </div>
+          <div className="mt-4">
+            <CadencePicker
+              enabled={scheduleOn}
+              onEnabledChange={setScheduleOn}
+              cadence={cadence}
+              onCadenceChange={setCadence}
+              customDays={customDays}
+              onCustomDaysChange={setCustomDays}
+              disabled={busy}
+            />
           </div>
           <p className="mt-3 text-center text-xs text-ink-faint">
             We&apos;ll run your first search right away, on the house.

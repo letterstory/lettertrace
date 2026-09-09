@@ -138,3 +138,38 @@ describe("POST /api/onboarding/complete, creating more organizations", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("POST /api/onboarding/complete — cadence validation", () => {
+  const good = { ...BASE, topics: [{ name: "CDN", prompts: ["best cdn?"] }] };
+
+  // Same wording PATCH /api/project/schedule uses, built from SCHEDULES so the
+  // message and the check it describes can't fall out of step.
+  it("rejects an unrecognised schedule, naming the accepted values", async () => {
+    const res = await POST(req({ ...good, schedule: "hourly" }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("schedule must be one of off, daily, weekly, custom");
+  });
+
+  it("rejects 'custom' with no intervalDays", async () => {
+    const res = await POST(req({ ...good, schedule: "custom" }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/intervalDays must be a whole number of days between 1 and 90/);
+  });
+
+  it("rejects 'custom' with an out-of-range or non-integer intervalDays", async () => {
+    for (const bad of [0, 91, 1.5]) {
+      const res = await POST(req({ ...good, schedule: "custom", intervalDays: bad }));
+      expect(res.status).toBe(400);
+    }
+  });
+
+  // The mocked client throws on any .from() call, so reaching the database is
+  // itself the assertion that validation let a good cadence through.
+  it("lets a valid cadence through to the insert", async () => {
+    await expect(
+      POST(req({ ...good, schedule: "custom", intervalDays: 10 })),
+    ).rejects.toThrow(/before touching the database/);
+  });
+});

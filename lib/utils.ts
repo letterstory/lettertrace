@@ -1,4 +1,4 @@
-import type { Schedule } from "@/lib/types";
+import type { Project, Schedule } from "@/lib/types";
 
 // Tiny className combiner (no external deps). Filters falsy, joins with spaces.
 export function cn(...parts: Array<string | false | null | undefined>): string {
@@ -130,10 +130,93 @@ export function article(word: string): "a" | "an" {
 }
 
 /** The one wording of each schedule option, shared by every surface that
- *  offers the setting (Settings form, Runs page) so the same choice can't be
- *  called two different things. */
+ *  offers the setting (Settings form, Runs page, onboarding) so the same
+ *  choice can't be called two different things. Order here is display order:
+ *  off first as the baseline, then increasing interval, 'custom' last as the
+ *  pick-your-own-number escape hatch. */
 export const SCHEDULE_LABELS: Record<Schedule, string> = {
   off: "Manual only",
   daily: "Daily",
   weekly: "Weekly",
+  custom: "Every N days",
 };
+
+// Derived from the labels rather than written out again: this used to be a
+// separate hand-copied array in four different files, which is exactly the
+// shape of bug this repo's own conventions warn about — a schedule value
+// added to the union but missed in one of those copies would validate on some
+// surfaces and 400 on others, or reach the database with no cron branch that
+// knows how to run it.
+export const SCHEDULES = Object.keys(SCHEDULE_LABELS) as Schedule[];
+
+// 0 would make isScheduleDue() true on every cron tick; a project should
+// re-pick a preset (or 90+ days) rather than lean on an unbounded custom
+// interval that reads as scheduled and effectively never fires.
+export const CUSTOM_INTERVAL_MIN = 1;
+export const CUSTOM_INTERVAL_MAX = 90;
+
+/**
+ * Days between runs, or null when nothing is scheduled. The single place a
+ * schedule becomes a duration, so the cron's due-check and every bit of UI
+ * copy that names an interval read the same arithmetic.
+ *
+ * 'custom' is the only schedule whose interval isn't implied by its own name,
+ * so it's the only one that reads `intervalDays` — and it MUST have one: a
+ * 'custom' row with a null interval is rejected at the database (see
+ * projects_custom_needs_interval in supabase/schema.sql), so falling back to
+ * 1 here would only mask a bug that should already be impossible.
+ */
+export function scheduleIntervalDays(
+  schedule: Schedule,
+  intervalDays: number | null,
+): number | null {
+  switch (schedule) {
+    case "off":
+      return null;
+    case "daily":
+      return 1;
+    case "weekly":
+      return 7;
+    case "custom":
+      return intervalDays;
+  }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// last_run_at is stamped at run FINISH (lib/engine.ts), not at the tick that
+// started it, so a run that took even a few minutes is that many minutes
+// short of a full interval at the next 08:00 tick - and misses it, then misses
+// the day after too since last_run_at still hasn't moved. Six hours is well
+// under a day (the cron's tick spacing), so this can only ever pull a due
+// date earlier - it can never make the same interval fire twice in one cycle.
+const SCHEDULE_GRACE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Whether a project's schedule has come due, as of `now`. The cron's whole
+ * due-check, pulled out of app/api/cron/run/route.ts so it's a pure function
+ * this repo's node-env tests can call directly — that route imports
+ * lib/supabase/server, which pulls in React's cache() and can't be imported
+ * outside a Next.js runtime.
+ */
+export function isScheduleDue(
+  project: Pick<Project, "schedule" | "schedule_interval_days" | "last_run_at">,
+  now: number,
+): boolean {
+  if (project.schedule === "off") return false;
+  if (!project.last_run_at) return true;
+  const intervalDays = scheduleIntervalDays(project.schedule, project.schedule_interval_days);
+  // Only reachable for a 'custom' row with a null interval, which the
+  // database itself refuses to store (projects_custom_needs_interval) - this
+  // is a belt on top of that suspenders, not the primary guard.
+  if (!intervalDays) return false;
+  const last = new Date(project.last_run_at).getTime();
+  return now - last >= intervalDays * DAY_MS - SCHEDULE_GRACE_MS;
+}
+
+/** SCHEDULE_LABELS plus the actual number for 'custom' (e.g. "Every 14 days"),
+ *  since "Every N days" on its own names a shape, not a schedule. */
+export function scheduleLabel(schedule: Schedule, intervalDays: number | null): string {
+  if (schedule === "custom" && intervalDays) return `Every ${intervalDays} days`;
+  return SCHEDULE_LABELS[schedule];
+}

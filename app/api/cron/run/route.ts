@@ -10,22 +10,12 @@ import {
   runBudgetMicros,
 } from "@/lib/trial";
 import { withSpan } from "@/lib/otel";
+import { isScheduleDue } from "@/lib/utils";
 import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 800;
 export const dynamic = "force-dynamic";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
-
-function isDue(project: Project, now: number): boolean {
-  if (project.schedule === "off") return false;
-  if (!project.last_run_at) return true;
-  const last = new Date(project.last_run_at).getTime();
-  const interval = project.schedule === "weekly" ? WEEK_MS : DAY_MS;
-  return now - last >= interval;
-}
 
 interface ProjectResult {
   projectId: string;
@@ -80,7 +70,7 @@ async function sweepAndRun(span: Span) {
   const results: ProjectResult[] = [];
 
   for (const project of projects) {
-    if (!isDue(project, now)) continue;
+    if (!isScheduleDue(project, now)) continue;
 
     try {
       // Ask the run resolver rather than reading provider_keys directly. The

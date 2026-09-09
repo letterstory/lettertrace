@@ -161,6 +161,7 @@ export default async function RunsPage() {
           daily?" gets asked. */}
       <ScheduleControl
         schedule={project.schedule}
+        scheduleIntervalDays={project.schedule_interval_days}
         keySource={key.source}
         providerLabel={PROVIDERS[project.default_provider].label}
       />

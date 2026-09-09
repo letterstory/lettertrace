@@ -10,7 +10,8 @@ import {
 } from "@/lib/onboard";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
-import type { Project } from "@/lib/types";
+import { CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN, SCHEDULES } from "@/lib/utils";
+import type { Project, Schedule } from "@/lib/types";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -111,6 +112,43 @@ export async function POST(request: Request) {
     );
   }
 
+  // Cadence chosen on the onboarding CTA. Absent -> 'daily' rather than an
+  // error, so any client that doesn't send this field still gets the schedule
+  // this route used to hard-code. An explicit-but-wrong value is refused
+  // rather than coerced, same as PATCH /api/project/schedule.
+  const rawSchedule = body.schedule;
+  let schedule: Schedule = "daily";
+  if (rawSchedule !== undefined && rawSchedule !== null) {
+    if (typeof rawSchedule !== "string" || !SCHEDULES.includes(rawSchedule as Schedule)) {
+      return NextResponse.json(
+        { error: `schedule must be one of ${SCHEDULES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    schedule = rawSchedule as Schedule;
+  }
+
+  // Only 'custom' reads intervalDays; every other schedule carries its
+  // interval in its own name (see scheduleIntervalDays).
+  let schedule_interval_days: number | null = null;
+  if (schedule === "custom") {
+    const raw = body.intervalDays;
+    if (
+      typeof raw !== "number" ||
+      !Number.isInteger(raw) ||
+      raw < CUSTOM_INTERVAL_MIN ||
+      raw > CUSTOM_INTERVAL_MAX
+    ) {
+      return NextResponse.json(
+        {
+          error: `intervalDays must be a whole number of days between ${CUSTOM_INTERVAL_MIN} and ${CUSTOM_INTERVAL_MAX}`,
+        },
+        { status: 400 },
+      );
+    }
+    schedule_interval_days = raw;
+  }
+
   // Start the project on an engine this user can actually run — the user's
   // own key wins over the trial; the env default applies only when they have
   // none. See pickProjectEngine.
@@ -128,11 +166,12 @@ export async function POST(request: Request) {
       description,
       default_provider: provider,
       default_model: model,
-      // "Cadence from the onset": a new project monitors on a schedule from
-      // day one (trial-funded until the allowance runs out, then unblocked by
-      // the user's own key) instead of being a one-shot demo whose schedule
-      // hides in Settings. The Runs page control turns it off in one click.
-      schedule: "daily",
+      // "Cadence from the onset": the user picks the schedule on the
+      // onboarding CTA itself (validated above) instead of every project
+      // silently starting on 'daily'. The Runs page control changes it any
+      // time after.
+      schedule,
+      schedule_interval_days,
     })
     .select("*")
     .single();
@@ -155,7 +194,13 @@ export async function POST(request: Request) {
     projectId: project.id,
     targetType: "project",
     targetId: project.id,
-    metadata: { topics: topics.length, competitors: competitors.length, brand_name },
+    metadata: {
+      topics: topics.length,
+      competitors: competitors.length,
+      brand_name,
+      schedule,
+      interval_days: schedule_interval_days,
+    },
   });
 
   // Competitors first, then topics + prompts: executeRun reads competitors to
