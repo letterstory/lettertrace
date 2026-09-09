@@ -11,8 +11,8 @@ interface NavItem {
   label: string;
   /** Base name of the icon in /public/images/icons (Default + active variants). */
   icon: string;
-  /** Rendered only in the wrapped phone row; at md+ the item's content lives
-      in the Reports sub-menu under Overview instead. */
+  /** Rendered only in the phone drawer; at md+ the item's content lives in
+      the Reports sub-menu under Overview instead. */
   mobileOnly?: boolean;
 }
 
@@ -29,8 +29,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard/topics", label: "Topics", icon: "Topics" },
   { href: "/dashboard/competitors", label: "Competitors", icon: "Competitors" },
   // Reports lives under Overview at md+ (see the sub-menu below); this item
-  // exists so the section is still reachable from the phone row, where a
-  // nested list inside a wrapping flex-row would be unreadable.
+  // exists so the section is still one tap away in the phone drawer, which
+  // keeps the sub-menu (six dated reports) for the wider column.
   { href: "/dashboard/runs", label: "Reports", icon: "Runs", mobileOnly: true },
   { href: "/dashboard/logs", label: "Logs", icon: "Logs" },
   { href: "/dashboard/settings", label: "Settings", icon: "Settings" },
@@ -51,11 +51,10 @@ export function DashboardNav({
   const [reportsOpen, setReportsOpen] = useState(true);
 
   return (
-    // Six labelled items in one un-wrapping row overflowed the viewport on a
-    // phone, pushing every dashboard page ~267px wide. Wrapping keeps the
-    // labels and needs no scrolling; the column layout at md+ must not wrap, or
-    // the fixed-height sidebar would spill items into a second column.
-    <nav className="flex flex-row flex-wrap gap-1 md:flex-col md:flex-nowrap">
+    // One column at every size. On a phone the nav now lives in a drawer the
+    // width of a sidebar (it used to be a wrapping row across the top of the
+    // page), so the same column reads the same way there.
+    <nav className="flex flex-col gap-1">
       {NAV_ITEMS.map(({ href, label, icon, mobileOnly }) => {
         const isOverview = href === "/dashboard";
         const active =
