@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
 import { DashboardNav, type NavReport } from "@/components/dashboard/nav";
+import { SidebarShell } from "@/components/dashboard/sidebar-shell";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { SignOutButton } from "@/components/dashboard/signout";
 import { WhyFree } from "@/components/dashboard/why-free";
@@ -144,13 +145,15 @@ export default async function DashboardLayout({
           navigating between dashboard routes. */}
       {offerFounderCall && callUrl && <FounderCallOffer url={callUrl} />}
 
-      <aside className="flex flex-col border-b border-ink/10 bg-paper md:h-screen md:w-[260px] md:shrink-0 md:border-b-0 md:border-r">
-        {/* Scrolls: six reports in the sub-menu plus the CTA push Sign out past
-            the fold, and an h-screen column without it leaves them unreachable. */}
-        <div className="flex flex-col gap-6 px-5 py-6 md:h-full md:overflow-y-auto">
-          <div className="flex items-center justify-between gap-2">
+      {/* On a phone the sidebar is a drawer behind a menu button, so the page
+          opens on its content rather than on a screen of navigation. At md+
+          SidebarShell is the same static column it always was. */}
+      <SidebarShell>
+          {/* The phone's drawer carries its own logo row (with the close
+              control); this one is the desktop column's. */}
+          <div className="hidden items-center justify-between gap-2 md:flex">
             <Logo />
-            <ThemeToggle className="hidden md:inline-flex" />
+            <ThemeToggle />
           </div>
 
           {project ? (
@@ -192,13 +195,12 @@ export default async function DashboardLayout({
                 {user.email}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <ThemeToggle />
-              <SignOutButton />
+              <SignOutButton className="whitespace-nowrap" />
             </div>
           </div>
-        </div>
-      </aside>
+      </SidebarShell>
 
       <main className="flex-1 overflow-y-auto px-6 py-8 md:px-10 md:h-screen">
         <div className="mx-auto max-w-6xl">
