@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
-import { conversionsReport, type RatePoint } from "@/lib/conversions";
+import { conversionsReport, type RatePoint, type SchedulePoint } from "@/lib/conversions";
 import { periodFrom, periodLabel, type Period } from "@/lib/periods";
 import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
@@ -44,15 +44,25 @@ function ColumnHeader({ children, className }: { children: React.ReactNode; clas
 }
 
 /**
- * Each day's connected rate on its own — that day's clickers over the signups
- * that existed by then — so a quiet day sits on the baseline and a busy one
- * stands out, instead of every day folding into a total that can only climb.
- * Same construction as Growth's RunSparkline: inline SVG, numbers in <title>
- * tooltips, colors through style because CSS var() only resolves in styles.
- * One series, so the title is the legend.
+ * A percentage per day, drawn as one filled line. Same construction as
+ * Growth's RunSparkline: inline SVG, numbers in <title> tooltips, colors
+ * through style because CSS var() only resolves in styles. One series, so the
+ * card's title is the legend.
+ *
+ * Points arrive already filtered of their null days: a day with nothing to
+ * divide by is a gap in the data, and interpolating across it would invent a
+ * number. `tint` is a color token name — both charts on this page are the same
+ * shape and differ only in hue.
  */
-function RateChart({ series }: { series: RatePoint[] }) {
-  const points = series.filter((p) => p.rate !== null) as (RatePoint & { rate: number })[];
+function DayRateChart({
+  points,
+  tint,
+  ariaLabel,
+}: {
+  points: { day: string; rate: number; title: string }[];
+  tint: string;
+  ariaLabel: string;
+}) {
   if (points.length === 0) return null;
 
   const W = 600;
@@ -76,17 +86,17 @@ function RateChart({ series }: { series: RatePoint[] }) {
       preserveAspectRatio="none"
       className="h-36 w-full"
       role="img"
-      aria-label="Connected rate over time"
+      aria-label={ariaLabel}
     >
       {/* Baseline at 0% — the one recessive gridline this needs. */}
       <line x1={0} y1={H - 4} x2={W} y2={H - 4} style={{ stroke: "rgb(var(--c-ink) / 0.12)", strokeWidth: 1 }} vectorEffect="non-scaling-stroke" />
       <polygon
         points={`0,${H - 4} ${line} ${W},${H - 4}`}
-        style={{ fill: "rgb(var(--c-mint-bright) / 0.12)" }}
+        style={{ fill: `rgb(var(--c-${tint}) / 0.12)` }}
       />
       <polyline
         points={line}
-        style={{ fill: "none", stroke: "rgb(var(--c-mint-bright))", strokeWidth: 2 }}
+        style={{ fill: "none", stroke: `rgb(var(--c-${tint}))`, strokeWidth: 2 }}
         strokeLinejoin="round"
         strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
@@ -102,10 +112,52 @@ function RateChart({ series }: { series: RatePoint[] }) {
           height={H}
           fill="transparent"
         >
-          <title>{`${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups clicked this day) · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`}</title>
+          <title>{p.title}</title>
         </rect>
       ))}
     </svg>
+  );
+}
+
+/**
+ * Each day's connected rate on its own — that day's clickers over the signups
+ * that existed by then — so a quiet day sits on the baseline and a busy one
+ * stands out, instead of every day folding into a total that can only climb.
+ */
+function RateChart({ series }: { series: RatePoint[] }) {
+  return (
+    <DayRateChart
+      tint="mint-bright"
+      ariaLabel="Connected rate over time"
+      points={series
+        .filter((p): p is RatePoint & { rate: number } => p.rate !== null)
+        .map((p) => ({
+          day: p.day,
+          rate: p.rate,
+          title: `${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups clicked this day) · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`,
+        }))}
+    />
+  );
+}
+
+/**
+ * Scheduling by signup cohort: each day is the accounts that signed up THAT
+ * day, and the share of them running a report on a cadence today. Days nobody
+ * signed up carry no rate and drop out entirely.
+ */
+function ScheduleChart({ series }: { series: SchedulePoint[] }) {
+  return (
+    <DayRateChart
+      tint="teal"
+      ariaLabel="Share of each day's signups scheduling a report"
+      points={series
+        .filter((p): p is SchedulePoint & { rate: number } => p.rate !== null)
+        .map((p) => ({
+          day: p.day,
+          rate: p.rate,
+          title: `${p.day} · ${p.rate}% scheduling (${p.scheduled} of the ${p.signups} account${p.signups === 1 ? "" : "s"} that signed up this day)`,
+        }))}
+    />
   );
 }
 
@@ -117,10 +169,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
 
   const period: Period = periodFrom(searchParams.p);
   const label = periodLabel(period);
-  const { stats, keyed, series, connected, degraded } = await conversionsReport(period);
+  const { stats, keyed, scheduled, series, scheduleSeries, connected, degraded } =
+    await conversionsReport(period);
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
   const today = new Date().toISOString().slice(0, 10);
+  // Days that had signups are the only ones the cohort chart can speak about.
+  const scheduleDays = scheduleSeries.filter((p) => p.rate !== null);
+  const cadence = scheduled.byInterval
+    .map((i) => `${i.projects.toLocaleString()} ${i.schedule}`)
+    .join(" · ");
 
   return (
     <div className="space-y-10">
@@ -254,6 +312,83 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         </div>
       </section>
 
+      {/* ---- Row 1c: the cadence rung ----------------------------------------
+          The one figure here that reads a STATE rather than an event: the
+          projects table says what the cadence is now and nothing records when
+          it became that, so the window scopes the SIGNUP COHORT, exactly as
+          the activation card above does. Onboarding has created projects on a
+          daily schedule since 2026-08-20, so for anyone newer than that this
+          rung measures "left it on", not "switched it on" — said plainly in
+          the hints, because a number near 100% otherwise reads as a triumph. */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Scheduled · keeps a report running on a cadence
+        </h3>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <StatCard
+            label="Scheduling rate"
+            value={scheduled.rate === null ? "—" : `${scheduled.rate}%`}
+            hint={
+              scheduled.cohortSize === 0
+                ? `nobody signed up in ${label}`
+                : `${scheduled.cohortScheduled.toLocaleString()} of the ${scheduled.cohortSize.toLocaleString()} accounts that signed up ${period === "all" ? "ever" : `in the ${label.replace("last ", "")}`} have a report on a schedule today`
+            }
+            accent="teal"
+          />
+          <StatCard
+            label="Scheduling accounts"
+            value={scheduled.allTime.toLocaleString()}
+            hint={
+              scheduled.rateAllTime === null
+                ? "nobody has signed up yet"
+                : `${scheduled.rateAllTime}% of all ${scheduled.totalUsers.toLocaleString()} signups · ${scheduled.projects.toLocaleString()} scheduled report${scheduled.projects === 1 ? "" : "s"} between them`
+            }
+            accent="mint"
+          />
+          <StatCard
+            label="Average cadence"
+            value={
+              scheduled.avgIntervalDays === null
+                ? "—"
+                : `${scheduled.avgIntervalDays} day${scheduled.avgIntervalDays === 1 ? "" : "s"}`
+            }
+            hint={
+              scheduled.avgIntervalDays === null
+                ? "nothing is scheduled yet"
+                : `mean gap between runs over ${scheduled.projects.toLocaleString()} scheduled report${scheduled.projects === 1 ? "" : "s"} · ${cadence} · all time`
+            }
+            accent="butter"
+          />
+        </div>
+      </section>
+
+      {/* ---- Row 1d: scheduling by signup cohort ------------------------------ */}
+      <Card>
+        <div className="flex flex-col px-5 pb-4 pt-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold text-ink">Scheduling rate by signup cohort</h3>
+            <span className="text-xs text-ink-faint">{label}</span>
+          </div>
+          {scheduleDays.length === 0 ? (
+            <p className="py-8 text-sm text-ink-faint">
+              Nobody signed up {period === "all" ? "yet" : "in this period"}, so there is no
+              cohort to draw.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3">
+                <ScheduleChart series={scheduleSeries} />
+              </div>
+              <p className="mt-3 text-xs tabular-nums text-ink-faint">
+                each day is that day&apos;s signups, and how many of them run a report on a
+                cadence today · hover for the counts · a low-volume day is one or two people, so
+                read the shape, not a single point
+              </p>
+            </>
+          )}
+        </div>
+      </Card>
+
       {/* ---- Row 2: the rate over time ---------------------------------------- */}
       <Card>
         <div className="flex flex-col px-5 pb-4 pt-5">
@@ -367,7 +502,14 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         time to first key count the accounts whose first key LANDED in it. A cohort rate can
         never exceed 100%; the obvious alternative (keys added over signups in the window)
         can, because someone who signed up in March and pasted a key today belongs to only one
-        of those two sets. On all time the two definitions coincide.{" "}
+        of those two sets. On all time the two definitions coincide. Scheduling is a state and
+        not an event — projects.schedule holds today&rsquo;s cadence and nothing records when it
+        was set — so it is read through signup cohorts too, and the chart is cohorts rather than
+        the stock curve it resembles: drawing &ldquo;what share had a schedule on that day&rdquo;
+        would mean rewinding a change log that only covers the dashboard toggle, which produces a
+        smooth line that is quietly wrong. Onboarding has started new projects on a daily
+        schedule since 2026-08-20, so a high rate among recent cohorts means the default was
+        kept, not that anyone went looking for the setting.{" "}
         <Link href="/admin/growth" className="underline">
           Back to growth
         </Link>
