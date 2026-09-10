@@ -47,20 +47,49 @@ vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => (e instanceof Error ? 
 // lib/data (React's cache(), server-runtime only) and the whole run stack,
 // none of which this seam needs. The error class is redefined here so the
 // route's instanceof check meets the same class the tests throw.
-vi.mock("@/lib/onboard", () => ({
-  OnboardError: class OnboardError extends Error {
+vi.mock("@/lib/onboard", () => {
+  class OnboardError extends Error {
     constructor(
       public code: "invalid",
       message: string,
     ) {
       super(message);
     }
-  },
-  onboardFromUrl: vi.fn(),
-  resolveOnboardingAccount: vi.fn(),
-  mintApiKey: vi.fn(),
-  serviceTrialMeter: vi.fn((_db: unknown, userId: string) => ({ for: userId })),
-}));
+  }
+  return {
+    OnboardError,
+    parseOnboardingCadence: (
+      rawSchedule: unknown,
+      rawInterval: unknown,
+      fallback: string,
+    ) => {
+      const schedules = ["off", "daily", "weekly", "custom"];
+      const schedule = rawSchedule ?? fallback;
+      if (typeof schedule !== "string" || !schedules.includes(schedule)) {
+        throw new OnboardError("invalid", `schedule must be one of ${schedules.join(", ")}`);
+      }
+      if (schedule !== "custom") {
+        return { schedule, scheduleIntervalDays: null };
+      }
+      if (
+        typeof rawInterval !== "number" ||
+        !Number.isInteger(rawInterval) ||
+        rawInterval < 1 ||
+        rawInterval > 90
+      ) {
+        throw new OnboardError(
+          "invalid",
+          "schedule_interval_days must be a whole number of days between 1 and 90",
+        );
+      }
+      return { schedule, scheduleIntervalDays: rawInterval };
+    },
+    onboardFromUrl: vi.fn(),
+    resolveOnboardingAccount: vi.fn(),
+    mintApiKey: vi.fn(),
+    serviceTrialMeter: vi.fn((_db: unknown, userId: string) => ({ for: userId })),
+  };
+});
 
 const admin = await import("@/lib/admin");
 const guards = await import("@/lib/api-guards");
@@ -129,7 +158,18 @@ describe("POST /api/v1/onboard — validation", () => {
   it("rejects an unknown schedule", async () => {
     const res = await POST(req({ url: "acme.com", schedule: "hourly" }));
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/Unknown schedule/);
+    expect((await res.json()).error).toMatch(/schedule must be one of/);
+    expect(onboard.onboardFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid custom intervals before starting onboarding", async () => {
+    for (const schedule_interval_days of [undefined, "14", 0, 1.5, 91]) {
+      const res = await POST(
+        req({ url: "acme.com", schedule: "custom", schedule_interval_days }),
+      );
+      expect(res.status).toBe(400);
+    }
+    expect(onboard.onboardFromUrl).not.toHaveBeenCalled();
   });
 
   it("rejects a sent topic with no prompts", async () => {
@@ -200,6 +240,21 @@ describe("POST /api/v1/onboard — into the caller's own account", () => {
       expect.objectContaining({ userId: "caller-1", action: "onboarding.completed" }),
     );
     expect(onboard.mintApiKey).not.toHaveBeenCalled();
+  });
+
+  it("accepts custom cadence and maps the public interval field", async () => {
+    const res = await POST(
+      req({
+        url: "acme.com",
+        schedule: "custom",
+        schedule_interval_days: 14,
+      }),
+    );
+    expect(res.status).toBe(202);
+    expect(vi.mocked(onboard.onboardFromUrl).mock.calls[0][0].input).toMatchObject({
+      schedule: "custom",
+      scheduleIntervalDays: 14,
+    });
   });
 
   it("answers 201 with the sweep settled, and relays a key refusal", async () => {

@@ -11,14 +11,8 @@ import {
   engineCoverage,
   type RouterCoverage,
 } from "@/lib/routers";
-import {
-  article,
-  CUSTOM_INTERVAL_MAX,
-  CUSTOM_INTERVAL_MIN,
-  SCHEDULE_LABELS,
-  SCHEDULES,
-} from "@/lib/utils";
-import type { Project, Provider, Schedule } from "@/lib/types";
+import { article } from "@/lib/utils";
+import type { Project, Provider } from "@/lib/types";
 
 // The answer engine is stored as a (provider, model) pair; the picker packs
 // both into one "provider:model" option value and unpacks on submit.
@@ -71,8 +65,6 @@ export default function ProjectForm({
     (project?.brand_domains ?? []).join(", "),
   );
   const [description, setDescription] = useState(project?.description ?? "");
-  const [schedule, setSchedule] = useState<Schedule>(project?.schedule ?? "off");
-  const [intervalDays, setIntervalDays] = useState<number>(project?.schedule_interval_days ?? 14);
   const [useWebSearch, setUseWebSearch] = useState(project?.use_web_search ?? true);
   const [engine, setEngine] = useState(
     project ? `${project.default_provider}:${project.default_model}` : DEFAULT_ENGINE,
@@ -143,10 +135,9 @@ export default function ProjectForm({
           brand_aliases: aliases,
           brand_domains: brandDomains,
           description,
-          schedule,
-          // Only meaningful for 'custom' - the route ignores it (and stores
-          // null) for every other schedule, so no clamping is needed here.
-          intervalDays,
+          // schedule/intervalDays deliberately omitted: cadence is set at
+          // onboarding and on the Runs page, not here. The route leaves both
+          // columns untouched when the body doesn't carry `schedule`.
           use_web_search: useWebSearch,
           default_provider,
           default_model,
@@ -213,58 +204,21 @@ export default function ProjectForm({
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <Label htmlFor="p-domains">Brand domains</Label>
-          <Input
-            id="p-domains"
-            value={brandDomains}
-            onChange={(e) => {
-              setBrandDomains(e.target.value);
-              setSaved(false);
-            }}
-            placeholder="acme.com, acme-guides.com"
-          />
-          <p className="mt-1.5 text-xs text-ink-faint">
-            Comma-separated, main domain first. Sources cited from any of these
-            count as yours. Include phantom sites for this brand.
-          </p>
-        </div>
-        <div>
-          <Label htmlFor="p-schedule">Monitoring schedule</Label>
-          <div className="flex items-center gap-2">
-            <Select
-              id="p-schedule"
-              value={schedule}
-              onChange={(e) => {
-                setSchedule(e.target.value as Schedule);
-                setSaved(false);
-              }}
-            >
-              {SCHEDULES.map((s) => (
-                <option key={s} value={s}>
-                  {SCHEDULE_LABELS[s]}
-                </option>
-              ))}
-            </Select>
-            {schedule === "custom" && (
-              <input
-                type="number"
-                id="p-schedule-interval"
-                aria-label="Days between runs"
-                min={CUSTOM_INTERVAL_MIN}
-                max={CUSTOM_INTERVAL_MAX}
-                value={intervalDays}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (Number.isFinite(next)) setIntervalDays(next);
-                  setSaved(false);
-                }}
-                className="w-16 rounded border border-ink/15 bg-paper px-2 py-1.5 text-sm text-ink"
-              />
-            )}
-          </div>
-        </div>
+      <div>
+        <Label htmlFor="p-domains">Brand domains</Label>
+        <Input
+          id="p-domains"
+          value={brandDomains}
+          onChange={(e) => {
+            setBrandDomains(e.target.value);
+            setSaved(false);
+          }}
+          placeholder="acme.com, acme-guides.com"
+        />
+        <p className="mt-1.5 text-xs text-ink-faint">
+          Comma-separated, main domain first. Sources cited from any of these
+          count as yours. Include phantom sites for this brand.
+        </p>
       </div>
 
       <div>

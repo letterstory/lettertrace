@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
@@ -215,9 +216,11 @@ export function Label({
 const fieldBase =
   "w-full rounded border border-ink/15 bg-surface px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint/70 transition focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/20";
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(fieldBase, className)} {...props} />;
-}
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function Input({ className, ...props }, ref) {
+    return <input ref={ref} className={cn(fieldBase, className)} {...props} />;
+  },
+);
 
 export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={cn(fieldBase, "min-h-[90px] resize-y", className)} {...props} />;

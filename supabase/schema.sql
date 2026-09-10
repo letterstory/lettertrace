@@ -442,12 +442,6 @@ alter table public.projects
 alter table public.projects
   add column if not exists results_seen_at timestamptz;
 
--- An earlier draft of this file allowed 'every_3_days'. It is gone; the
--- constraint below cannot be added while a row still holds it, so fold those
--- rows into the nearest surviving cadence (weekly never increases anyone's
--- spend). A no-op on any deployment that never ran that draft.
-update public.projects set schedule = 'weekly' where schedule = 'every_3_days';
-
 -- Widen the schedule allow-list with 'custom': any interval a user names, in
 -- days (see schedule_interval_days below). Safe to re-run.
 alter table public.projects drop constraint if exists projects_schedule_check;

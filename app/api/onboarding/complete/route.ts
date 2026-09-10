@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { setActiveProject } from "@/lib/data";
 import {
   firstSweep,
+  OnboardError,
+  parseOnboardingCadence,
   persistOnboarding,
   pickProjectEngine,
   sessionTrialMeter,
@@ -10,8 +12,7 @@ import {
 } from "@/lib/onboard";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
-import { CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN, SCHEDULES } from "@/lib/utils";
-import type { Project, Schedule } from "@/lib/types";
+import type { Project } from "@/lib/types";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -112,41 +113,18 @@ export async function POST(request: Request) {
     );
   }
 
-  // Cadence chosen on the onboarding CTA. Absent -> 'daily' rather than an
-  // error, so any client that doesn't send this field still gets the schedule
-  // this route used to hard-code. An explicit-but-wrong value is refused
-  // rather than coerced, same as PATCH /api/project/schedule.
-  const rawSchedule = body.schedule;
-  let schedule: Schedule = "daily";
-  if (rawSchedule !== undefined && rawSchedule !== null) {
-    if (typeof rawSchedule !== "string" || !SCHEDULES.includes(rawSchedule as Schedule)) {
-      return NextResponse.json(
-        { error: `schedule must be one of ${SCHEDULES.join(", ")}` },
-        { status: 400 },
-      );
+  // Absent remains daily for backwards compatibility with the dashboard
+  // wizard. The v1 one-shot flow uses the same parser with an "off" fallback.
+  // This route's body uses camelCase `intervalDays`, so the field name is
+  // passed through rather than string-rewritten out of the parser's message.
+  let cadence: ReturnType<typeof parseOnboardingCadence>;
+  try {
+    cadence = parseOnboardingCadence(body.schedule, body.intervalDays, "daily", "intervalDays");
+  } catch (error) {
+    if (error instanceof OnboardError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    schedule = rawSchedule as Schedule;
-  }
-
-  // Only 'custom' reads intervalDays; every other schedule carries its
-  // interval in its own name (see scheduleIntervalDays).
-  let schedule_interval_days: number | null = null;
-  if (schedule === "custom") {
-    const raw = body.intervalDays;
-    if (
-      typeof raw !== "number" ||
-      !Number.isInteger(raw) ||
-      raw < CUSTOM_INTERVAL_MIN ||
-      raw > CUSTOM_INTERVAL_MAX
-    ) {
-      return NextResponse.json(
-        {
-          error: `intervalDays must be a whole number of days between ${CUSTOM_INTERVAL_MIN} and ${CUSTOM_INTERVAL_MAX}`,
-        },
-        { status: 400 },
-      );
-    }
-    schedule_interval_days = raw;
+    throw error;
   }
 
   // Start the project on an engine this user can actually run — the user's
@@ -170,8 +148,8 @@ export async function POST(request: Request) {
       // onboarding CTA itself (validated above) instead of every project
       // silently starting on 'daily'. The Runs page control changes it any
       // time after.
-      schedule,
-      schedule_interval_days,
+      schedule: cadence.schedule,
+      schedule_interval_days: cadence.scheduleIntervalDays,
     })
     .select("*")
     .single();
@@ -198,8 +176,8 @@ export async function POST(request: Request) {
       topics: topics.length,
       competitors: competitors.length,
       brand_name,
-      schedule,
-      interval_days: schedule_interval_days,
+      schedule: cadence.schedule,
+      interval_days: cadence.scheduleIntervalDays,
     },
   });
 

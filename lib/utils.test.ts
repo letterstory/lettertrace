@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   article,
+  CUSTOM_INTERVAL_DEFAULT,
   duration,
   isScheduleDue,
+  normalizeCustomInterval,
+  parseCustomInterval,
   resolveRedirectBase,
   safePath,
   SCHEDULE_LABELS,
@@ -146,6 +149,29 @@ describe("SCHEDULES", () => {
   });
 });
 
+describe("custom interval input", () => {
+  it("strictly accepts only whole numeric days inside the API range", () => {
+    expect(parseCustomInterval(1)).toBe(1);
+    expect(parseCustomInterval(90)).toBe(90);
+    expect(parseCustomInterval(14)).toBe(14);
+  });
+
+  it("rejects missing, coerced, fractional, non-finite, and out-of-range values", () => {
+    for (const value of [undefined, null, "14", "", 1.5, 0, -1, 91, NaN, Infinity]) {
+      expect(parseCustomInterval(value)).toBeNull();
+    }
+  });
+
+  it("normalises editable drafts without turning an empty field into one day", () => {
+    expect(normalizeCustomInterval("", 30)).toBe(30);
+    expect(normalizeCustomInterval("nope", 30)).toBe(30);
+    expect(normalizeCustomInterval("1.9", 30)).toBe(1);
+    expect(normalizeCustomInterval("0", 30)).toBe(1);
+    expect(normalizeCustomInterval("120", 30)).toBe(90);
+    expect(normalizeCustomInterval("14")).toBe(CUSTOM_INTERVAL_DEFAULT);
+  });
+});
+
 describe("scheduleIntervalDays", () => {
   it("reads the interval out of the schedule's own name", () => {
     expect(scheduleIntervalDays("off", null)).toBeNull();
@@ -213,22 +239,28 @@ describe("isScheduleDue", () => {
     expect(isScheduleDue(project("custom", ago(3 * DAY), 3), NOW)).toBe(true);
   });
 
-  // The bug the grace window fixes: last_run_at is stamped at run FINISH, so a
-  // run that took a few minutes is that many minutes short of a full interval
-  // at the next 08:00 tick — it missed that tick, then missed the day after too
-  // because last_run_at hadn't moved. Six hours is well under the 24h tick
-  // spacing, so it can only pull a due date earlier, never fire twice.
-  it("still fires a daily schedule whose last run finished just under a day ago", () => {
-    expect(isScheduleDue(project("daily", ago(DAY - 5 * 60 * 1000)), NOW)).toBe(true);
-    expect(isScheduleDue(project("weekly", ago(7 * DAY - 20 * 60 * 1000)), NOW)).toBe(true);
+  // The cron reads the clock once before a sequential sweep
+  // (app/api/cron/run/route.ts), so a run starts minutes after the `now` the
+  // NEXT tick is judged against; an exact 24h check was short by the
+  // project's queue position and halved every daily project's cadence except
+  // the first in the sweep. Day granularity fixes this without a grace
+  // constant: whatever time a project's run started, it's due again the
+  // moment the calendar has turned over `intervalDays` times.
+  it("fires at the next day's tick however late in the sweep the last run started", () => {
+    expect(isScheduleDue(project("daily", "2026-09-08T08:06:30Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("daily", "2026-09-08T23:59:00Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("weekly", "2026-09-02T08:06:30Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("custom", "2026-09-06T08:06:30Z", 3), NOW)).toBe(true);
   });
 
-  it("does not let the grace window fire the same interval twice", () => {
-    // A run that finished at this tick must not be due again 2h later; the
-    // grace only reaches back 6h from a full interval, not into one.
-    expect(isScheduleDue(project("daily", ago(HOUR)), NOW)).toBe(false);
-    expect(isScheduleDue(project("daily", ago(6 * HOUR)), NOW)).toBe(false);
-    expect(isScheduleDue(project("daily", ago(18 * HOUR)), NOW)).toBe(true);
+  it("cannot fire the same schedule twice in one UTC day", () => {
+    expect(isScheduleDue(project("daily", "2026-09-09T00:00:00Z"), NOW)).toBe(false);
+    expect(isScheduleDue(project("daily", "2026-09-09T08:00:00Z"), NOW)).toBe(false);
+  });
+
+  it("counts the day boundary crossed, not the hours elapsed", () => {
+    expect(isScheduleDue(project("weekly", "2026-09-03T00:01:00Z"), NOW)).toBe(false);
+    expect(isScheduleDue(project("custom", "2026-09-07T23:59:00Z", 3), NOW)).toBe(false);
   });
 
   it("refuses a 'custom' row with no interval rather than guessing one", () => {

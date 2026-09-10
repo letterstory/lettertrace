@@ -14,7 +14,11 @@ import {
 import { Badge, Button, Card, CardBody, Input, Label, Spinner, Textarea } from "@/components/ui";
 import { CadencePicker, type OnboardingCadence } from "@/components/dashboard/cadence-picker";
 import { brandNameFromSite, hostOf } from "@/lib/brand-name";
-import { cn } from "@/lib/utils";
+import {
+  cn,
+  CUSTOM_INTERVAL_DEFAULT,
+  normalizeCustomInterval,
+} from "@/lib/utils";
 
 interface Topic {
   name: string;
@@ -62,7 +66,7 @@ export function Onboarding() {
   // "Custom" is a day count, not off. See CadencePicker.
   const [scheduleOn, setScheduleOn] = useState(true);
   const [cadence, setCadence] = useState<OnboardingCadence>("daily");
-  const [customDays, setCustomDays] = useState(14);
+  const [customDays, setCustomDays] = useState(CUSTOM_INTERVAL_DEFAULT);
 
   // --- Step 1 -> suggest -----------------------------------------------------
   // Doubles as the Retry handler: re-submitting is the whole recovery.
@@ -204,6 +208,11 @@ export function Onboarding() {
 
   // --- Step 2 -> complete + run ----------------------------------------------
   async function handleStart() {
+    const submittedCustomDays = normalizeCustomInterval(
+      customDays,
+      CUSTOM_INTERVAL_DEFAULT,
+    );
+    if (submittedCustomDays !== customDays) setCustomDays(submittedCustomDays);
     const cleaned = topics.map((t) => ({
       name: t.name.trim(),
       // Blank question rows are fine — they're just unused inputs, so drop
@@ -257,7 +266,8 @@ export function Onboarding() {
           brand_domains: hostOf(domain) ? [hostOf(domain)] : [],
           description: description.trim() || null,
           schedule: scheduleOn ? cadence : "off",
-          intervalDays: scheduleOn && cadence === "custom" ? customDays : null,
+          intervalDays:
+            scheduleOn && cadence === "custom" ? submittedCustomDays : null,
           topics: cleaned,
           // Blank rows are just unused inputs, so drop them rather than
           // blocking the submit — a nameless competitor holds nothing else.

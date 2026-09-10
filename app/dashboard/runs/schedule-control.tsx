@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
-import { Card, CardBody, Select } from "@/components/ui";
+import { Card, CardBody, Input, Select } from "@/components/ui";
 import {
+  CUSTOM_INTERVAL_DEFAULT,
   CUSTOM_INTERVAL_MAX,
   CUSTOM_INTERVAL_MIN,
+  normalizeCustomInterval,
   SCHEDULE_LABELS,
   SCHEDULES,
   scheduleLabel,
@@ -33,18 +35,36 @@ export function ScheduleControl({
 }) {
   const router = useRouter();
   const [schedule, setSchedule] = useState<Schedule>(saved);
-  // Kept separately from `schedule` because picking 'custom' in the select and
-  // typing its interval are two different edits, made in either order, and
-  // only one of them should trigger the save.
-  const [intervalDays, setIntervalDays] = useState<number>(savedIntervalDays ?? 14);
+  const initialInterval = savedIntervalDays ?? CUSTOM_INTERVAL_DEFAULT;
+  // A string draft lets the user clear and replace the number without turning
+  // the transient empty field into a one-day schedule.
+  const [intervalDraft, setIntervalDraft] = useState(String(initialInterval));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const intervalInput = useRef<HTMLInputElement>(null);
+  const savingRef = useRef(false);
+  const confirmed = useRef({ schedule: saved, intervalDays: initialInterval });
+
+  useEffect(() => {
+    if (savingRef.current) return;
+    const intervalDays = savedIntervalDays ?? CUSTOM_INTERVAL_DEFAULT;
+    confirmed.current = { schedule: saved, intervalDays };
+    setSchedule(saved);
+    setIntervalDraft(String(intervalDays));
+  }, [saved, savedIntervalDays]);
 
   async function save(next: Schedule, nextIntervalDays: number) {
-    const previous = schedule;
-    const previousIntervalDays = intervalDays;
+    if (savingRef.current) return;
+    const previous = confirmed.current;
+    const unchanged =
+      next === previous.schedule &&
+      (next !== "custom" || nextIntervalDays === previous.intervalDays);
+
     setSchedule(next);
-    if (next === "custom") setIntervalDays(nextIntervalDays);
+    if (next === "custom") setIntervalDraft(String(nextIntervalDays));
+    if (unchanged) return;
+
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -60,22 +80,41 @@ export function ScheduleControl({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) {
-        setSchedule(previous);
-        setIntervalDays(previousIntervalDays);
+        setSchedule(previous.schedule);
+        setIntervalDraft(String(previous.intervalDays));
         setError(data?.error ?? "Couldn't save the schedule.");
         return;
       }
+      confirmed.current = {
+        schedule: next,
+        intervalDays: next === "custom" ? nextIntervalDays : CUSTOM_INTERVAL_DEFAULT,
+      };
       router.refresh();
     } catch {
-      setSchedule(previous);
-      setIntervalDays(previousIntervalDays);
+      setSchedule(previous.schedule);
+      setIntervalDraft(String(previous.intervalDays));
       setError("Network error, please try again.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
 
+  function commitCustom() {
+    if (savingRef.current || schedule !== "custom") return;
+    const normalized = normalizeCustomInterval(
+      intervalDraft,
+      confirmed.current.intervalDays,
+    );
+    setIntervalDraft(String(normalized));
+    void save("custom", normalized);
+  }
+
   const scheduled = schedule !== "off";
+  const intervalDays = normalizeCustomInterval(
+    intervalDraft,
+    confirmed.current.intervalDays,
+  );
   // The cron runs own-key projects, and trial projects while the allowance
   // lasts ("cadence from the onset"). Everything else it skips — that's the
   // state worth shouting about.
@@ -135,13 +174,37 @@ export function ScheduleControl({
             {error && <p className="text-xs text-terracotta">{error}</p>}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2"
+          onBlur={(event) => {
+            // Moving between the select and number input stays within one edit.
+            // Commit only when focus leaves the whole control.
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            commitCustom();
+          }}
+        >
           <Select
             aria-label="Monitoring schedule"
             value={schedule}
             disabled={saving}
-            onChange={(e) => save(e.target.value as Schedule, intervalDays)}
-            className="w-auto"
+            onChange={(e) => {
+              const next = e.target.value as Schedule;
+              if (next === "custom") {
+                setSchedule(next);
+                setError(null);
+                requestAnimationFrame(() => {
+                  intervalInput.current?.focus();
+                  intervalInput.current?.select();
+                });
+                return;
+              }
+              void save(next, intervalDays);
+            }}
+            // w-auto doesn't reliably grow a select styled with
+            // appearance-none to fit its longest option; "Every N days" (the
+            // 'custom' label) was clipped. Sized to the longest label plus
+            // the arrow padding fieldBase reserves.
+            className="w-auto min-w-[10rem]"
           >
             {SCHEDULES.map((s) => (
               <option key={s} value={s}>
@@ -150,27 +213,23 @@ export function ScheduleControl({
             ))}
           </Select>
           {schedule === "custom" && (
-            <input
+            <Input
+              ref={intervalInput}
               type="number"
               aria-label="Days between runs"
               min={CUSTOM_INTERVAL_MIN}
               max={CUSTOM_INTERVAL_MAX}
-              value={intervalDays}
+              step={1}
+              value={intervalDraft}
               disabled={saving}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next)) setIntervalDays(next);
+              onChange={(e) => setIntervalDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
               }}
-              // Saved on blur, not per keystroke: typing "14" would otherwise
-              // PATCH "1" first and schedule a daily run for a moment.
-              onBlur={(e) => {
-                const clamped = Math.min(
-                  CUSTOM_INTERVAL_MAX,
-                  Math.max(CUSTOM_INTERVAL_MIN, Number(e.target.value) || CUSTOM_INTERVAL_MIN),
-                );
-                save("custom", clamped);
-              }}
-              className="w-16 rounded border border-ink/15 bg-paper px-2 py-1.5 text-sm text-ink"
+              className="w-16 bg-paper px-2 py-1.5"
             />
           )}
         </div>

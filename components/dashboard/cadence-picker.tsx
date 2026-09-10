@@ -1,7 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Clock } from "lucide-react";
-import { cn, CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN } from "@/lib/utils";
+import { Input } from "@/components/ui";
+import {
+  cn,
+  CUSTOM_INTERVAL_MAX,
+  CUSTOM_INTERVAL_MIN,
+  normalizeCustomInterval,
+  SCHEDULE_LABELS,
+  SCHEDULES,
+} from "@/lib/utils";
+import type { Schedule } from "@/lib/types";
 
 /**
  * Controlled cadence control: a schedule on/off switch plus a
@@ -12,13 +22,17 @@ import { cn, CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN } from "@/lib/utils";
  * defaulting to one and hiding in Settings.
  */
 
-export type OnboardingCadence = "daily" | "weekly" | "custom";
+export type OnboardingCadence = Exclude<Schedule, "off">;
 
-const PILLS: { value: OnboardingCadence; label: string }[] = [
-  { value: "daily", label: "Daily" },
-  { value: "weekly", label: "Weekly" },
-  { value: "custom", label: "Custom" },
-];
+const ONBOARDING_CADENCES = SCHEDULES.filter(
+  (schedule): schedule is OnboardingCadence => schedule !== "off",
+);
+
+const SHORT_LABELS: Record<OnboardingCadence, string> = {
+  daily: SCHEDULE_LABELS.daily,
+  weekly: SCHEDULE_LABELS.weekly,
+  custom: "Custom",
+};
 
 export function CadencePicker({
   enabled,
@@ -38,6 +52,19 @@ export function CadencePicker({
   disabled?: boolean;
 }) {
   const pillsDisabled = disabled || !enabled;
+  // Keep the editable string local so clearing the field is a harmless draft,
+  // not Number("") = 0 leaking into the parent's valid numeric state.
+  const [customDraft, setCustomDraft] = useState(String(customDays));
+
+  useEffect(() => {
+    setCustomDraft(String(customDays));
+  }, [customDays]);
+
+  function commitCustomDraft() {
+    const normalized = normalizeCustomInterval(customDraft, customDays);
+    setCustomDraft(String(normalized));
+    if (normalized !== customDays) onCustomDaysChange(normalized);
+  }
 
   return (
     <div className="rounded border border-ink/10 bg-paper-shade/40 p-4">
@@ -54,7 +81,7 @@ export function CadencePicker({
           disabled={disabled}
           onClick={() => onEnabledChange(!enabled)}
           className={cn(
-            "relative inline-flex h-6 w-11 shrink-0 items-center rounded transition disabled:opacity-50",
+            "relative inline-flex h-6 w-11 shrink-0 items-center rounded transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
             enabled ? "bg-terracotta" : "bg-ink/15",
           )}
         >
@@ -69,39 +96,44 @@ export function CadencePicker({
 
       <div className="mt-3 flex flex-wrap items-center gap-2 pl-6">
         <div className="flex items-center gap-1 rounded border border-ink/10 bg-surface p-1">
-          {PILLS.map((p) => (
+          {ONBOARDING_CADENCES.map((value) => (
             <button
-              key={p.value}
+              key={value}
               type="button"
-              aria-pressed={cadence === p.value}
+              aria-pressed={cadence === value}
               disabled={pillsDisabled}
-              onClick={() => onCadenceChange(p.value)}
+              onClick={() => onCadenceChange(value)}
               className={cn(
-                "rounded-sm px-2.5 py-1 text-xs transition disabled:opacity-50",
-                cadence === p.value
+                "rounded-sm px-2.5 py-1 text-xs transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40",
+                cadence === value
                   ? "bg-ink/[0.08] font-medium text-ink"
                   : "text-ink-faint hover:text-ink-soft",
               )}
             >
-              {p.label}
+              {SHORT_LABELS[value]}
             </button>
           ))}
         </div>
         {cadence === "custom" && (
           <span className="flex items-center gap-1.5 text-sm text-ink-faint">
             every
-            <input
+            <Input
               type="number"
               aria-label="Days between runs"
               min={CUSTOM_INTERVAL_MIN}
               max={CUSTOM_INTERVAL_MAX}
-              value={customDays}
+              step={1}
+              value={customDraft}
               disabled={pillsDisabled}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next)) onCustomDaysChange(next);
+              onChange={(e) => setCustomDraft(e.target.value)}
+              onBlur={commitCustomDraft}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
               }}
-              className="w-16 rounded border border-ink/15 bg-paper px-2 py-1.5 text-sm text-ink disabled:opacity-50"
+              className="w-16 bg-paper px-2 py-1.5 disabled:opacity-50"
             />
             days
           </span>

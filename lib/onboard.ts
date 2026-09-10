@@ -38,6 +38,7 @@ import { scrapeDomain } from "@/lib/scrape";
 import { brandNameFromSite } from "@/lib/brand-name";
 import { suggestFromSite, humanError } from "@/lib/llm";
 import { normalizeCompetitorList, type CompetitorInput } from "@/lib/competitors";
+import { customIntervalError, parseCustomInterval, SCHEDULES } from "@/lib/utils";
 import type { Project, Provider, Schedule } from "@/lib/types";
 
 // ------------------------------------------------------------------
@@ -430,6 +431,33 @@ export class OnboardError extends Error {
   }
 }
 
+export function parseOnboardingCadence(
+  rawSchedule: unknown,
+  rawIntervalDays: unknown,
+  fallback: Schedule,
+  // The public v1 API uses the snake_case column name; the dashboard's
+  // camelCase-bodied routes pass their own field name so the 400 names the
+  // key the caller actually sent instead of the internal one.
+  intervalField = "schedule_interval_days",
+): { schedule: Schedule; scheduleIntervalDays: number | null } {
+  let schedule = fallback;
+  if (rawSchedule !== undefined && rawSchedule !== null) {
+    if (typeof rawSchedule !== "string" || !SCHEDULES.includes(rawSchedule as Schedule)) {
+      throw new OnboardError("invalid", `schedule must be one of ${SCHEDULES.join(", ")}`);
+    }
+    schedule = rawSchedule as Schedule;
+  }
+
+  if (schedule !== "custom") {
+    return { schedule, scheduleIntervalDays: null };
+  }
+  const scheduleIntervalDays = parseCustomInterval(rawIntervalDays);
+  if (scheduleIntervalDays === null) {
+    throw new OnboardError("invalid", customIntervalError(intervalField));
+  }
+  return { schedule, scheduleIntervalDays };
+}
+
 export interface OnboardInput {
   url: string;
   brandName?: string | null;
@@ -444,7 +472,9 @@ export interface OnboardInput {
   competitors?: unknown;
   /** API onboarding defaults to "off": programmatic callers orchestrate their
    *  own cadence. The dashboard wizard starts daily. */
-  schedule?: Schedule;
+  schedule?: unknown;
+  /** Required, as a whole number from 1–90, when schedule is "custom". */
+  scheduleIntervalDays?: unknown;
   /** Run the first sweep (default true). */
   run?: boolean;
   /** Return once the run rows exist (default true for the API). */
@@ -504,6 +534,14 @@ export async function onboardFromUrl(opts: {
   context: RunContext;
 }): Promise<OnboardOutcome> {
   const { supabase, userId, meter, input } = opts;
+
+  // Validate before the site read or suggestion call: a malformed cadence
+  // must not spend scrape credits or metered model tokens before being refused.
+  const cadence = parseOnboardingCadence(
+    input.schedule,
+    input.scheduleIntervalDays,
+    "off",
+  );
 
   const host = hostOfUrl(input.url);
   if (!host) throw new OnboardError("invalid", "That doesn't look like a valid URL.");
@@ -609,7 +647,8 @@ export async function onboardFromUrl(opts: {
       description,
       default_provider: engine.provider,
       default_model: engine.model,
-      schedule: input.schedule ?? "off",
+      schedule: cadence.schedule,
+      schedule_interval_days: cadence.scheduleIntervalDays,
     })
     .select("*")
     .single();

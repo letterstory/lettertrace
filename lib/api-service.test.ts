@@ -204,7 +204,18 @@ describe("projectSummary", () => {
       id: "proj-1",
       brand_name: "Credal",
       default_provider: "anthropic",
+      schedule_interval_days: null,
     });
+  });
+
+  it("keeps the number attached to a custom schedule", () => {
+    expect(
+      projectSummary({
+        ...PROJECT,
+        schedule: "custom",
+        schedule_interval_days: 14,
+      }),
+    ).toMatchObject({ schedule: "custom", schedule_interval_days: 14 });
   });
 });
 
@@ -589,6 +600,7 @@ describe("triggerRunForProject", () => {
       competitors: [],
       attribution: {} as never,
       startedMs: 0,
+      startedAt: "1970-01-01T00:00:00.000Z",
     });
     let finish!: (r: typeof COMPLETED) => void;
     vi.mocked(resumeRun).mockReturnValue(

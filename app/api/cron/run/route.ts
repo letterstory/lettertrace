@@ -80,9 +80,10 @@ async function sweepAndRun(span: Span) {
       // project's grounding survives the route.
       //
       // Scheduled runs execute on the user's own key, or on the trial while
-      // its allowance lasts — "cadence from the onset": onboarding starts
-      // every project on a daily schedule, and the trial funds the beginning.
-      // The same atomic gate as manual runs applies, via the service-scoped
+      // its allowance lasts — "cadence from the onset": onboarding defaults
+      // to daily but lets the user pick the cadence up front, and the trial
+      // funds the beginning either way. The same atomic gate as manual runs
+      // applies, via the service-scoped
       // RPC (auth.uid() doesn't exist here); when the allowance is out — or
       // the RPC isn't applied to this database yet — the consume returns
       // false and the project is skipped, exactly as it always was.

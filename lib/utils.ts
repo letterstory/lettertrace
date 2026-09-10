@@ -154,6 +154,40 @@ export const SCHEDULES = Object.keys(SCHEDULE_LABELS) as Schedule[];
 // interval that reads as scheduled and effectively never fires.
 export const CUSTOM_INTERVAL_MIN = 1;
 export const CUSTOM_INTERVAL_MAX = 90;
+export const CUSTOM_INTERVAL_DEFAULT = 14;
+
+/** Strict parser for values received across an API boundary. Browser controls
+ * normalise their drafts before sending; direct callers get the same rejection
+ * policy everywhere instead of route-specific coercion or defaults. */
+export function parseCustomInterval(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= CUSTOM_INTERVAL_MIN &&
+    value <= CUSTOM_INTERVAL_MAX
+    ? value
+    : null;
+}
+
+export function customIntervalError(field = "intervalDays"): string {
+  return `${field} must be a whole number of days between ${CUSTOM_INTERVAL_MIN} and ${CUSTOM_INTERVAL_MAX}`;
+}
+
+/** Turn an editable number-input draft into a valid interval. Empty or
+ * non-numeric drafts restore the caller's previous valid value; numeric drafts
+ * are truncated to whole days and clamped to the supported range. */
+export function normalizeCustomInterval(
+  value: string | number,
+  previous = CUSTOM_INTERVAL_DEFAULT,
+): number {
+  if (value === "") return previous;
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return previous;
+  return Math.min(
+    CUSTOM_INTERVAL_MAX,
+    Math.max(CUSTOM_INTERVAL_MIN, Math.trunc(numeric)),
+  );
+}
 
 /**
  * Days between runs, or null when nothing is scheduled. The single place a
@@ -184,13 +218,8 @@ export function scheduleIntervalDays(
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// last_run_at is stamped at run FINISH (lib/engine.ts), not at the tick that
-// started it, so a run that took even a few minutes is that many minutes
-// short of a full interval at the next 08:00 tick - and misses it, then misses
-// the day after too since last_run_at still hasn't moved. Six hours is well
-// under a day (the cron's tick spacing), so this can only ever pull a due
-// date earlier - it can never make the same interval fire twice in one cycle.
-const SCHEDULE_GRACE_MS = 6 * 60 * 60 * 1000;
+/** The UTC calendar day a timestamp falls in — whole days since the epoch. */
+const utcDay = (ms: number) => Math.floor(ms / DAY_MS);
 
 /**
  * Whether a project's schedule has come due, as of `now`. The cron's whole
@@ -198,6 +227,19 @@ const SCHEDULE_GRACE_MS = 6 * 60 * 60 * 1000;
  * this repo's node-env tests can call directly — that route imports
  * lib/supabase/server, which pulls in React's cache() and can't be imported
  * outside a Next.js runtime.
+ *
+ * Compares whole UTC days turned over, not elapsed milliseconds. The cron
+ * reads the clock once before a sequential sweep (app/api/cron/run/route.ts),
+ * so a project's run starts minutes after the `now` the NEXT tick is judged
+ * against — an exact 24h check is short by the project's queue position and
+ * skips it, so a project that started 6m30s into a sweep was 23h53m old at
+ * the next tick and a "daily" cadence became every other day for every
+ * project but the first in the queue. Day granularity is immune to queue
+ * position, run duration and cron jitter alike, and cannot fire the same
+ * schedule twice in a day (0 >= 1 is false). It does mean a manual run late
+ * in the day makes the next morning's tick due only a few hours later —
+ * accepted, since the alternative (a duration-based grace) is what produced
+ * the every-other-day bug this replaces.
  */
 export function isScheduleDue(
   project: Pick<Project, "schedule" | "schedule_interval_days" | "last_run_at">,
@@ -211,7 +253,7 @@ export function isScheduleDue(
   // is a belt on top of that suspenders, not the primary guard.
   if (!intervalDays) return false;
   const last = new Date(project.last_run_at).getTime();
-  return now - last >= intervalDays * DAY_MS - SCHEDULE_GRACE_MS;
+  return utcDay(now) - utcDay(last) >= intervalDays;
 }
 
 /** SCHEDULE_LABELS plus the actual number for 'custom' (e.g. "Every 14 days"),

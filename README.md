@@ -268,7 +268,7 @@ Router keys are encrypted at rest exactly like provider keys, and resolution ord
 
 ## Scheduled monitoring
 
-Set a project's schedule to **Daily**, **Weekly**, or a **custom** number of days (1–90) in Settings — or, for a new account, at the end of onboarding — then hit the cron endpoint on an interval:
+Set a project's schedule to **Daily**, **Weekly**, or a **custom** number of days (1–90) from the Runs page — or, for a new account, at the end of onboarding — then hit the cron endpoint on an interval:
 
 ```bash
 curl -X POST https://your-app.com/api/cron/run \
@@ -276,6 +276,12 @@ curl -X POST https://your-app.com/api/cron/run \
 ```
 
 The endpoint uses the Supabase **service role** to find due projects across all users, resolves each owner's own credential — a provider key or a [router key](#llm-routers-one-key-several-assistants) — and runs them. Scheduled runs are strictly self-funded: an owner on the free trial is skipped rather than spending the operator's allowance unattended. Only requests with the correct `CRON_SECRET` are accepted.
+
+Cadence counts whole **calendar days** (UTC) since the previous run's **start**
+time, so neither how long a model takes to answer nor a project's position in
+the nightly sweep can make it miss the next tick. One edge worth knowing: a
+manual run late in the day starts a fresh interval that turns over again at
+the very next morning's tick, a few hours later rather than a full day on.
 
 - **Vercel:** [`vercel.json`](./vercel.json) registers a daily cron. Set `CRON_SECRET` in your Vercel env, Vercel automatically sends it as the `Authorization` bearer.
 - **Anything else:** a system crontab, GitHub Actions, or any scheduler that can send an authenticated HTTP request works.
@@ -294,7 +300,9 @@ Set in your environment:
 While a user has free runs left and no key of their own, monitoring runs and variation generation use the shared key — whether they start from the dashboard, the scheduler, the REST API, MCP, or the one-shot [onboarding endpoint](#onboarding-a-url-in-one-call). Completed runs are counted on `profiles.trial_runs_used` (token spend is also recorded on `profiles.trial_tokens_used` so you can watch cost). A banner in the dashboard shows how many free runs are left; once they're gone, data collection stops with a clear prompt (and optional video) to add their own key. Adding a key removes the limit entirely: the owner's own provider or router key always beats the trial, so an organization set up on the free runs hands over to the owner's key the moment they add one, with no transfer step.
 
 
-> After upgrading, re-run `supabase/schema.sql`. It adds the `project_members`
+> Before deploying an upgrade, re-run `supabase/schema.sql`. Apply the schema
+> before the application code: project writes include columns introduced here
+> as soon as the new code is live. It adds the `project_members`
 > and `project_invites` tables plus the `can_access_project` / `is_project_owner`
 > helpers behind [Teams](#teams) — which every project-scoped RLS policy now
 > calls, so an older deployment keeps single-person behaviour until it is
@@ -519,6 +527,9 @@ curl -X POST https://your-app.com/api/v1/onboard \
   -d '{"url": "acme.io", "topics": [{"name": "CRM", "prompts": ["best crm for startups"]}], "schedule": "weekly"}'
 curl -X POST https://your-app.com/api/v1/onboard \
   -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
+  -d '{"url": "acme.io", "schedule": "custom", "schedule_interval_days": 14}'
+curl -X POST https://your-app.com/api/v1/onboard \
+  -H "Authorization: Bearer lt_live_..." -H "Content-Type: application/json" \
   -d '{"url": "acme.io", "run": false}'
 ```
 
@@ -530,7 +541,7 @@ curl -X POST https://your-app.com/api/v1/onboard \
   -d '{"url": "acme.io", "brand_name": "Acme", "email": "jo@acme.io", "key": {"name": "Letterbrace"}}'
 ```
 
-The response carries `project`, `site` (what was read), `suggestion`, `saved` counts, `runs` (each with `keySource`), `trial` (used / limit / remaining), and — for a transfer — `account` and `api_key`. `needsKey` + `keyMessage` explain a sweep that could not start; `sweep_skipped: "no_prompts"` means nothing was suggested and nothing was sent to ask.
+The response carries `project`, `site` (what was read), `suggestion`, `saved` counts, `runs` (each with `keySource`), `trial` (used / limit / remaining), and — for a transfer — `account` and `api_key`. Project summaries include `schedule_interval_days` (`null` unless `schedule` is `custom`). `needsKey` + `keyMessage` explain a sweep that could not start; `sweep_skipped: "no_prompts"` means nothing was suggested and nothing was sent to ask.
 
 The run report carries four blocks. Read them in this order:
 
@@ -744,7 +755,9 @@ values
 Notes:
 
 - API-triggered runs are **BYOK-only** — the account must hold its own credential, either a provider key or a [router key](#llm-routers-one-key-several-assistants); free-trial runs stay dashboard-only. Either can be set over the API too (`PUT /api/v1/keys/<provider>`, `PUT /api/v1/router-keys/<router>`, or `lettertrace keys set` / `routers set`), so an agent never has to hand the user back to the browser mid-setup.
-- Projects created via the API start with `schedule: "off"` — trigger runs explicitly (or flip the schedule in the dashboard).
+- Projects created via `POST /api/v1/projects` start with `schedule: "off"`.
+  The one-shot `/api/v1/onboard` endpoint may instead receive `schedule`, plus
+  `schedule_interval_days` when that schedule is `custom`.
 - API keys grant access to all of the account's organizations. Revoke them anytime from Settings.
 - Requires `SUPABASE_SERVICE_ROLE_KEY` (the same variable scheduled runs use), since API-key requests carry no browser session.
 - OAuth tokens are scoped and audience-bound; a classic `lt_live_` API key stays full-access across all of the account's organizations. Revoke either anytime (API keys from Settings; OAuth grants via `/api/oauth/revoke`).

@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
-import { CUSTOM_INTERVAL_MAX, CUSTOM_INTERVAL_MIN, SCHEDULES } from "@/lib/utils";
+import { customIntervalError, parseCustomInterval, SCHEDULES } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
 
 // Schedule-only write, so the Runs page can offer the toggle where people
@@ -43,20 +43,13 @@ export async function PATCH(request: Request) {
   let intervalDays: number | null = null;
   if (schedule === "custom") {
     const raw = (body as { intervalDays?: unknown } | null)?.intervalDays;
-    if (
-      typeof raw !== "number" ||
-      !Number.isInteger(raw) ||
-      raw < CUSTOM_INTERVAL_MIN ||
-      raw > CUSTOM_INTERVAL_MAX
-    ) {
+    intervalDays = parseCustomInterval(raw);
+    if (intervalDays === null) {
       return NextResponse.json(
-        {
-          error: `intervalDays must be a whole number of days between ${CUSTOM_INTERVAL_MIN} and ${CUSTOM_INTERVAL_MAX}`,
-        },
+        { error: customIntervalError() },
         { status: 400 },
       );
     }
-    intervalDays = raw;
   }
 
   try {
