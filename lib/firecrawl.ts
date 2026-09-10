@@ -12,10 +12,16 @@
 
 const API_URL = "https://api.firecrawl.dev/v2/scrape";
 
-// One scrape sits inside /api/onboarding/suggest, which has 60s total to also
-// run an LLM call. 30s leaves room for that; past it the fallback reader is a
-// better use of the remaining budget than waiting longer.
-const TIMEOUT_MS = 30_000;
+// One scrape sits inside /api/onboarding/suggest, whose whole budget is a 60s
+// Vercel function and whose model call alone is allowed 35s
+// (SUGGEST_DEADLINE_MS). The built-in reader that runs after a Firecrawl
+// failure has 10s of its own, so the two readers together must stay under 25s
+// for the route to finish inside its function limit in the worst case. 15s is
+// also plenty for a page that Firecrawl CAN render: live reads on 2026-09-09
+// took 1.9-7.0s. The one read that ran the old 30s timeout out was against a
+// site answering 503, which the fallback reader then reported in 0.4s — the
+// user waited half a minute to be told their site was down.
+const TIMEOUT_MS = 15_000;
 
 // Shared with lib/scrape.ts so both readers apply the same floor and the user
 // sees one phrasing regardless of which one ran. Under this much text the model
