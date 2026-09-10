@@ -9,6 +9,7 @@ import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { duration, timeAgo } from "@/lib/utils";
 import { PeriodSelect } from "../period-select";
+import { DayRateChart } from "./day-rate-chart";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -44,97 +45,22 @@ function ColumnHeader({ children, className }: { children: React.ReactNode; clas
 }
 
 /**
- * A percentage per day, drawn as one filled line. Same construction as
- * Growth's RunSparkline: inline SVG, numbers in <title> tooltips, colors
- * through style because CSS var() only resolves in styles. One series, so the
- * card's title is the legend.
- *
- * Points arrive already filtered of their null days: a day with nothing to
- * divide by is a gap in the data, and interpolating across it would invent a
- * number. `tint` is a color token name — both charts on this page are the same
- * shape and differ only in hue.
- */
-function DayRateChart({
-  points,
-  tint,
-  ariaLabel,
-}: {
-  points: { day: string; rate: number; title: string }[];
-  tint: string;
-  ariaLabel: string;
-}) {
-  if (points.length === 0) return null;
-
-  const W = 600;
-  const H = 110;
-  const PAD_TOP = 8;
-  const max = Math.max(0.1, ...points.map((p) => p.rate));
-  const x = (i: number) => (points.length === 1 ? W / 2 : (i / (points.length - 1)) * W);
-  const y = (rate: number) => H - 4 - (rate / max) * (H - 4 - PAD_TOP);
-  // One point can't make a line, so it becomes a flat one edge to edge — and
-  // the fill reuses these same coordinates so it always sits under the line.
-  const linePoints =
-    points.length === 1
-      ? [`0,${y(points[0].rate).toFixed(1)}`, `${W},${y(points[0].rate).toFixed(1)}`]
-      : points.map((p, i) => `${x(i).toFixed(1)},${y(p.rate).toFixed(1)}`);
-  const line = linePoints.join(" ");
-  const bandW = W / points.length;
-
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      className="h-36 w-full"
-      role="img"
-      aria-label={ariaLabel}
-    >
-      {/* Baseline at 0% — the one recessive gridline this needs. */}
-      <line x1={0} y1={H - 4} x2={W} y2={H - 4} style={{ stroke: "rgb(var(--c-ink) / 0.12)", strokeWidth: 1 }} vectorEffect="non-scaling-stroke" />
-      <polygon
-        points={`0,${H - 4} ${line} ${W},${H - 4}`}
-        style={{ fill: `rgb(var(--c-${tint}) / 0.12)` }}
-      />
-      <polyline
-        points={line}
-        style={{ fill: "none", stroke: `rgb(var(--c-${tint}))`, strokeWidth: 2 }}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-      {/* Invisible per-day bands: hit targets wider than the marks, carrying
-          the native tooltip with the numbers for that day. */}
-      {points.map((p, i) => (
-        <rect
-          key={p.day}
-          x={x(i) - bandW / 2}
-          y={0}
-          width={bandW}
-          height={H}
-          fill="transparent"
-        >
-          <title>{p.title}</title>
-        </rect>
-      ))}
-    </svg>
-  );
-}
-
-/**
  * Each day's connected rate on its own — that day's clickers over the signups
  * that existed by then — so a quiet day sits on the baseline and a busy one
  * stands out, instead of every day folding into a total that can only climb.
  */
-function RateChart({ series }: { series: RatePoint[] }) {
+function RateChart({ series, caption }: { series: RatePoint[]; caption: string }) {
   return (
     <DayRateChart
       tint="mint-bright"
       ariaLabel="Connected rate over time"
+      caption={caption}
       points={series
         .filter((p): p is RatePoint & { rate: number } => p.rate !== null)
         .map((p) => ({
           day: p.day,
           rate: p.rate,
-          title: `${p.day} · ${p.rate}% connected (${p.connected} of ${p.signups} signups clicked this day) · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`,
+          detail: `${p.day} · ${p.rate}% connected · ${p.connected} of ${p.signups} signups clicked this day · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`,
         }))}
     />
   );
@@ -145,17 +71,18 @@ function RateChart({ series }: { series: RatePoint[] }) {
  * day, and the share of them running a report on a cadence today. Days nobody
  * signed up carry no rate and drop out entirely.
  */
-function ScheduleChart({ series }: { series: SchedulePoint[] }) {
+function ScheduleChart({ series, caption }: { series: SchedulePoint[]; caption: string }) {
   return (
     <DayRateChart
       tint="teal"
       ariaLabel="Share of each day's signups scheduling a report"
+      caption={caption}
       points={series
         .filter((p): p is SchedulePoint & { rate: number } => p.rate !== null)
         .map((p) => ({
           day: p.day,
           rate: p.rate,
-          title: `${p.day} · ${p.rate}% scheduling (${p.scheduled} of the ${p.signups} account${p.signups === 1 ? "" : "s"} that signed up this day)`,
+          detail: `${p.day} · ${p.rate}% scheduling · ${p.scheduled} of the ${p.signups} account${p.signups === 1 ? "" : "s"} that signed up this day run a report on a cadence`,
         }))}
     />
   );
@@ -375,16 +302,10 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               cohort to draw.
             </p>
           ) : (
-            <>
-              <div className="mt-3">
-                <ScheduleChart series={scheduleSeries} />
-              </div>
-              <p className="mt-3 text-xs tabular-nums text-ink-faint">
-                each day is that day&apos;s signups, and how many of them run a report on a
-                cadence today · hover for the counts · a low-volume day is one or two people, so
-                read the shape, not a single point
-              </p>
-            </>
+            <ScheduleChart
+              series={scheduleSeries}
+              caption="each day is that day's signups, and how many of them run a report on a cadence today · move along the line for the counts · a low-volume day is one or two people, so read the shape, not a single point"
+            />
           )}
         </div>
       </Card>
@@ -402,17 +323,12 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               rate to draw.
             </p>
           ) : (
-            <>
-              <div className="mt-3">
-                <RateChart series={series} />
-              </div>
-              <p className="mt-3 text-xs tabular-nums text-ink-faint">
-                {latest.day === today ? "today" : latest.day} {latest.rate}%
-                {peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""} · each
-                day on its own: users who clicked that day, over signups as of that day · hover for
-                daily numbers
-              </p>
-            </>
+            <RateChart
+              series={series}
+              caption={`${latest.day === today ? "today" : latest.day} ${latest.rate}%${
+                peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""
+              } · each day on its own: users who clicked that day, over signups as of that day · move along the line for daily numbers`}
+            />
           )}
         </div>
       </Card>
