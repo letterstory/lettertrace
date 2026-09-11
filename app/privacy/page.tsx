@@ -65,6 +65,7 @@ export default function PrivacyPage() {
           <li><strong>Anthropic</strong> and <strong>OpenAI</strong>: the AI models queried during runs, as described in §2.</li>
           <li><strong>Google</strong> and <strong>GitHub</strong>: optional sign-in. They tell us your email, name, and profile picture; we tell them nothing about your usage.</li>
           <li><strong>RB2B</strong>: business-visitor identification on our public marketing pages, as described in §1. It does not run within the authenticated product.</li>
+          <li><strong>Cardinal</strong>: sales and marketing follow-up. When a new account first opens the dashboard, we send Cardinal that account&apos;s email address, and the company name our software infers from it when the address is a work one. Nothing else about you or your usage is sent, and nothing is sent for accounts that existed before this was introduced. It is disabled entirely on separately operated (self-hosted) deployments.</li>
         </ul>
         <p>We may also disclose information where legally required, or to protect the rights and safety of our users or the service.</p>
       </Section>

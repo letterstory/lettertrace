@@ -397,6 +397,25 @@ still null means concurrent callbacks race for the alert and exactly one wins.
 Sending happens after the response, so nobody waits on a mail provider while
 signing in, and a mail failure can never fail the sign-in it is reporting.
 
+## Cardinal signup enrichment (optional)
+
+Set `CARDINAL_SIGNUP_WEBHOOK_URL` and `CARDINAL_SIGNUP_WEBHOOK_TOKEN` to send
+one server-side product-signup webhook after a new account first reaches the
+dashboard:
+
+```bash
+CARDINAL_SIGNUP_WEBHOOK_URL=https://webhooks.trycardinal.ai/product-signup/webhook/your-domain.com
+CARDINAL_SIGNUP_WEBHOOK_TOKEN=...
+```
+
+Sent: the user's email, plus a company name guessed from its domain when the
+address is a work one (`alice@acme.io` → `Acme`). Names are never sent —
+nothing in this app collects them. A signup is reported at most once, and only
+if the account reaches the dashboard within a day of signing up; one that
+doesn't is never reported. Leave either variable unset and nothing is sent,
+nothing is written, and no request pays for the feature. The webhook token is a
+server secret.
+
 ## Programmatic access (REST API + MCP)
 
 Create an API key in **Settings → API & MCP access** (shown once, stored hashed) and send it as a bearer token.
