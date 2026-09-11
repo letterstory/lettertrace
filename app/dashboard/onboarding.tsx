@@ -61,11 +61,15 @@ export function Onboarding() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Cadence for the project about to be created. Defaults on, at daily — the
-  // schedule this route used to hard-code. The toggle is the off switch;
-  // "Custom" is a day count, not off. See CadencePicker.
+  // Cadence for the project about to be created. Defaults on, at WEEKLY.
+  // Daily was the hard-coded original, and it is the wrong default now that
+  // the due-check actually fires daily (it used to skip every other day): the
+  // free trial is a lifetime allowance of runs, so a daily default spends it
+  // in a fortnight instead of months. Anyone who wants daily has a pill for
+  // it, which is the entire point of the picker. The toggle is the off
+  // switch; "Set a schedule" is a day count, not off. See CadencePicker.
   const [scheduleOn, setScheduleOn] = useState(true);
-  const [cadence, setCadence] = useState<OnboardingCadence>("daily");
+  const [cadence, setCadence] = useState<OnboardingCadence>("weekly");
   const [customDays, setCustomDays] = useState(CUSTOM_INTERVAL_DEFAULT);
 
   // --- Step 1 -> suggest -----------------------------------------------------

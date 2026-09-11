@@ -234,6 +234,103 @@ export function Select({ className, children, ...props }: SelectHTMLAttributes<H
   );
 }
 
+/**
+ * On/off switch. Controlled and hookless, like everything else here — the
+ * third hand-rolled copy of this (project-form.tsx, theme.tsx, the schedule
+ * picker) is what earned it a home, and only one of those three had a
+ * focus-visible ring until they were merged into this.
+ */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+  className,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  /** Accessible name. Visible text beside the switch is the caller's job. */
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+        checked ? "bg-terracotta" : "bg-ink/15",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-4 w-4 transform rounded-sm bg-white transition",
+          checked ? "translate-x-6" : "translate-x-1",
+        )}
+      />
+    </button>
+  );
+}
+
+/**
+ * A row of mutually exclusive options. `value` may be null — nothing selected
+ * is a real state (a schedule that is off has no cadence), and it must not be
+ * drawn as if the first option were chosen.
+ *
+ * Equal-width columns on a phone so three labels of different lengths don't
+ * make three different-sized targets; content-width from `sm` up.
+ */
+export function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  disabled,
+  className,
+}: {
+  options: { value: T; label: string }[];
+  value: T | null;
+  onChange: (next: T) => void;
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        "grid w-full grid-cols-3 items-stretch gap-1 rounded border border-ink/10 bg-paper-shade/40 p-1 sm:flex sm:w-auto sm:items-center",
+        className,
+      )}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "rounded-sm px-2 py-1.5 text-xs transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 sm:px-3 sm:text-sm",
+            value === option.value
+              ? "bg-surface font-medium text-ink shadow-sm"
+              : "text-ink-faint hover:text-ink-soft",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const accentDot: Record<BadgeTone, string> = {
   neutral: "bg-ink/30",
   terracotta: "bg-terracotta",
