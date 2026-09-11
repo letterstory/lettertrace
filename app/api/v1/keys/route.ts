@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { listProviderKeys, supportedProviders } from "@/lib/provider-keys";
 import { logApiRequest } from "@/lib/activity";
-import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,6 @@ export async function GET(request: Request) {
     });
     return NextResponse.json({ keys, providers: supportedProviders() });
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }

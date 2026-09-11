@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import {
   parseProvider,
   removeProviderKey,
@@ -7,7 +8,6 @@ import {
   unknownProviderMessage,
 } from "@/lib/provider-keys";
 import { logApiRequest } from "@/lib/activity";
-import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -108,6 +108,6 @@ export async function DELETE(
     });
     return NextResponse.json({ ok: true, key: removed });
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }

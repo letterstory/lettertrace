@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { getProjects } from "@/lib/data";
 import { createProject, projectSummary } from "@/lib/api-service";
 import { logApiRequest } from "@/lib/activity";
@@ -75,6 +76,6 @@ export async function POST(request: Request) {
       statusCode: 500,
       summary: `Organization creation failed via the API: ${humanError(e)}`,
     });
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }

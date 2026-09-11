@@ -114,6 +114,17 @@ the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
 so ids and numbers are collapsed and no content rides along. `run.failed` and
 `error` records are the error stream worth alerting on.
 
+**`api.error`** is the record every `/api/v1` route writes when it answers a
+5xx (`lib/api-errors.ts`, called from each route's catch block). Severity
+ERROR, body `api.error: <METHOD> <route>: <ErrorName>: <scrubbed message>`, and
+under `ops.*`: `ops.method`, `ops.route` (the path with uuids collapsed to
+`:id`, e.g. `/api/v1/projects/:id`), `ops.status`, `ops.name` (error class),
+`ops.message` (first 500 chars, never the request body or headers) and, when
+the cause is a PostgREST error, `ops.db_code` (`PGRST116` is the 406 a
+`.single()` gets when a row-scoped query matches nothing). The same call marks
+the request span ERROR with the error class, so a route 500 is no longer a
+span with `status_code 0` and no log.
+
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer
 domains are not, on any span attribute, metric attribute or log body. Span
