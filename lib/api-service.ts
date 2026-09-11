@@ -351,11 +351,15 @@ export async function updateProject(
   }
   update.updated_at = new Date().toISOString();
 
+  // Access was settled by getAccessibleProject above, which admits invited
+  // teammates as well as the owner. The update used to repeat the owner
+  // filter here from before teams existed; for a teammate that matched zero
+  // rows, `.single()` threw, and the API answered 500 to a caller it had just
+  // let in (five times on 2026-09-11).
   const { data, error } = await supabase
     .from("projects")
     .update(update)
     .eq("id", projectId)
-    .eq("user_id", userId)
     .select("*")
     .single();
   if (error || !data) throw error ?? new Error("Failed to update project.");
