@@ -63,8 +63,15 @@ function companyFromEmail(email: string): string | null {
  *
  * The guarded update is the lock. The dashboard may render twice, or two tabs
  * may open at the same time; only the request that stamps the profile sends the
- * webhook. A failed Cardinal call is not un-stamped: signup enrichment is
- * best-effort and must never turn dashboard access into a retry loop.
+ * webhook.
+ *
+ * A rejected call keeps the stamp; an unreachable one gives it back. Cardinal
+ * answering "no" is permanent — the payload is wrong, and sending it again on
+ * every dashboard load would just be louder. Never reaching Cardinal at all (a
+ * timeout, DNS, a 5xx) says nothing about the lead, and stamping through it
+ * loses that signup forever with a console line as the only trace. Releasing
+ * the claim costs at most one retry per dashboard visit inside the signup
+ * window, which is the cheap side of this trade.
  *
  * first_name/last_name aren't collected anywhere in this app today (plain
  * email/password signup, and OAuth metadata goes unread) — the parameters
@@ -126,6 +133,8 @@ export async function sendCardinalSignup(
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error(`[cardinal] signup webhook rejected (${res.status}): ${detail.slice(0, 300)}`);
+      // 5xx is Cardinal having a bad minute, not a verdict on this lead.
+      if (res.status >= 500) await releaseClaim(service, user.id);
       return "failed";
     }
     return "sent";
@@ -133,6 +142,20 @@ export async function sendCardinalSignup(
     console.error(
       `[cardinal] signup webhook failed: ${e instanceof Error ? e.message : String(e)}`,
     );
+    await releaseClaim(service, user.id);
     return "failed";
+  }
+}
+
+/** Hand the claim back so the next dashboard load can try again. Best-effort
+ *  by definition: if this update fails too, the lead is lost, which is exactly
+ *  where we were before it existed. */
+async function releaseClaim(service: SupabaseClient, userId: string): Promise<void> {
+  const { error } = await service
+    .from("profiles")
+    .update({ cardinal_signup_sent_at: null })
+    .eq("id", userId);
+  if (error) {
+    console.error(`[cardinal] could not release the claim: ${error.message} (${error.code})`);
   }
 }

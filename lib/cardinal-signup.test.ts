@@ -55,6 +55,10 @@ function fakeDb(alreadySent: boolean, failWith?: string) {
             failWith
               ? { data: null, error: { message: failWith, code: "42703" } }
               : { data: alreadySent ? [] : [{ id: "u-1" }], error: null },
+          // Releasing a claim awaits the builder without selecting, which is
+          // what supabase-js itself resolves to.
+          then: (resolve: (value: { data: null; error: null }) => unknown) =>
+            resolve({ data: null, error: null }),
         };
         return chain;
       },
@@ -236,6 +240,47 @@ describe("sendCardinalSignup", () => {
 
     expect(await sendCardinalSignup(db, { id: "u-1", email: "a@b.com", ...NEW_USER })).toBe("failed");
     expect(errorSpy).toHaveBeenCalledOnce();
+  });
+
+  it("hands the claim back when Cardinal is unreachable, so the next visit retries", async () => {
+    configureCardinal();
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, updates } = fakeDb(false);
+
+    expect(await sendCardinalSignup(db, { id: "u-1", email: "a@acme.io", ...NEW_USER })).toBe(
+      "failed",
+    );
+    // Stamped to claim, then nulled again: an unreachable Cardinal says
+    // nothing about the lead, and keeping the stamp would lose it forever.
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual({ cardinal_signup_sent_at: null });
+  });
+
+  it("hands the claim back on a 5xx, which is Cardinal failing rather than refusing", async () => {
+    configureCardinal();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("upstream boom", { status: 503 }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, updates } = fakeDb(false);
+
+    expect(await sendCardinalSignup(db, { id: "u-1", email: "a@acme.io", ...NEW_USER })).toBe(
+      "failed",
+    );
+    expect(updates[1]).toEqual({ cardinal_signup_sent_at: null });
+  });
+
+  it("keeps the claim when Cardinal rejects the payload, so it isn't resent every load", async () => {
+    configureCardinal();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("bad email", { status: 400 }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, updates } = fakeDb(false);
+
+    expect(await sendCardinalSignup(db, { id: "u-1", email: "a@acme.io", ...NEW_USER })).toBe(
+      "failed",
+    );
+    expect(updates).toHaveLength(1);
   });
 
   it("swallows a network failure", async () => {

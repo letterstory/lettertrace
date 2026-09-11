@@ -400,7 +400,11 @@ CARDINAL_SIGNUP_WEBHOOK_URL=https://webhooks.trycardinal.ai/product-signup/webho
 CARDINAL_SIGNUP_WEBHOOK_TOKEN=...
 ```
 
-Only the user's email is sent. Leave either variable unset and nothing is sent,
+Sent: the user's email, plus a company name guessed from its domain when the
+address is a work one (`alice@acme.io` → `Acme`). Names are never sent —
+nothing in this app collects them. A signup is reported at most once, and only
+if the account reaches the dashboard within a day of signing up; one that
+doesn't is never reported. Leave either variable unset and nothing is sent,
 nothing is written, and no request pays for the feature. The webhook token is a
 server secret.
 
