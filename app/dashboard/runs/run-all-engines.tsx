@@ -52,8 +52,9 @@ export function RunAllEngines({
   }
 
   return (
-    <div className="flex flex-col items-start gap-1.5 sm:items-end">
+    <div className="flex min-w-0 flex-col items-stretch gap-1.5">
       <Button
+        className="w-full"
         variant="secondary"
         onClick={runAll}
         loading={progress !== null}

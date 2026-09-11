@@ -136,35 +136,33 @@ export default async function RunsPage() {
         // "each run" asks, sitting above a list of completed runs that named a
         // different model — see nextRunMessage.
         description={canRun ? nextRunMessage(key) : engineKeyMessage(key)}
-        action={
-          <div className="flex flex-col items-start gap-2 sm:items-end">
-            <RunNow
-              canRun={canRun}
-              keySource={key.source}
-              activePrompts={activePrompts ?? 0}
-              providerLabel={PROVIDERS[project.default_provider].label}
-            />
-            {/* Only when there's a second engine to offer — a one-engine
-                "run on all engines" is the same button twice. */}
-            {engineList.length >= 2 && (
-              <RunAllEngines
-                engines={engineList}
-                disabled={(activePrompts ?? 0) === 0}
-              />
-            )}
-          </div>
-        }
       />
 
-      {/* The schedule lives on the project settings form too, but this page is
-          where people go to make runs happen — it's where "how do I run this
-          daily?" gets asked. */}
+      {/* This is where people go to make runs happen — it's where "how do I
+          run this daily?" gets asked, so cadence belongs beside manual runs. */}
       <ScheduleControl
         schedule={project.schedule}
         scheduleIntervalDays={project.schedule_interval_days}
         keySource={key.source}
         providerLabel={PROVIDERS[project.default_provider].label}
       />
+
+      <div className={`grid gap-3 ${engineList.length >= 2 ? "sm:grid-cols-2" : ""}`}>
+        <RunNow
+          canRun={canRun}
+          keySource={key.source}
+          activePrompts={activePrompts ?? 0}
+          providerLabel={PROVIDERS[project.default_provider].label}
+        />
+        {/* Only when there's a second engine to offer — a one-engine
+            "run on all engines" is the same button twice. */}
+        {engineList.length >= 2 && (
+          <RunAllEngines
+            engines={engineList}
+            disabled={(activePrompts ?? 0) === 0}
+          />
+        )}
+      </div>
 
       {runs.length === 0 ? (
         <EmptyState
