@@ -351,11 +351,16 @@ export async function updateProject(
   }
   update.updated_at = new Date().toISOString();
 
+  // Scoped by id alone: getAccessibleProject above already decided this caller
+  // may reach the project (owner or member), and this is the service-role
+  // client, so a `user_id` filter here is not a second line of defence — it
+  // is the pre-teams ownership test. Left in place after #165 it made every
+  // member's PATCH match zero rows: PostgREST answered 406 to `.single()` and
+  // the route returned 500 (incident 218, 2026-09-11).
   const { data, error } = await supabase
     .from("projects")
     .update(update)
     .eq("id", projectId)
-    .eq("user_id", userId)
     .select("*")
     .single();
   if (error || !data) throw error ?? new Error("Failed to update project.");
