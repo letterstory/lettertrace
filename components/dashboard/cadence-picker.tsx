@@ -38,7 +38,11 @@ export function CadencePicker({
         switchAriaLabel="Keep this report up to date"
         enabled={enabled}
         cadence={cadence}
-        intervalDays={cadence === "custom" ? customDays : null}
+        // Always the parent's number, never null-when-not-custom: nulling it
+        // reset the picker's draft to the default, so picking Run daily and
+        // coming back to 'Set a schedule' silently replaced a typed 21 with 14
+        // and then saved the 14.
+        intervalDays={customDays}
         disabled={disabled}
         onCommit={(nextEnabled, nextCadence, nextDays) => {
           onEnabledChange(nextEnabled);

@@ -145,24 +145,25 @@ export default async function RunsPage() {
         scheduleIntervalDays={project.schedule_interval_days}
         keySource={key.source}
         providerLabel={PROVIDERS[project.default_provider].label}
+        actions={
+          <>
+            <RunNow
+              canRun={canRun}
+              keySource={key.source}
+              activePrompts={activePrompts ?? 0}
+              providerLabel={PROVIDERS[project.default_provider].label}
+            />
+            {/* Only when there's a second engine to offer — a one-engine
+                "run on all engines" is the same button twice. */}
+            {engineList.length >= 2 && (
+              <RunAllEngines
+                engines={engineList}
+                disabled={(activePrompts ?? 0) === 0}
+              />
+            )}
+          </>
+        }
       />
-
-      <div className={`grid gap-3 ${engineList.length >= 2 ? "sm:grid-cols-2" : ""}`}>
-        <RunNow
-          canRun={canRun}
-          keySource={key.source}
-          activePrompts={activePrompts ?? 0}
-          providerLabel={PROVIDERS[project.default_provider].label}
-        />
-        {/* Only when there's a second engine to offer — a one-engine
-            "run on all engines" is the same button twice. */}
-        {engineList.length >= 2 && (
-          <RunAllEngines
-            engines={engineList}
-            disabled={(activePrompts ?? 0) === 0}
-          />
-        )}
-      </div>
 
       {runs.length === 0 ? (
         <EmptyState

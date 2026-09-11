@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardBody } from "@/components/ui";
 import { scheduleLabel } from "@/lib/utils";
-import { SchedulePicker, type ActiveSchedule } from "@/components/dashboard/schedule-picker";
+import type { ReactNode } from "react";
+import {
+  SchedulePicker,
+  type ActiveSchedule,
+} from "@/components/dashboard/schedule-picker";
 import type { KeySource } from "@/lib/trial";
 import type { Schedule } from "@/lib/types";
 
@@ -14,6 +18,7 @@ export function ScheduleControl({
   scheduleIntervalDays: savedIntervalDays,
   keySource,
   providerLabel,
+  actions,
 }: {
   schedule: Schedule;
   /** Days between runs when schedule is 'custom'; ignored otherwise. */
@@ -24,6 +29,11 @@ export function ScheduleControl({
    *  make visible instead of silent. */
   keySource: KeySource;
   providerLabel: string;
+  /** Manual-run buttons, rendered inside this card under the cadence pills —
+   *  "run it now" and "run it on a schedule" are the same decision, and the
+   *  page reads as one block instead of a header action floating above a
+   *  card about the same thing. */
+  actions?: ReactNode;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -33,11 +43,16 @@ export function ScheduleControl({
   // considered and deliberately dropped for this page — so the cadence to
   // restore on re-activation is remembered here in local state instead.
   // Resynced from the server whenever it reports an active schedule; left
-  // alone while off, since 'off' carries no cadence of its own. A hard
-  // reload while off still forgets, same limitation onboarding's cadence
-  // step already has.
-  const [rememberedCadence, setRememberedCadence] = useState<ActiveSchedule>(
-    saved === "off" ? "daily" : saved,
+  // alone while off, since 'off' carries no cadence of its own.
+  //
+  // NULL, not 'daily', when there is nothing to remember. Defaulting the
+  // display to daily on a page load with the schedule off showed a pill
+  // pressed for a choice nobody made, and turning the switch on then quietly
+  // scheduled daily — for a trial account, the whole free allowance in a
+  // fortnight. Nothing pressed says what is true, and the switch applies
+  // DEFAULT_CADENCE visibly.
+  const [rememberedCadence, setRememberedCadence] = useState<ActiveSchedule | null>(
+    saved === "off" ? null : saved,
   );
   const [rememberedIntervalDays, setRememberedIntervalDays] = useState<number | null>(
     saved === "custom" ? savedIntervalDays : null,
@@ -100,7 +115,10 @@ export function ScheduleControl({
           disabled={saving}
           onCommit={handleCommit}
           description={({ enabled, cadence, intervalDays }) => {
-            const activeSchedule: Schedule = enabled ? cadence : "off";
+            // `cadence` is null only while nothing is scheduled and nothing
+            // is remembered, which is exactly when the copy below reads from
+            // the !enabled branch — so 'off' is the honest fallback.
+            const activeSchedule: Schedule = enabled && cadence ? cadence : "off";
             return (
               <>
                 {!enabled && (
@@ -152,6 +170,11 @@ export function ScheduleControl({
             );
           }}
         />
+        {actions && (
+          <div className="mt-5 flex flex-wrap items-start gap-2 border-t border-ink/10 pt-4 sm:pl-8">
+            {actions}
+          </div>
+        )}
       </CardBody>
     </Card>
   );

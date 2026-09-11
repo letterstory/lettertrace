@@ -47,12 +47,11 @@ export function RunNow({
   }
 
   return (
-    <div className="flex min-w-0 flex-col items-stretch gap-1.5">
+    <div className="flex min-w-0 flex-col items-start gap-1.5">
       {/* Just "Running…". The label used to read "Running… this can take a
           minute", which roughly doubled the button's width the moment it was
           clicked — the spinner already says a wait is underway. */}
       <Button
-        className="w-full"
         onClick={run}
         loading={loading}
         loadingText="Running…"
