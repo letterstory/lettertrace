@@ -7,6 +7,7 @@ import {
   mintApiKey,
   onboardFromUrl,
   OnboardError,
+  parseOnboardingCadence,
   resolveOnboardingAccount,
   serviceTrialMeter,
   type OnboardingAccount,
@@ -14,15 +15,12 @@ import {
 } from "@/lib/onboard";
 import { apiActor, logActivity, logApiRequest } from "@/lib/activity";
 import { humanError } from "@/lib/llm";
-import type { Schedule } from "@/lib/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // A sweep in the foreground can run for minutes; background (the default)
 // answers as soon as the run rows exist.
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
-
-const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 
 // POST /api/v1/onboard — a URL in, a monitored organization out.
 //
@@ -36,7 +34,8 @@ const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 //
 // Body: { url, brand_name?, name?, description?, brand_aliases?,
 //         brand_domains?, topics?: [{name, prompts[]}], competitors?,
-//         schedule? ("off" default), run? (true), background? (true),
+//         schedule? ("off" default), schedule_interval_days? (for "custom"),
+//         run? (true), background? (true),
 //         email?, key?: boolean | { name }, seat?: boolean }
 //
 // `email` is the transfer: it onboards the URL into THAT account — adopted
@@ -79,11 +78,18 @@ export async function POST(request: Request) {
     );
   }
 
-  if (typeof body.schedule === "string" && !SCHEDULES.includes(body.schedule as Schedule)) {
-    return NextResponse.json(
-      { error: `Unknown schedule "${body.schedule}". Use one of: ${SCHEDULES.join(", ")}.` },
-      { status: 400 },
+  let cadence: ReturnType<typeof parseOnboardingCadence>;
+  try {
+    cadence = parseOnboardingCadence(
+      body.schedule,
+      body.schedule_interval_days,
+      "off",
     );
+  } catch (error) {
+    if (error instanceof OnboardError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
   }
 
   const topics: TopicInput[] | null = Array.isArray(body.topics)
@@ -154,7 +160,8 @@ export async function POST(request: Request) {
         extraDomains: toDomains(body.brand_domains),
         topics,
         competitors: body.competitors,
-        schedule: typeof body.schedule === "string" ? (body.schedule as Schedule) : "off",
+        schedule: cadence.schedule,
+        scheduleIntervalDays: cadence.scheduleIntervalDays,
         run,
         background: body.background !== false,
       },

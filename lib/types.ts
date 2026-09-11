@@ -14,7 +14,7 @@ export type EntityType = "brand" | "competitor";
 
 export type Sentiment = "positive" | "neutral" | "negative";
 
-export type Schedule = "off" | "daily" | "weekly";
+export type Schedule = "off" | "daily" | "weekly" | "custom";
 
 export type PromptSource = "ai" | "manual";
 
@@ -102,6 +102,10 @@ export interface Project {
   default_provider: Provider;
   default_model: string;
   schedule: Schedule;
+  /** Days between runs when schedule is 'custom'; null otherwise. The other
+   *  schedules carry their interval in their name — only 'custom' needs a
+   *  number to go with it. See scheduleIntervalDays in lib/utils.ts. */
+  schedule_interval_days: number | null;
   use_web_search: boolean;
   /** Times each active prompt is asked per run (1–10). >1 buys confidence in a "no mention". */
   replicates: number;
