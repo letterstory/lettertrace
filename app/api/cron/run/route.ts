@@ -26,7 +26,9 @@ export const dynamic = "force-dynamic";
 // roughly a quarter of that sum. Kept modest because each run already asks
 // up to CONCURRENCY questions at once, and projects funded by the trial share
 // one provider key, so the pool width multiplies the load on it.
-export const SWEEP_CONCURRENCY = 4;
+// Not exported: a Next.js route module may only export handlers and the
+// known config fields, and the build rejects anything else.
+const SWEEP_CONCURRENCY = 4;
 
 interface ProjectResult {
   projectId: string;
