@@ -30,6 +30,7 @@ import { spendMicros } from "@/lib/pricing";
 /** Records what the run wrote, and answers the reads resumeRun makes. */
 function makeDb() {
   const runUpdates: Record<string, unknown>[] = [];
+  const projectUpdates: Record<string, unknown>[] = [];
   const responses: Record<string, unknown>[] = [];
   let responseId = 0;
 
@@ -47,6 +48,7 @@ function makeDb() {
         },
         update(patch: Record<string, unknown>) {
           if (table === "runs") runUpdates.push(patch);
+          if (table === "projects") projectUpdates.push(patch);
           return {
             eq: () => ({
               eq: () => ({ select: async () => ({ data: [] }) }),
@@ -57,7 +59,7 @@ function makeDb() {
       };
     },
   };
-  return { db: db as never, runUpdates, responses };
+  return { db: db as never, runUpdates, projectUpdates, responses };
 }
 
 const project = {
@@ -90,6 +92,7 @@ function prepared(jobCount: number): PreparedRun {
       targetType: "run",
     } as never,
     startedMs: Date.now(),
+    startedAt: new Date().toISOString(),
   };
 }
 
@@ -110,15 +113,22 @@ beforeEach(() => {
 });
 
 function run(jobs: number, budgetMicros: number | null) {
-  const { db, runUpdates, responses } = makeDb();
-  return resumeRun(prepared(jobs), {
+  const { db, runUpdates, projectUpdates, responses } = makeDb();
+  const preparedRun = prepared(jobs);
+  return resumeRun(preparedRun, {
     supabase: db,
     project,
     provider: "anthropic",
     model: "claude-haiku-4-5",
     apiKey: "sk-ant-operator",
     budgetMicros,
-  } as never).then((result) => ({ result, runUpdates, responses }));
+  } as never).then((result) => ({
+    result,
+    runUpdates,
+    projectUpdates,
+    responses,
+    preparedRun,
+  }));
 }
 
 describe("a run on the operator's money", () => {
@@ -162,6 +172,22 @@ describe("a run on the operator's money", () => {
     // No answers stored is a failed run by the engine's existing rule; what
     // matters here is that it cost nothing.
     expect(result.spendMicros).toBe(0);
+  });
+
+  it("anchors the project's next cadence to run start, not finish", async () => {
+    const { projectUpdates, preparedRun } = await run(1, null);
+    expect(projectUpdates).toContainEqual({ last_run_at: preparedRun.startedAt });
+  });
+
+  // A scheduled project with zero active prompts used to leave last_run_at
+  // untouched here, so isScheduleDue saw it as never having run and the cron
+  // opened a new, empty `runs` row on every single tick, forever.
+  it("still advances the cadence anchor for a run with no prompts", async () => {
+    const { projectUpdates, preparedRun, runUpdates } = await run(0, PER_ANSWER * 3);
+    expect(vi.mocked(runQuery)).not.toHaveBeenCalled();
+    expect(projectUpdates).toContainEqual({ last_run_at: preparedRun.startedAt });
+    const settle = runUpdates.find((u) => "status" in u)!;
+    expect(settle.status).toBe("completed");
   });
 });
 

@@ -1,5 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { article, duration, resolveRedirectBase, safePath } from "@/lib/utils";
+import {
+  article,
+  CUSTOM_INTERVAL_DEFAULT,
+  duration,
+  isScheduleDue,
+  normalizeCustomInterval,
+  parseCustomInterval,
+  resolveRedirectBase,
+  safePath,
+  SCHEDULE_LABELS,
+  SCHEDULES,
+  scheduleIntervalDays,
+  scheduleLabel,
+} from "@/lib/utils";
 
 describe("resolveRedirectBase", () => {
   const PROD = "https://lettertrace.com";
@@ -117,5 +130,140 @@ describe("duration", () => {
     expect(duration(null)).toBe("—");
     expect(duration(-1)).toBe("—");
     expect(duration(Number.NaN)).toBe("—");
+  });
+});
+
+describe("SCHEDULES", () => {
+  // SCHEDULES used to be a separate array, hand-copied into several files. A
+  // schedule value added to the Schedule union but missed in one of those
+  // copies would validate on some surfaces and 400 on others, or reach the
+  // database with no cron branch that knows how to run it. Deriving it from
+  // SCHEDULE_LABELS instead means the only way to add a schedule is to add
+  // its label, and every surface picks it up from there.
+  it("is derived from SCHEDULE_LABELS, not written out separately", () => {
+    expect(SCHEDULES).toEqual(Object.keys(SCHEDULE_LABELS));
+  });
+
+  it("lists exactly the four schedules in use, in display order", () => {
+    expect(SCHEDULES).toEqual(["off", "daily", "weekly", "custom"]);
+  });
+});
+
+describe("custom interval input", () => {
+  it("strictly accepts only whole numeric days inside the API range", () => {
+    expect(parseCustomInterval(1)).toBe(1);
+    expect(parseCustomInterval(90)).toBe(90);
+    expect(parseCustomInterval(14)).toBe(14);
+  });
+
+  it("rejects missing, coerced, fractional, non-finite, and out-of-range values", () => {
+    for (const value of [undefined, null, "14", "", 1.5, 0, -1, 91, NaN, Infinity]) {
+      expect(parseCustomInterval(value)).toBeNull();
+    }
+  });
+
+  it("normalises editable drafts without turning an empty field into one day", () => {
+    expect(normalizeCustomInterval("", 30)).toBe(30);
+    expect(normalizeCustomInterval("nope", 30)).toBe(30);
+    expect(normalizeCustomInterval("1.9", 30)).toBe(1);
+    expect(normalizeCustomInterval("0", 30)).toBe(1);
+    expect(normalizeCustomInterval("120", 30)).toBe(90);
+    expect(normalizeCustomInterval("14")).toBe(CUSTOM_INTERVAL_DEFAULT);
+  });
+});
+
+describe("scheduleIntervalDays", () => {
+  it("reads the interval out of the schedule's own name", () => {
+    expect(scheduleIntervalDays("off", null)).toBeNull();
+    expect(scheduleIntervalDays("daily", null)).toBe(1);
+    expect(scheduleIntervalDays("weekly", null)).toBe(7);
+  });
+
+  it("only 'custom' reads the stored number", () => {
+    expect(scheduleIntervalDays("custom", 14)).toBe(14);
+    // The named schedules ignore a stray interval rather than preferring it.
+    expect(scheduleIntervalDays("weekly", 3)).toBe(7);
+  });
+
+  // The database refuses to store this row (projects_custom_needs_interval),
+  // so null here means a bug upstream, not a case to paper over with a default.
+  it("returns null for 'custom' with no interval", () => {
+    expect(scheduleIntervalDays("custom", null)).toBeNull();
+  });
+});
+
+describe("scheduleLabel", () => {
+  it("names the real interval for 'custom'", () => {
+    expect(scheduleLabel("custom", 14)).toBe("Every 14 days");
+    expect(scheduleLabel("custom", 1)).toBe("Every 1 days");
+  });
+
+  it("falls back to the label when there's no number to name", () => {
+    expect(scheduleLabel("custom", null)).toBe("Every N days");
+  });
+
+  it("passes the other schedules through to their labels", () => {
+    expect(scheduleLabel("off", null)).toBe("Manual only");
+    expect(scheduleLabel("daily", null)).toBe("Daily");
+    expect(scheduleLabel("weekly", 3)).toBe("Weekly");
+  });
+});
+
+describe("isScheduleDue", () => {
+  const NOW = new Date("2026-09-09T08:00:00Z").getTime();
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+
+  const project = (
+    schedule: "off" | "daily" | "weekly" | "custom",
+    last_run_at: string | null,
+    schedule_interval_days: number | null = null,
+  ) => ({ schedule, last_run_at, schedule_interval_days });
+
+  it("never fires an 'off' schedule, however long it has been", () => {
+    expect(isScheduleDue(project("off", null), NOW)).toBe(false);
+    expect(isScheduleDue(project("off", ago(30 * DAY)), NOW)).toBe(false);
+  });
+
+  it("is due when a scheduled project has never run", () => {
+    expect(isScheduleDue(project("daily", null), NOW)).toBe(true);
+    expect(isScheduleDue(project("custom", null, 30), NOW)).toBe(true);
+  });
+
+  it("waits out the interval it was given", () => {
+    expect(isScheduleDue(project("daily", ago(2 * HOUR)), NOW)).toBe(false);
+    expect(isScheduleDue(project("weekly", ago(3 * DAY)), NOW)).toBe(false);
+    expect(isScheduleDue(project("weekly", ago(7 * DAY)), NOW)).toBe(true);
+    expect(isScheduleDue(project("custom", ago(2 * DAY), 3), NOW)).toBe(false);
+    expect(isScheduleDue(project("custom", ago(3 * DAY), 3), NOW)).toBe(true);
+  });
+
+  // The cron reads the clock once before a sequential sweep
+  // (app/api/cron/run/route.ts), so a run starts minutes after the `now` the
+  // NEXT tick is judged against; an exact 24h check was short by the
+  // project's queue position and halved every daily project's cadence except
+  // the first in the sweep. Day granularity fixes this without a grace
+  // constant: whatever time a project's run started, it's due again the
+  // moment the calendar has turned over `intervalDays` times.
+  it("fires at the next day's tick however late in the sweep the last run started", () => {
+    expect(isScheduleDue(project("daily", "2026-09-08T08:06:30Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("daily", "2026-09-08T23:59:00Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("weekly", "2026-09-02T08:06:30Z"), NOW)).toBe(true);
+    expect(isScheduleDue(project("custom", "2026-09-06T08:06:30Z", 3), NOW)).toBe(true);
+  });
+
+  it("cannot fire the same schedule twice in one UTC day", () => {
+    expect(isScheduleDue(project("daily", "2026-09-09T00:00:00Z"), NOW)).toBe(false);
+    expect(isScheduleDue(project("daily", "2026-09-09T08:00:00Z"), NOW)).toBe(false);
+  });
+
+  it("counts the day boundary crossed, not the hours elapsed", () => {
+    expect(isScheduleDue(project("weekly", "2026-09-03T00:01:00Z"), NOW)).toBe(false);
+    expect(isScheduleDue(project("custom", "2026-09-07T23:59:00Z", 3), NOW)).toBe(false);
+  });
+
+  it("refuses a 'custom' row with no interval rather than guessing one", () => {
+    expect(isScheduleDue(project("custom", ago(90 * DAY), null), NOW)).toBe(false);
   });
 });

@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { setActiveProject } from "@/lib/data";
 import {
   firstSweep,
+  OnboardError,
+  parseOnboardingCadence,
   persistOnboarding,
   pickProjectEngine,
   sessionTrialMeter,
@@ -111,6 +113,20 @@ export async function POST(request: Request) {
     );
   }
 
+  // Absent remains daily for backwards compatibility with the dashboard
+  // wizard. The v1 one-shot flow uses the same parser with an "off" fallback.
+  // This route's body uses camelCase `intervalDays`, so the field name is
+  // passed through rather than string-rewritten out of the parser's message.
+  let cadence: ReturnType<typeof parseOnboardingCadence>;
+  try {
+    cadence = parseOnboardingCadence(body.schedule, body.intervalDays, "daily", "intervalDays");
+  } catch (error) {
+    if (error instanceof OnboardError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
+
   // Start the project on an engine this user can actually run — the user's
   // own key wins over the trial; the env default applies only when they have
   // none. See pickProjectEngine.
@@ -128,11 +144,12 @@ export async function POST(request: Request) {
       description,
       default_provider: provider,
       default_model: model,
-      // "Cadence from the onset": a new project monitors on a schedule from
-      // day one (trial-funded until the allowance runs out, then unblocked by
-      // the user's own key) instead of being a one-shot demo whose schedule
-      // hides in Settings. The Runs page control turns it off in one click.
-      schedule: "daily",
+      // "Cadence from the onset": the user picks the schedule on the
+      // onboarding CTA itself (validated above) instead of every project
+      // silently starting on 'daily'. The Runs page control changes it any
+      // time after.
+      schedule: cadence.schedule,
+      schedule_interval_days: cadence.scheduleIntervalDays,
     })
     .select("*")
     .single();
@@ -155,7 +172,13 @@ export async function POST(request: Request) {
     projectId: project.id,
     targetType: "project",
     targetId: project.id,
-    metadata: { topics: topics.length, competitors: competitors.length, brand_name },
+    metadata: {
+      topics: topics.length,
+      competitors: competitors.length,
+      brand_name,
+      schedule: cadence.schedule,
+      interval_days: cadence.scheduleIntervalDays,
+    },
   });
 
   // Competitors first, then topics + prompts: executeRun reads competitors to
