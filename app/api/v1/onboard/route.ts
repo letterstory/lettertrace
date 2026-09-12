@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { recordApiFailure } from "@/lib/api-errors";
 import { hasScope } from "@/lib/api-auth";
 import { adminGate, isAdminEmail, isAdminUserId } from "@/lib/admin";
 import { projectSummary, toAliases, toDomains } from "@/lib/api-service";
@@ -269,6 +270,7 @@ export async function POST(request: Request) {
     );
   } catch (e) {
     const status = e instanceof OnboardError ? 400 : 500;
+    recordApiFailure(request, e, status);
     await logApiRequest(auth, request, "v1", {
       category: "onboarding",
       action: "api.onboard",

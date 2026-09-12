@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { discoverProjectCompetitors } from "@/lib/api-service";
 import { logApiRequest } from "@/lib/activity";
-import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +34,6 @@ export async function GET(
     });
     return NextResponse.json(discovered);
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }
