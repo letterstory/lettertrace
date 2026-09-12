@@ -136,8 +136,17 @@ export default async function RunsPage() {
         // "each run" asks, sitting above a list of completed runs that named a
         // different model — see nextRunMessage.
         description={canRun ? nextRunMessage(key) : engineKeyMessage(key)}
-        action={
-          <div className="flex flex-col items-start gap-2 sm:items-end">
+      />
+
+      {/* This is where people go to make runs happen — it's where "how do I
+          run this daily?" gets asked, so cadence belongs beside manual runs. */}
+      <ScheduleControl
+        schedule={project.schedule}
+        scheduleIntervalDays={project.schedule_interval_days}
+        keySource={key.source}
+        providerLabel={PROVIDERS[project.default_provider].label}
+        actions={
+          <>
             <RunNow
               canRun={canRun}
               keySource={key.source}
@@ -152,17 +161,8 @@ export default async function RunsPage() {
                 disabled={(activePrompts ?? 0) === 0}
               />
             )}
-          </div>
+          </>
         }
-      />
-
-      {/* The schedule lives on the project settings form too, but this page is
-          where people go to make runs happen — it's where "how do I run this
-          daily?" gets asked. */}
-      <ScheduleControl
-        schedule={project.schedule}
-        keySource={key.source}
-        providerLabel={PROVIDERS[project.default_provider].label}
       />
 
       {runs.length === 0 ? (

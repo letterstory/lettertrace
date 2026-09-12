@@ -192,6 +192,31 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         </div>
       </section>
 
+      {/* ---- Row 1a: the connected rate over time ------------------------
+          Directly under the numbers it expands on, so each rung owns its own
+          chart — the cadence rung's sits under its cards the same way. */}
+      <Card>
+        <div className="flex flex-col px-5 pb-4 pt-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold text-ink">Connected rate over time</h3>
+            <span className="text-xs text-ink-faint">{label}</span>
+          </div>
+          {series.length === 0 || !latest ? (
+            <p className="py-8 text-sm text-ink-faint">
+              No clicks {period === "all" ? "recorded yet" : "in this period"}, so there is no
+              rate to draw.
+            </p>
+          ) : (
+            <RateChart
+              series={series}
+              caption={`${latest.day === today ? "today" : latest.day} ${latest.rate}%${
+                peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""
+              } · each day on its own: users who clicked that day, over signups as of that day · move along the line for daily numbers`}
+            />
+          )}
+        </div>
+      </Card>
+
       {/* ---- Row 1b: the activation rung -------------------------------------
           A rung up from a click: the trial runs on the operator's shared keys,
           so pasting your own is where an account stops costing us money. The
@@ -310,30 +335,7 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         </div>
       </Card>
 
-      {/* ---- Row 2: the rate over time ---------------------------------------- */}
-      <Card>
-        <div className="flex flex-col px-5 pb-4 pt-5">
-          <div className="flex items-baseline justify-between gap-3">
-            <h3 className="text-sm font-semibold text-ink">Connected rate over time</h3>
-            <span className="text-xs text-ink-faint">{label}</span>
-          </div>
-          {series.length === 0 || !latest ? (
-            <p className="py-8 text-sm text-ink-faint">
-              No clicks {period === "all" ? "recorded yet" : "in this period"}, so there is no
-              rate to draw.
-            </p>
-          ) : (
-            <RateChart
-              series={series}
-              caption={`${latest.day === today ? "today" : latest.day} ${latest.rate}%${
-                peak && peak.day !== latest.day ? ` · peak ${peak.rate}% on ${peak.day}` : ""
-              } · each day on its own: users who clicked that day, over signups as of that day · move along the line for daily numbers`}
-            />
-          )}
-        </div>
-      </Card>
-
-      {/* ---- Row 3: who's connected ------------------------------------------ */}
+      {/* ---- Row 2: who's connected ------------------------------------------ */}
       <section className="space-y-3">
         <div>
           <h3 className="text-lg font-semibold text-ink">Connected users</h3>

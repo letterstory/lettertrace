@@ -116,6 +116,7 @@ const PROJECT: Project = {
   default_model: "claude-sonnet-4-6",
   results_seen_at: null,
   schedule: "off",
+  schedule_interval_days: null,
   use_web_search: true,
   replicates: 1,
   last_run_at: null,
@@ -336,6 +337,7 @@ describe("firstSweep", () => {
       competitors: [],
       attribution: {} as never,
       startedMs: 0,
+      startedAt: "1970-01-01T00:00:00.000Z",
     });
     let finish!: (r: ReturnType<typeof completed>) => void;
     vi.mocked(engine.resumeRun).mockReturnValue(
@@ -528,6 +530,59 @@ describe("onboardFromUrl", () => {
     });
     expect(inserted(db, "prompts").flat()[0]).toMatchObject({ source: "manual" });
     expect(outcome.sweep).toMatchObject({ ran: true });
+  });
+
+  it("stores a valid custom cadence with its interval", async () => {
+    vi.mocked(scrapeDomain).mockResolvedValue({
+      ok: true,
+      url: "https://acme.com/",
+      text: "Acme",
+    });
+    vi.mocked(trial.resolveRunKeyFor).mockImplementation(async (_db, _u, p) => own(p));
+    vi.mocked(data.getConfiguredProviders).mockResolvedValue(["anthropic"]);
+    vi.mocked(engine.executeRun).mockResolvedValue(completed("run-1"));
+    const db = happyDb();
+
+    await onboardFromUrl({
+      supabase: db as never,
+      userId: "owner-1",
+      meter: meter(),
+      context: {},
+      input: {
+        url: "acme.com",
+        topics: [{ name: "CDN", prompts: ["best cdn?"] }],
+        schedule: "custom",
+        scheduleIntervalDays: 14,
+      },
+    });
+
+    expect(inserted(db, "projects")[0]).toMatchObject({
+      schedule: "custom",
+      schedule_interval_days: 14,
+    });
+  });
+
+  it("rejects invalid cadence before reading the site or spending model work", async () => {
+    for (const input of [
+      { schedule: "hourly" },
+      { schedule: "custom" },
+      { schedule: "custom", scheduleIntervalDays: 0 },
+      { schedule: "custom", scheduleIntervalDays: 1.5 },
+      { schedule: "custom", scheduleIntervalDays: "14" },
+      { schedule: "custom", scheduleIntervalDays: 91 },
+    ]) {
+      await expect(
+        onboardFromUrl({
+          supabase: fakeDb() as never,
+          userId: "owner-1",
+          meter: meter(),
+          context: {},
+          input: { url: "acme.com", ...input },
+        }),
+      ).rejects.toMatchObject({ code: "invalid" });
+    }
+    expect(scrapeDomain).not.toHaveBeenCalled();
+    expect(suggestFromSite).not.toHaveBeenCalled();
   });
 
   it("does not start a sweep with nothing to ask", async () => {

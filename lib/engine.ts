@@ -242,6 +242,10 @@ export interface PreparedRun {
     targetType: string;
   };
   startedMs: number;
+  /** The exact value stored on runs.started_at and later used as the project's
+   * cadence anchor. Keeping it once prevents run duration from shifting the
+   * next due time. */
+  startedAt: string;
 }
 
 /**
@@ -254,6 +258,7 @@ export interface PreparedRun {
 export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun> {
   const { supabase, project, provider, model, route } = params;
   const startedMs = Date.now();
+  const startedAt = new Date(startedMs).toISOString();
 
   // Attribution shared by every run event below. project.user_id is always the
   // owner, so a run is visible in its owner's feed no matter who triggered it.
@@ -308,7 +313,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
       prompt_count: jobs.length,
       completed_count: 0,
       replicates,
-      started_at: new Date().toISOString(),
+      started_at: startedAt,
     })
     .select("id")
     .single();
@@ -327,7 +332,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
     metadata: { provider, model, route: route?.router ?? null, prompt_count: jobs.length, replicates },
   });
 
-  return { runId, jobs, competitors, attribution, startedMs };
+  return { runId, jobs, competitors, attribution, startedMs, startedAt };
 }
 
 /** Execute a prepared run's jobs and settle the run row. */
@@ -370,13 +375,14 @@ async function resumeRunMeasured(
   params: ExecuteRunParams,
 ): Promise<RunResult> {
   const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
-  const { runId, jobs, competitors, attribution, startedMs } = prepared;
+  const { runId, jobs, competitors, attribution, startedMs, startedAt } = prepared;
 
   if (jobs.length === 0) {
     await supabase
       .from("runs")
       .update({ status: "completed", finished_at: new Date().toISOString() })
       .eq("id", runId);
+    await supabase.from("projects").update({ last_run_at: startedAt }).eq("id", project.id);
     await logActivity({
       ...attribution,
       action: "run.completed",
@@ -610,7 +616,7 @@ async function resumeRunMeasured(
 
   await supabase
     .from("projects")
-    .update({ last_run_at: finishedAt })
+    .update({ last_run_at: startedAt })
     .eq("id", project.id);
 
   await logActivity({

@@ -5,9 +5,8 @@ import { isProvider, resolveEngine } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
+import { customIntervalError, parseCustomInterval, SCHEDULES } from "@/lib/utils";
 import type { Provider, Schedule } from "@/lib/types";
-
-const SCHEDULES: Schedule[] = ["off", "daily", "weekly"];
 
 function toAliases(value: unknown): string[] {
   const parts =
@@ -84,10 +83,30 @@ export async function POST(request: Request) {
       ? b.default_model.trim()
       : undefined;
 
-  const schedule: Schedule =
-    typeof b.schedule === "string" && SCHEDULES.includes(b.schedule as Schedule)
-      ? (b.schedule as Schedule)
-      : "off";
+  // Cadence is set at onboarding and on the Runs page, not here — Settings no
+  // longer offers it. A body that omits `schedule` must leave both columns
+  // untouched on an update; including them unconditionally would silently
+  // reset an existing project's cadence to 'off' on every unrelated save.
+  let cadence: { schedule: Schedule; schedule_interval_days: number | null } | undefined;
+  if (b.schedule !== undefined) {
+    const schedule: Schedule =
+      typeof b.schedule === "string" && SCHEDULES.includes(b.schedule as Schedule)
+        ? (b.schedule as Schedule)
+        : "off";
+
+    // All server entrypoints reject the same malformed custom intervals.
+    // Browser controls normalise their drafts before sending; direct callers
+    // must not get a route-specific clamp or silent default.
+    const scheduleIntervalDays =
+      schedule === "custom" ? parseCustomInterval(b.intervalDays) : null;
+    if (schedule === "custom" && scheduleIntervalDays === null) {
+      return NextResponse.json(
+        { error: customIntervalError() },
+        { status: 400 },
+      );
+    }
+    cadence = { schedule, schedule_interval_days: scheduleIntervalDays };
+  }
 
   const baseFields = {
     name,
@@ -95,7 +114,7 @@ export async function POST(request: Request) {
     brand_aliases: toAliases(b.brand_aliases),
     brand_domains: toDomains(b.brand_domains),
     description: toNullableString(b.description),
-    schedule,
+    ...cadence,
     ...(typeof b.use_web_search === "boolean" ? { use_web_search: b.use_web_search } : {}),
   };
 
@@ -145,7 +164,7 @@ export async function POST(request: Request) {
         projectId: existing.id,
         targetType: "project",
         targetId: existing.id,
-        metadata: { schedule },
+        metadata: cadence ?? {},
       });
       return NextResponse.json(data);
     }

@@ -101,6 +101,7 @@ export function projectSummary(p: Project) {
     default_provider: p.default_provider,
     default_model: p.default_model,
     schedule: p.schedule,
+    schedule_interval_days: p.schedule_interval_days,
     use_web_search: p.use_web_search,
     replicates: p.replicates,
     last_run_at: p.last_run_at,
