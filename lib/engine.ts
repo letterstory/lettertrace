@@ -87,7 +87,10 @@ export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean 
   return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
 }
 
-async function mapPool<T, R>(
+/** Run `fn` over `items` at most `limit` at a time, results in input order.
+ *  Shared with the daily sweep, which pools projects the same way this pools
+ *  a run's asks. */
+export async function mapPool<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
