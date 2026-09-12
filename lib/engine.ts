@@ -32,11 +32,28 @@ export interface RunContext {
 }
 
 // Run at most this many queries at once. Low enough to stay under provider
-// rate limits, high enough that a full-size run finishes inside the 300s
+// rate limits, high enough that a full-size run finishes inside the
 // invocation ceiling: 60 answers with web search on a slow engine run ~20s
-// each, and at 4-wide that exact workload was killed at the cap three times,
-// seconds short of done. 8-wide it clears the ceiling with half left over.
+// each, and at 4-wide that exact workload was killed at the (then 300s) cap
+// three times, seconds short of done. 8-wide it clears the ceiling with room
+// to spare, but a run has no natural size, so the width alone cannot promise
+// that; RUN_TIME_BUDGET_MS below is what does.
 const CONCURRENCY = 8;
+
+// Every route that starts a run declares `maxDuration = 800`: the platform
+// kills the invocation at this point, mid-answer, and nothing after it runs.
+export const INVOCATION_CEILING_MS = 800 * 1000;
+
+// Stop dispatching NEW asks this long after the run started, so the asks
+// already in flight can finish, be stored and the run settle its own row
+// before the ceiling. The margin is sized from the slowest engine's tail:
+// GPT-5.6 Luna answers in 15s at the median and 56s at p99 (8 days to
+// 2026-09-12), so the widest pool of in-flight asks plus the enrichment call
+// and the final writes fits inside two minutes with room to spare. A run that
+// went past this instead of stopping was the 09:00 UTC 2026-09-11 Luna run:
+// 208 answers planned, 201 stored, killed at 797s with seven asks in flight
+// and left reading "running" for 23 hours until the sweeper found it.
+export const RUN_TIME_BUDGET_MS = INVOCATION_CEILING_MS - 120 * 1000;
 
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
@@ -70,7 +87,10 @@ export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean 
   return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
 }
 
-async function mapPool<T, R>(
+/** Run `fn` over `items` at most `limit` at a time, results in input order.
+ *  Shared with the daily sweep, which pools projects the same way this pools
+ *  a run's asks. */
+export async function mapPool<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
@@ -98,6 +118,10 @@ export interface RunResult {
   /** Set when the run stopped early because the free-tier ceiling was reached:
    *  the answers stored are real, there are just fewer of them than planned. */
   budgetStopped?: boolean;
+  /** Set when the run stopped early because it was about to outlive its
+   *  serverless invocation: the answers stored are real, the rest were never
+   *  asked, and the run row says so rather than being found dead later. */
+  timeStopped?: boolean;
   error?: string;
 }
 
@@ -223,6 +247,13 @@ export interface ExecuteRunParams {
    * because the cost of an answer isn't known until it arrives.
    */
   budgetMicros?: number | null;
+  /**
+   * Wall-clock allowance for dispatching asks, measured from the run's
+   * started_at. Defaults to RUN_TIME_BUDGET_MS, which is derived from the
+   * routes' invocation ceiling; only tests and a host with a different
+   * ceiling have reason to pass anything else.
+   */
+  timeBudgetMs?: number;
 }
 
 /** A run row already created and logged, plus everything the job loop needs. */
@@ -376,6 +407,7 @@ async function resumeRunMeasured(
 ): Promise<RunResult> {
   const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
   const { runId, jobs, competitors, attribution, startedMs, startedAt } = prepared;
+  const timeBudgetMs = params.timeBudgetMs ?? RUN_TIME_BUDGET_MS;
 
   if (jobs.length === 0) {
     await supabase
@@ -413,6 +445,14 @@ async function resumeRunMeasured(
   let budgetStopped = false;
   const overBudget = () => ceiling !== null && spentMicros >= ceiling;
 
+  // The clock is the other ceiling. A run that outlives its invocation is not
+  // slow, it is killed: the asks in flight are lost, the row stays "running",
+  // and a client polling for a terminal status waits until a sweeper notices.
+  // Stopping short of that point costs the unasked answers either way; this
+  // way the run says so itself, immediately, in its own row.
+  let timeStopped = false;
+  const outOfTime = () => Date.now() - startedMs >= timeBudgetMs;
+
   await mapPool(jobs, CONCURRENCY, async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
     // the point where in-flight answers have already reported their cost. Jobs
@@ -420,6 +460,10 @@ async function resumeRunMeasured(
     // and throwing it away would waste money we have already spent.
     if (overBudget()) {
       budgetStopped = true;
+      return;
+    }
+    if (outOfTime()) {
+      timeStopped = true;
       return;
     }
     try {
@@ -596,11 +640,15 @@ async function resumeRunMeasured(
   // answers that were stored are as good as any other run's. But it IS a
   // shortfall, and a run that silently returns 40 of 200 answers would look
   // like the prompts stopped working. Say which it was, in the run's own row.
-  const shortfall = budgetStopped ? jobs.length - processed : 0;
+  const stoppedEarly = budgetStopped || timeStopped;
+  const shortfall = stoppedEarly ? jobs.length - processed : 0;
   const budgetNote = budgetStopped
     ? `Stopped after ${succeeded} of ${jobs.length} answers: this account reached its free-usage limit. ` +
       `Add your own provider key in Settings to run the remaining ${shortfall}.`
-    : null;
+    : timeStopped
+      ? `Stopped after ${succeeded} of ${jobs.length} answers: the run reached its ${Math.round(timeBudgetMs / 60000)}-minute time limit. ` +
+        `Run it again to collect the remaining ${shortfall}, or split the project's prompts across fewer engines per run.`
+      : null;
   await supabase
     .from("runs")
     .update({
@@ -628,7 +676,9 @@ async function resumeRunMeasured(
       status === "completed"
         ? budgetStopped
           ? `Run stopped at the free-usage limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
-          : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+          : timeStopped
+            ? `Run stopped at the time limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+            : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
         : `Run failed: ${hardError ?? budgetNote ?? "no answers were stored"}`,
     durationMs: Date.now() - startedMs,
     metadata: {
@@ -639,6 +689,7 @@ async function resumeRunMeasured(
       tokens_used: tokensUsed,
       spend_micros: spentMicros,
       ...(budgetStopped ? { budget_stopped: true, unrun_prompts: shortfall } : {}),
+      ...(timeStopped ? { time_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
     },
   });
@@ -660,6 +711,7 @@ async function resumeRunMeasured(
       failed: jobs.length - succeeded,
       duration_ms: Date.now() - startedMs,
       budget_stopped: Boolean(budgetStopped),
+      time_stopped: Boolean(timeStopped),
     },
   });
 
@@ -670,6 +722,7 @@ async function resumeRunMeasured(
     tokensUsed,
     spendMicros: spentMicros,
     ...(budgetStopped ? { budgetStopped: true } : {}),
+    ...(timeStopped ? { timeStopped: true } : {}),
     error: hardError,
   };
 }
