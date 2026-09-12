@@ -334,6 +334,24 @@ describe("perplexity HTTP errors", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  // Incident #108: Perplexity's rate limit is per MINUTE, so this is the exact
+  // Retry-After a busy run gets. The old 45s cap refused it, the loop broke out
+  // before its first sleep, and a run lost 46 of 76 answers to a limit that
+  // would have cleared on its own.
+  it("waits out a per-minute rate-limit window", async () => {
+    vi.useFakeTimers();
+    mockFetch(
+      jsonResponse({ error: { message: "Request rate limit exceeded" } }, 429, { "retry-after": "60" }),
+      jsonResponse(ok("hi")),
+    );
+    const p = runQuery({ provider: "perplexity", model: "sonar", apiKey: KEY, prompt: "q" });
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(p).resolves.toMatchObject({ text: "hi" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("gives up rather than blocking on a window it can't wait out", async () => {
     vi.useFakeTimers();
     mockFetch(jsonResponse({ error: { message: "daily cap" } }, 429, { "retry-after": "3600" }));
