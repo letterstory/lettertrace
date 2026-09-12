@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { executeRun, sweepAbandonedRuns } from "@/lib/engine";
+import { executeRun, sweepAbandonedRuns, RUN_TIME_BUDGET_MS } from "@/lib/engine";
 import {
   resolveRunKey,
   consumeTrialRunFor,
@@ -72,6 +72,14 @@ async function sweepAndRun(span: Span) {
   for (const project of projects) {
     if (!isScheduleDue(project, now)) continue;
 
+    // Every due project runs in sequence inside this one invocation, so the
+    // budget is the tick's, not each run's: a run that starts ten minutes in
+    // has ten minutes less before the platform kills the whole tick, and
+    // measuring from its own started_at would let it run straight into that.
+    // Once the tick's budget is spent, what is left is left for the next tick;
+    // executeRun with no time asks nothing and settles the row as such.
+    const timeBudgetMs = Math.max(0, RUN_TIME_BUDGET_MS - (Date.now() - now));
+
     try {
       // Ask the run resolver rather than reading provider_keys directly. The
       // direct read predates router credentials and silently skipped anyone
@@ -115,6 +123,7 @@ async function sweepAndRun(span: Span) {
         route: key.route,
         keySource: key.source === "trial" ? "trial" : "own",
         budgetMicros: runBudgetMicros(key),
+        timeBudgetMs,
         context: {
           channel: "cron",
           actorType: "cron",
