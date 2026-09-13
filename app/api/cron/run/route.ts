@@ -11,6 +11,7 @@ import {
 } from "@/lib/trial";
 import { withSpan } from "@/lib/otel";
 import { isScheduleDue } from "@/lib/utils";
+import { recordOps } from "@/lib/ops";
 import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
 
@@ -82,6 +83,33 @@ async function sweepAndRun(span: Span) {
   const now = Date.now();
   const due = projects.filter((project) => isScheduleDue(project, now));
 
+  // Every project the tick leaves alone gets one log record naming exactly
+  // what the due-check saw. The 12 and 13 Sep 2026 sweeps ran the whole-UTC-day
+  // check (lib/utils.ts isScheduleDue, live since 3c6f994) and yet judged the
+  // projects run the previous morning not due, so daily projects kept
+  // alternating days — a decision that leaves no trace once the tick ends,
+  // because only the projects that RUN write anything. With the inputs on the
+  // record, the next sweep explains itself: a 'daily' row whose last run was
+  // yesterday and still came out not due points at the stored row; a tick that
+  // logs nothing at all points at the deployed bundle.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (const project of projects) {
+    if (due.includes(project)) continue;
+    const last = project.last_run_at ? new Date(project.last_run_at).getTime() : null;
+    recordOps("cron.due_check", {
+      signature: "cron.due_check:not_due",
+      sample: {
+        project_id: project.id,
+        schedule: project.schedule,
+        interval_days: project.schedule_interval_days,
+        last_run_at: project.last_run_at,
+        last_run_parsed: last === null ? null : Number.isNaN(last) ? "NaN" : new Date(last).toISOString(),
+        utc_days_since: last === null || Number.isNaN(last) ? null : Math.floor(now / DAY_MS) - Math.floor(last / DAY_MS),
+        now: new Date(now).toISOString(),
+      },
+    });
+  }
+
   // Due projects run SWEEP_CONCURRENCY at a time inside this one invocation,
   // so the budget is the tick's, not each run's: a run that starts ten
   // minutes in has ten minutes less before the platform kills the whole tick,
@@ -94,6 +122,8 @@ async function sweepAndRun(span: Span) {
 
   span.setAttributes({
     "cron.projects.scheduled": projects.length,
+    "cron.projects.due": due.length,
+    "cron.projects.not_due": projects.length - due.length,
     "cron.projects.processed": results.length,
     "cron.projects.skipped": results.filter((r) => r.status === "skipped").length,
     "cron.projects.failed": results.filter((r) => r.status === "failed").length,
