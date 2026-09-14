@@ -98,17 +98,6 @@ $$;
 alter table public.profiles
   add column if not exists trial_runs_used integer not null default 0;
 
--- Complimentary account: the operator has comped this user, so trial-funded
--- runs are never gated on the run/spend ceilings. This is NOT a self-serve
--- field — it is set out-of-band by the operator (service role / SQL editor)
--- for a specific account, never by the account itself. The guard_profiles
--- trigger below pins it on every client write for exactly that reason: without
--- that pin a user could UPDATE their own row to is_comped = true and mint
--- unlimited spend on the operator's keys. Default false, so every deployment
--- and self-host is unaffected until its own operator flips a row. Safe to re-run.
-alter table public.profiles
-  add column if not exists is_comped boolean not null default false;
-
 create or replace function public.increment_trial_runs()
 returns integer
 language sql
@@ -130,12 +119,10 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  -- A comped account always passes the gate (its ceiling is lifted); we still
-  -- increment so the meter keeps recording what it would have spent.
   update public.profiles
     set trial_runs_used = trial_runs_used + 1
     where id = auth.uid()
-      and (is_comped or trial_runs_used < greatest(max_runs, 0));
+      and trial_runs_used < greatest(max_runs, 0);
   return found;
 end;
 $$;
@@ -152,12 +139,10 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  -- Comp lifts the ceiling here too, so the scheduler runs a comped account's
-  -- trial-funded projects on cadence without ever hitting the run cap.
   update public.profiles
     set trial_runs_used = trial_runs_used + 1
     where id = uid
-      and (is_comped or trial_runs_used < greatest(max_runs, 0));
+      and trial_runs_used < greatest(max_runs, 0);
   return found;
 end;
 $$;
@@ -768,12 +753,9 @@ begin
   end if;
 
   -- UPDATE from a client: trial meters are immutable, force them back to the
-  -- stored values regardless of what was submitted. is_comped rides here too —
-  -- it is an operator-only grant, so a client must never be able to set it on
-  -- themselves and unlock unlimited spend on the operator's keys.
+  -- stored values regardless of what was submitted.
   new.trial_runs_used := old.trial_runs_used;
   new.trial_tokens_used := old.trial_tokens_used;
-  new.is_comped := old.is_comped;
   return new;
 end;
 $$;

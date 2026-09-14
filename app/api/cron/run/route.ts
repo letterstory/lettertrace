@@ -98,8 +98,10 @@ async function sweepAndRun(span: Span) {
         });
         continue;
       }
+      // A comped account runs on cadence without spending its run allowance.
       if (
         key.source === "trial" &&
+        !key.comped &&
         !(await consumeTrialRunFor(supabase, project.user_id))
       ) {
         results.push({ projectId: project.id, status: "skipped", reason: "exhausted" });

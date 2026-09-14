@@ -123,7 +123,8 @@ export async function POST(request: Request) {
   // Atomically consume a free run BEFORE executing, so concurrent requests
   // can't all slip past the gate while the counter lags. A consumed run
   // counts even if it later fails.
-  if (key.source === "trial" && !(await consumeTrialRunFor(billing, payer))) {
+  // A comped account runs on the trial keys without spending its run allowance.
+  if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(billing, payer))) {
     return NextResponse.json(
       {
         error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,

@@ -53,6 +53,36 @@ export function trialRunLimit(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TRIAL_RUN_LIMIT;
 }
 
+/**
+ * Accounts the operator has comped: they run on the operator's shared trial
+ * keys with BOTH free-tier ceilings lifted. A comma-separated list of auth user
+ * ids in env COMPED_USER_IDS.
+ *
+ * Env rather than a database flag on purpose. The list is settable only where
+ * env is — the deployment's Vercel project — so editing it is already gated by
+ * the same people who administer the deployment; there is nothing a signed-in
+ * user could write to comp themselves, and no migration or admin UI to protect.
+ * Empty by default, so every deployment and self-host comps nobody until its
+ * operator names an id. User ids (not emails): an id is assigned by the auth
+ * server and can't be claimed by signing up, the same reason ADMIN_USER_IDS is
+ * preferred over ADMIN_EMAILS in lib/admin.ts.
+ */
+export function compedUserIds(): string[] {
+  return (process.env.COMPED_USER_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** Is this user id on the comp list? Empty list means nobody. */
+export function isCompedUser(userId: string | null | undefined): boolean {
+  const id = userId?.trim().toLowerCase();
+  if (!id) return false;
+  const allowed = compedUserIds();
+  if (allowed.length === 0) return false;
+  return allowed.includes(id);
+}
+
 const TRIAL_KEY_ENV: Record<Provider, string> = {
   anthropic: "TRIAL_ANTHROPIC_API_KEY",
   openai: "TRIAL_OPENAI_API_KEY",
@@ -158,8 +188,8 @@ export async function getTrialSpendMicros(
 export interface TrialUsage {
   runs: number;
   spendMicros: number;
-  /** Operator-comped account: both trial ceilings are lifted. Set out-of-band
-   *  by the operator (see profiles.is_comped), never by the account itself. */
+  /** Operator-comped account: both trial ceilings are lifted. Driven by the
+   *  COMPED_USER_IDS env allowlist (see isCompedUser), never by account data. */
   comped: boolean;
 }
 
@@ -178,18 +208,16 @@ export async function getTrialUsage(
 ): Promise<TrialUsage> {
   const { data } = await supabase
     .from("profiles")
-    .select("trial_runs_used, trial_spend_micros, is_comped")
+    .select("trial_runs_used, trial_spend_micros")
     .eq("id", userId)
     .maybeSingle();
-  const row = data as {
-    trial_runs_used?: number;
-    trial_spend_micros?: number;
-    is_comped?: boolean;
-  } | null;
+  const row = data as { trial_runs_used?: number; trial_spend_micros?: number } | null;
   return {
     runs: Number(row?.trial_runs_used ?? 0),
     spendMicros: Number(row?.trial_spend_micros ?? 0),
-    comped: Boolean(row?.is_comped ?? false),
+    // Comp is an operator env allowlist, not account data — so it applies even
+    // to a brand-new profile the signup trigger hasn't written yet.
+    comped: isCompedUser(userId),
   };
 }
 
