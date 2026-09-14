@@ -1,6 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { signatureOf } from "@/lib/ops";
 import { sweepAbandonedRuns } from "@/lib/engine";
+import { selectAll } from "@/lib/paging";
 
 /**
  * The half of the operations picture that does not need telemetry.
@@ -212,15 +213,25 @@ export async function liveHealth(hours = 24): Promise<LiveHealth> {
     // tab) is harmless. Failure to sweep must not cost the page: the numbers
     // are the product here, the sweep is a courtesy.
     await sweepAbandonedRuns(admin).catch(() => {});
-    const [runsRes, signupRes, usersRes, apiErrRes] = await Promise.all([
-      admin
-        .from("runs")
-        .select(
-          "id, status, provider, model, error, prompt_count, completed_count, started_at, created_at, key_source",
-        )
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false })
-        .limit(2000),
+    const [runs, signupRes, usersRes, apiErrRes] = await Promise.all([
+      // Paged, because a plain select stops at PostgREST's 1,000-row ceiling
+      // without saying so (lib/paging.ts) — on a busy day that ceiling would
+      // quietly become the denominator of every rate on this card. selectAll
+      // throws on a failed page, which is exactly what the runs query should
+      // do here: see the note below.
+      selectAll<RunRow>(
+        (from, to) =>
+          admin
+            .from("runs")
+            .select(
+              "id, status, provider, model, error, prompt_count, completed_count, started_at, created_at, key_source",
+            )
+            .gte("created_at", sinceIso)
+            .order("created_at", { ascending: false })
+            .range(from, to),
+        1000,
+        2000,
+      ),
       admin.from("profiles").select("id", { count: "exact", head: true }).gte("created_at", sinceIso),
       admin.from("profiles").select("id", { count: "exact", head: true }),
       admin
@@ -232,11 +243,10 @@ export async function liveHealth(hours = 24): Promise<LiveHealth> {
 
     // Runs are the load-bearing query: without them every number below is a
     // lie of omission, so a failure there degrades the whole card rather than
-    // quietly reporting zero runs and a clean bill of health.
-    if (runsRes.error) throw runsRes.error;
-
+    // quietly reporting zero runs and a clean bill of health. selectAll throws
+    // rather than returning a short array, so that failure lands in the catch.
     return shapeLive(
-      (runsRes.data ?? []) as RunRow[],
+      runs,
       Date.now(),
       signupRes.count ?? 0,
       usersRes.count ?? 0,
