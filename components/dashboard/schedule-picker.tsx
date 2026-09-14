@@ -216,7 +216,7 @@ export function SchedulePicker({
 
         <div className="flex shrink-0 items-center gap-2 pl-8 sm:pl-0">
           <span className="text-xs font-medium text-ink-soft">
-            Schedule {localEnabled ? "on" : "off"}
+            {localEnabled ? "Turn off" : "Turn on"}
           </span>
           <Switch
             checked={localEnabled}

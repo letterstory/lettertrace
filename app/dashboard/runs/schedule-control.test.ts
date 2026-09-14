@@ -23,8 +23,10 @@ describe("ScheduleControl", () => {
     );
 
     expect(html).toContain("Schedule a Report");
-    expect(html).toContain("Schedule off");
-    expect(html).toContain('role="switch" aria-checked="false"');
+    expect(html).toContain("Turn on");
+    expect(html).toContain(
+      'role="switch" aria-checked="false" aria-label="Automatic report schedule"',
+    );
     // Nothing pressed: an off schedule stores no cadence, and showing "Run
     // daily" selected read as a choice the user never made — then turning the
     // switch on quietly scheduled daily.
@@ -46,8 +48,10 @@ describe("ScheduleControl", () => {
       }),
     );
 
-    expect(html).toContain("Schedule on");
-    expect(html).toContain('role="switch" aria-checked="true"');
+    expect(html).toContain("Turn off");
+    expect(html).toContain(
+      'role="switch" aria-checked="true" aria-label="Automatic report schedule"',
+    );
     expect(html).toContain("Runs every 21 days");
     expect(html).toMatch(/aria-pressed="true"[^>]*>Set a schedule/);
     expect(html).toContain('aria-label="Days between runs"');
