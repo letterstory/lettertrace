@@ -9,7 +9,7 @@ import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { duration, timeAgo } from "@/lib/utils";
 import { PeriodSelect } from "../period-select";
-import { DayRateChart } from "./day-rate-chart";
+import { DaySeriesChart } from "./day-series-chart";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -51,7 +51,7 @@ function ColumnHeader({ children, className }: { children: React.ReactNode; clas
  */
 function RateChart({ series, caption }: { series: RatePoint[]; caption: string }) {
   return (
-    <DayRateChart
+    <DaySeriesChart
       tint="mint-bright"
       ariaLabel="Connected rate over time"
       caption={caption}
@@ -59,7 +59,7 @@ function RateChart({ series, caption }: { series: RatePoint[]; caption: string }
         .filter((p): p is RatePoint & { rate: number } => p.rate !== null)
         .map((p) => ({
           day: p.day,
-          rate: p.rate,
+          value: p.rate,
           detail: `${p.day} · ${p.rate}% connected · ${p.connected} of ${p.signups} signups clicked this day · ${p.clicks} click${p.clicks === 1 ? "" : "s"}`,
         }))}
     />
@@ -67,23 +67,24 @@ function RateChart({ series, caption }: { series: RatePoint[]; caption: string }
 }
 
 /**
- * Scheduling by signup cohort: each day is the accounts that signed up THAT
- * day, and the share of them running a report on a cadence today. Days nobody
- * signed up carry no rate and drop out entirely.
+ * Scheduled reports over time: the running total of reports on a cadence, one
+ * point per day. Counts reports, never accounts — one company with six brands
+ * on three cadences is three reports here, which is the number the scheduler
+ * actually has to run.
  */
 function ScheduleChart({ series, caption }: { series: SchedulePoint[]; caption: string }) {
   return (
-    <DayRateChart
+    <DaySeriesChart
       tint="teal"
-      ariaLabel="Share of each day's signups scheduling a report"
+      ariaLabel="Scheduled reports over time"
       caption={caption}
-      points={series
-        .filter((p): p is SchedulePoint & { rate: number } => p.rate !== null)
-        .map((p) => ({
-          day: p.day,
-          rate: p.rate,
-          detail: `${p.day} · ${p.rate}% scheduling · ${p.scheduled} of the ${p.signups} account${p.signups === 1 ? "" : "s"} that signed up this day run a report on a cadence`,
-        }))}
+      points={series.map((p) => ({
+        day: p.day,
+        value: p.total,
+        detail: `${p.day} · ${p.total.toLocaleString()} scheduled report${p.total === 1 ? "" : "s"}${
+          p.added > 0 ? ` · ${p.added} started this day` : " · none started this day"
+        }`,
+      }))}
     />
   );
 }
@@ -101,10 +102,11 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
   const today = new Date().toISOString().slice(0, 10);
-  // Days that had signups are the only ones the cohort chart can speak about.
-  const scheduleDays = scheduleSeries.filter((p) => p.rate !== null);
+  // "the last 30 days" / "the year to date" — the label as it reads after a
+  // preposition, since "made in last 30 days" is not a sentence.
+  const windowPhrase = period === "all" ? "all time" : `the ${label}`;
   const cadence = scheduled.byInterval
-    .map((i) => `${i.projects.toLocaleString()} ${i.schedule}`)
+    .map((i) => `${i.reports.toLocaleString()} ${i.label}`)
     .join(" · ");
 
   return (
@@ -265,35 +267,35 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
       </section>
 
       {/* ---- Row 1c: the cadence rung ----------------------------------------
-          The one figure here that reads a STATE rather than an event: the
-          projects table says what the cadence is now and nothing records when
-          it became that, so the window scopes the SIGNUP COHORT, exactly as
-          the activation card above does. Onboarding has created projects on a
-          daily schedule since 2026-08-20, so for anyone newer than that this
-          rung measures "left it on", not "switched it on" — said plainly in
-          the hints, because a number near 100% otherwise reads as a triumph. */}
+          Counted in REPORTS, not accounts: one company can keep six brands on
+          three cadences, and what matters here is how much scheduled work
+          exists and whether it is growing, not how many people own it. The one
+          figure on this page that reads a STATE — the projects table says what
+          the cadence is now and nothing records when it became that — so the
+          only date a scheduled report has is the day its project was made, and
+          the window scopes exactly that and says so. */}
       <section className="space-y-3">
         <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
-          Scheduled · keeps a report running on a cadence
+          Scheduled · reports running on a cadence
         </h3>
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
           <StatCard
-            label="Scheduling rate"
-            value={scheduled.rate === null ? "—" : `${scheduled.rate}%`}
+            label="Scheduled reports"
+            value={scheduled.reports.toLocaleString()}
             hint={
-              scheduled.cohortSize === 0
-                ? `nobody signed up in ${label}`
-                : `${scheduled.cohortScheduled.toLocaleString()} of the ${scheduled.cohortSize.toLocaleString()} accounts that signed up ${period === "all" ? "ever" : `in the ${label.replace("last ", "")}`} have a report on a schedule today`
+              scheduled.reports === 0
+                ? "nothing is on a cadence yet"
+                : `across ${scheduled.accounts.toLocaleString()} account${scheduled.accounts === 1 ? "" : "s"} of ${scheduled.totalUsers.toLocaleString()} · ${(scheduled.reports / scheduled.accounts).toFixed(1)} reports each`
             }
             accent="teal"
           />
           <StatCard
-            label="Scheduling accounts"
-            value={scheduled.allTime.toLocaleString()}
+            label={period === "all" ? "Started all time" : `Started in ${windowPhrase}`}
+            value={scheduled.newInPeriod.toLocaleString()}
             hint={
-              scheduled.rateAllTime === null
-                ? "nobody has signed up yet"
-                : `${scheduled.rateAllTime}% of all ${scheduled.totalUsers.toLocaleString()} signups · ${scheduled.projects.toLocaleString()} scheduled report${scheduled.projects === 1 ? "" : "s"} between them`
+              period === "all"
+                ? "every scheduled report, dated by the day its project was made"
+                : `projects made in ${windowPhrase} that run on a cadence today · ${scheduled.reports.toLocaleString()} scheduled in total`
             }
             accent="mint"
           />
@@ -307,29 +309,32 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
             hint={
               scheduled.avgIntervalDays === null
                 ? "nothing is scheduled yet"
-                : `mean gap between runs over ${scheduled.projects.toLocaleString()} scheduled report${scheduled.projects === 1 ? "" : "s"} · ${cadence} · all time`
+                : `mean gap between runs · ${cadence} · ≈${scheduled.runsPerDay?.toLocaleString()} scheduled run${scheduled.runsPerDay === 1 ? "" : "s"} a day`
             }
             accent="butter"
           />
         </div>
       </section>
 
-      {/* ---- Row 1d: scheduling by signup cohort ------------------------------ */}
+      {/* ---- Row 1d: scheduled reports over time ------------------------------ */}
       <Card>
         <div className="flex flex-col px-5 pb-4 pt-5">
           <div className="flex items-baseline justify-between gap-3">
-            <h3 className="text-sm font-semibold text-ink">Scheduling rate by signup cohort</h3>
+            <h3 className="text-sm font-semibold text-ink">Scheduled reports over time</h3>
             <span className="text-xs text-ink-faint">{label}</span>
           </div>
-          {scheduleDays.length === 0 ? (
+          {scheduleSeries.length === 0 ? (
             <p className="py-8 text-sm text-ink-faint">
-              Nobody signed up {period === "all" ? "yet" : "in this period"}, so there is no
-              cohort to draw.
+              Nothing is running on a cadence yet, so there is no line to draw.
             </p>
           ) : (
             <ScheduleChart
               series={scheduleSeries}
-              caption="each day is that day's signups, and how many of them run a report on a cadence today · move along the line for the counts · a low-volume day is one or two people, so read the shape, not a single point"
+              caption={`${scheduled.reports.toLocaleString()} report${scheduled.reports === 1 ? "" : "s"} on a cadence today${
+                period === "all"
+                  ? ""
+                  : ` · ${scheduled.newInPeriod.toLocaleString()} of them started in ${windowPhrase}`
+              } · move along the line for each day's total · every report sits on the day its project was made, so the line only climbs`}
             />
           )}
         </div>
@@ -420,14 +425,18 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
         time to first key count the accounts whose first key LANDED in it. A cohort rate can
         never exceed 100%; the obvious alternative (keys added over signups in the window)
         can, because someone who signed up in March and pasted a key today belongs to only one
-        of those two sets. On all time the two definitions coincide. Scheduling is a state and
-        not an event — projects.schedule holds today&rsquo;s cadence and nothing records when it
-        was set — so it is read through signup cohorts too, and the chart is cohorts rather than
-        the stock curve it resembles: drawing &ldquo;what share had a schedule on that day&rdquo;
-        would mean rewinding a change log that only covers the dashboard toggle, which produces a
-        smooth line that is quietly wrong. Onboarding has started new projects on a daily
-        schedule since 2026-08-20, so a high rate among recent cohorts means the default was
-        kept, not that anyone went looking for the setting.{" "}
+        of those two sets. On all time the two definitions coincide. Scheduled counts REPORTS, not
+        the accounts behind them: one company can keep six brands on three different cadences,
+        and the operator question is how much scheduled work exists. It is a state and not an
+        event — projects.schedule holds today&rsquo;s cadence and nothing records when it was set
+        — so every scheduled report is dated by the day its project was made. That is what the
+        window scopes and what the line is built from, which means the line can only climb: a
+        report switched off last week was never in it, and one switched on last week sits back on
+        its project&rsquo;s creation day. Drawing the true stock would mean rewinding a change log
+        that only covers the dashboard toggle, which produces a smooth curve that is quietly
+        wrong. Onboarding has started new projects on a schedule since 2026-08-20, so much of the
+        recent climb is the default being kept rather than anyone going looking for the
+        setting.{" "}
         <Link href="/admin/growth" className="underline">
           Back to growth
         </Link>

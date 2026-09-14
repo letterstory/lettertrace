@@ -132,6 +132,26 @@ describe("shapeActivity", () => {
     expect(a.series.filter((d) => d.runs === 0)).toHaveLength(29);
   });
 
+  it("draws one bar per day of the SELECTED window, ending today", () => {
+    const runs = [run({ project_id: "proj-a", created_at: iso(1, 1) })];
+    const a = shapeActivity(runs, owners, NOW, NOW - 7 * DAY_MS);
+    expect(a.series).toHaveLength(7);
+    expect(a.series.at(-1)?.day).toBe(new Date(NOW).toISOString().slice(0, 10));
+    expect(a.window).toEqual({ users: 1, runs: 1 });
+    // The rolling windows ignore the selection entirely.
+    expect(a.monthly).toEqual({ users: 1, runs: 1 });
+  });
+
+  it("opens all-time at the first run, and draws nothing when there are none", () => {
+    const a = shapeActivity([run({ project_id: "proj-a", created_at: iso(40) })], owners, NOW, null);
+    expect(a.series[0].day).toBe(iso(40).slice(0, 10));
+    expect(a.series.at(-1)?.day).toBe(new Date(NOW).toISOString().slice(0, 10));
+    // Older than 30 days, so it is in the window but not in MAU.
+    expect(a.window).toEqual({ users: 1, runs: 1 });
+    expect(a.monthly).toEqual({ users: 0, runs: 0 });
+    expect(shapeActivity([], owners, NOW, null).series).toEqual([]);
+  });
+
   it("counts a run whose project is gone in runs but not users", () => {
     const runs = [run({ project_id: "proj-deleted", created_at: iso(0, 1) })];
     const a = shapeActivity(runs, owners, NOW);
@@ -151,7 +171,7 @@ describe("shapeTopAccounts", () => {
     expect(top[0]).toMatchObject({
       email: "sam@gmail.com",
       emailClass: "personal",
-      runs30d: 2,
+      runs: 2,
       projects: 2,
       brands: ["BetaCo"],
     });
