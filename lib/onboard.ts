@@ -308,7 +308,8 @@ export async function firstSweep(opts: {
 
   const funded: ResolvedKey[] = [];
   for (const k of keys) {
-    if (k.source === "trial" && !(await meter.consume())) continue;
+    // A comped account runs on the trial keys without spending its run allowance.
+    if (k.source === "trial" && !k.comped && !(await meter.consume())) continue;
     funded.push(k);
   }
   if (funded.length === 0) {

@@ -5,10 +5,9 @@ import { requireAdmin } from "@/lib/admin";
 import { classifyEmail } from "@/lib/growth";
 import { deriveCompany } from "@/lib/accounts";
 import { createServiceClient } from "@/lib/supabase/service";
-import { Badge, Button, Card, CardBody, SectionHeading, StatCard } from "@/components/ui";
+import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { formatDate, scheduleLabel, timeAgo } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
-import { setAccountComped } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -152,7 +151,7 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
   const svc = createServiceClient();
   const { data: profile } = await svc
     .from("profiles")
-    .select("id, email, created_at, trial_runs_used, trial_tokens_used, trial_spend_micros, is_comped")
+    .select("id, email, created_at, trial_runs_used, trial_tokens_used, trial_spend_micros")
     .eq("id", params.id)
     .maybeSingle();
   if (!profile) notFound();
@@ -300,7 +299,6 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
   const spendUsd = Number(profile.trial_spend_micros ?? 0) / 1_000_000;
   const trialRuns = Number(profile.trial_runs_used ?? 0);
   const trialTokens = Number(profile.trial_tokens_used ?? 0);
-  const comped = Boolean(profile.is_comped);
 
   return (
     <div className="space-y-8">
@@ -349,32 +347,6 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
           accent="sand"
         />
       </div>
-
-      {/* ---- Complimentary access ------------------------------------------- */}
-      {/* Lifts both trial ceilings for this account: it runs on the operator's
-          shared keys with uncapped spend. The action re-checks requireAdmin. */}
-      <Card>
-        <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-ink">Complimentary access</h3>
-              <Badge tone={comped ? "mint" : "sand"}>{comped ? "on" : "off"}</Badge>
-            </div>
-            <p className="text-xs text-ink-faint">
-              {comped
-                ? "This account runs on the operator's shared keys with both trial ceilings lifted — uncapped spend on your bill."
-                : "This account is metered by the normal free-tier run and spend ceilings."}
-            </p>
-          </div>
-          <form action={setAccountComped}>
-            <input type="hidden" name="userId" value={profile.id} />
-            <input type="hidden" name="comped" value={comped ? "false" : "true"} />
-            <Button type="submit" variant={comped ? "secondary" : "primary"} size="sm">
-              {comped ? "Revoke comp" : "Comp this account"}
-            </Button>
-          </form>
-        </CardBody>
-      </Card>
 
       {/* ---- Cadence -------------------------------------------------------- */}
       <Card className="flex flex-col">
