@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { hashApiKey } from "@/lib/crypto";
+import { fireAndForget } from "@/lib/notify";
 
 // Bearer-token auth for the programmatic surface (/api/v1 and /api/mcp).
 // Requests carry a Lettertrace credential instead of a Supabase session, so the
@@ -78,6 +79,18 @@ export function isOAuthToken(
  * Fail-closed: expiry and revocation are pushed into the SQL WHERE clause, so a
  * query error or a missing row yields null (no access), never a context.
  * Touches last_used_at so the settings pages can show stale credentials.
+ *
+ * The last_used_at stamps are FIRE-AND-FORGET, not awaited (2026-09-14, INC-246).
+ * They are display-only — nothing reads them to make a decision, and they are
+ * written on the authentication path, so every programmatic request used to pay
+ * a second Supabase round trip before its own work began. During the
+ * intermittent Supabase tail stalls that cost real time: 11 of the 46 stalls
+ * inside interactive requests over five hours were on this api_keys write, the
+ * worst 7.9 s. The read that resolves the credential is still awaited — access
+ * decisions are unchanged and still fail-closed. The consequence is that
+ * last_used_at is now best-effort: under a lost background write it can lag,
+ * which is acceptable for a "last used" column and was already possible, since
+ * a failing update was never checked.
  */
 export async function authenticateApiKey(
   token: string | null | undefined,
@@ -93,10 +106,16 @@ export async function authenticateApiKey(
     .eq("key_hash", hash)
     .maybeSingle();
   if (apiKey) {
-    await supabase
-      .from("api_keys")
-      .update({ last_used_at: new Date().toISOString() })
-      .eq("id", apiKey.id);
+    // Promise.resolve() because a PostgREST builder is a thenable, not a
+    // Promise, and fireAndForget calls .catch() on what it is handed.
+    fireAndForget(
+      Promise.resolve(
+        supabase
+          .from("api_keys")
+          .update({ last_used_at: new Date().toISOString() })
+          .eq("id", apiKey.id),
+      ),
+    );
     return {
       supabase,
       userId: apiKey.user_id as string,
@@ -122,15 +141,20 @@ export async function authenticateApiKey(
     .gt("expires_at", nowIso)
     .maybeSingle();
   if (oauth) {
-    await supabase
-      .from("oauth_access_tokens")
-      .update({ last_used_at: nowIso })
-      .eq("id", oauth.id);
+    fireAndForget(
+      Promise.resolve(
+        supabase.from("oauth_access_tokens").update({ last_used_at: nowIso }).eq("id", oauth.id),
+      ),
+    );
     if (oauth.authorization_id) {
-      await supabase
-        .from("oauth_authorizations")
-        .update({ last_used_at: nowIso })
-        .eq("id", oauth.authorization_id);
+      fireAndForget(
+        Promise.resolve(
+          supabase
+            .from("oauth_authorizations")
+            .update({ last_used_at: nowIso })
+            .eq("id", oauth.authorization_id),
+        ),
+      );
     }
     return {
       supabase,
