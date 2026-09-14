@@ -187,6 +187,9 @@ export function SchedulePicker({
   }
 
   const days = normalizeCustomInterval(intervalDraft, confirmed.current.intervalDays);
+  /** What clicking the switch will DO, which is the one thing its own
+   *  appearance can't say. */
+  const action = localEnabled ? "Turn off" : "Turn on";
 
   return (
     <div
@@ -215,12 +218,17 @@ export function SchedulePicker({
         </div>
 
         <div className="flex shrink-0 items-center gap-2 pl-8 sm:pl-0">
-          <span className="text-xs font-medium text-ink-soft">
-            {localEnabled ? "Turn off" : "Turn on"}
-          </span>
+          {/* The visible word is the ACTION, not the state — the switch itself
+              already shows the state, and "Schedule off" next to a visibly off
+              switch said the same thing twice. The accessible name carries the
+              same word so the two agree: a speech-input user who says what
+              they can read ("turn on") hits the control, which is exactly what
+              WCAG's label-in-name is about, and a screen-reader user still
+              hears what the switch governs after it. */}
+          <span className="text-xs font-medium text-ink-soft">{action}</span>
           <Switch
             checked={localEnabled}
-            label={switchAriaLabel}
+            label={`${action}: ${switchAriaLabel}`}
             disabled={disabled}
             onChange={(next) => void commit(next, cadenceForSwitch(localCadence), days)}
           />
