@@ -11,11 +11,14 @@ import {
 } from "@/lib/trial";
 import { withSpan } from "@/lib/otel";
 import { isScheduleDue } from "@/lib/utils";
+import { recordOps } from "@/lib/ops";
 import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 800;
 export const dynamic = "force-dynamic";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface ProjectResult {
   projectId: string;
@@ -69,8 +72,36 @@ async function sweepAndRun(span: Span) {
   const now = Date.now();
   const results: ProjectResult[] = [];
 
+  let notDue = 0;
+
   for (const project of projects) {
-    if (!isScheduleDue(project, now)) continue;
+    if (!isScheduleDue(project, now)) {
+      // Only the projects that RUN leave a trace, so a project the tick passes
+      // over is invisible afterwards and "why didn't mine run this morning?"
+      // cannot be answered from the outside. Every skip now records exactly
+      // what the due-check read - cadence, stored last run, and the whole-day
+      // arithmetic it did - which is the difference between a stored row that
+      // isn't what the user asked for and a check that is reading it wrong.
+      notDue += 1;
+      const last = project.last_run_at ? new Date(project.last_run_at).getTime() : null;
+      const parsed = last === null || Number.isNaN(last) ? null : new Date(last).toISOString();
+      recordOps("cron.due_check", {
+        signature: "cron.due_check: not due",
+        sample: {
+          project_id: project.id,
+          schedule: project.schedule,
+          interval_days: project.schedule_interval_days,
+          last_run_at: project.last_run_at,
+          last_run_parsed: parsed,
+          utc_days_since:
+            last === null || Number.isNaN(last)
+              ? null
+              : Math.floor(now / DAY_MS) - Math.floor(last / DAY_MS),
+          now: new Date(now).toISOString(),
+        },
+      });
+      continue;
+    }
 
     try {
       // Ask the run resolver rather than reading provider_keys directly. The
@@ -143,6 +174,7 @@ async function sweepAndRun(span: Span) {
 
   span.setAttributes({
     "cron.projects.scheduled": projects.length,
+    "cron.projects.not_due": notDue,
     "cron.projects.processed": results.length,
     "cron.projects.skipped": results.filter((r) => r.status === "skipped").length,
     "cron.projects.failed": results.filter((r) => r.status === "failed").length,
