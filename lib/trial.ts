@@ -158,6 +158,9 @@ export async function getTrialSpendMicros(
 export interface TrialUsage {
   runs: number;
   spendMicros: number;
+  /** Operator-comped account: both trial ceilings are lifted. Set out-of-band
+   *  by the operator (see profiles.is_comped), never by the account itself. */
+  comped: boolean;
 }
 
 /**
@@ -175,13 +178,18 @@ export async function getTrialUsage(
 ): Promise<TrialUsage> {
   const { data } = await supabase
     .from("profiles")
-    .select("trial_runs_used, trial_spend_micros")
+    .select("trial_runs_used, trial_spend_micros, is_comped")
     .eq("id", userId)
     .maybeSingle();
-  const row = data as { trial_runs_used?: number; trial_spend_micros?: number } | null;
+  const row = data as {
+    trial_runs_used?: number;
+    trial_spend_micros?: number;
+    is_comped?: boolean;
+  } | null;
   return {
     runs: Number(row?.trial_runs_used ?? 0),
     spendMicros: Number(row?.trial_spend_micros ?? 0),
+    comped: Boolean(row?.is_comped ?? false),
   };
 }
 
@@ -194,6 +202,9 @@ export async function getTrialUsage(
  * /suggest spends without touching the run counter at all.
  */
 function withinTrial(usage: TrialUsage, runLimit: number, capMicros: number): boolean {
+  // A comped account is inside the trial by fiat: the operator has lifted both
+  // ceilings for it, so neither meter can exhaust it.
+  if (usage.comped) return true;
   return usage.runs < runLimit && usage.spendMicros < capMicros;
 }
 
@@ -236,6 +247,9 @@ export interface ResolvedKey {
    *  both in micro-dollars. */
   spentMicros?: number;
   capMicros?: number;
+  /** For 'trial': the account is operator-comped, so no per-run budget ceiling
+   *  applies (runBudgetMicros returns null). Absent/false is the normal case. */
+  comped?: boolean;
   /** For 'mismatch': providers the user DOES hold a key for, so the message can
    *  name the one-click fix instead of just refusing. */
   available?: Provider[];
@@ -334,6 +348,7 @@ export async function resolveKey(
         limit,
         spentMicros: usage.spendMicros,
         capMicros: cap,
+        comped: usage.comped,
       };
     }
   }
@@ -440,6 +455,7 @@ export async function resolveRunKeyFor(
         limit,
         spentMicros: trialUsage.spendMicros,
         capMicros: cap,
+        comped: trialUsage.comped,
       };
     }
   }
@@ -621,6 +637,9 @@ export async function recordTrialUsage(
  */
 export function runBudgetMicros(key: ResolvedKey): number | null {
   if (key.source !== "trial") return null;
+  // Comped accounts have no ceiling, so the run is unbounded — same as an own
+  // key. Returning 0 here (cap already passed) would instead stop it on entry.
+  if (key.comped) return null;
   return Math.max(0, (key.capMicros ?? 0) - (key.spentMicros ?? 0));
 }
 

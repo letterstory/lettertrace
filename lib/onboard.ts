@@ -119,7 +119,9 @@ export async function trialSnapshot(
     remaining: Math.max(0, limit - usage.runs),
     spendMicros: usage.spendMicros,
     capMicros,
-    active: usage.runs < limit && usage.spendMicros < capMicros,
+    // A comped account is always active: its ceilings are lifted, so a
+    // trial-funded run can still be granted no matter what the meters read.
+    active: usage.comped || (usage.runs < limit && usage.spendMicros < capMicros),
   };
 }
 
