@@ -3,7 +3,9 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 /**
- * A percentage per day, drawn as one filled line, read by moving along it.
+ * One number per day, drawn as a filled line, read by moving along it. The
+ * value can be a percentage or a count — the scale is the series' own maximum
+ * either way, and the units live in the `detail` sentence the caller writes.
  *
  * The numbers used to live in native <title> tooltips: they waited half a
  * second, floated over the chart they were describing, and covered the very
@@ -19,13 +21,13 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
  *
  * Points arrive already filtered of their null days: a day with nothing to
  * divide by is a gap in the data, and interpolating across it would invent a
- * number. `tint` is a color token name — both charts on this page are the same
+ * number. `tint` is a color token name — the charts on this page are the same
  * shape and differ only in hue.
  */
 
-export interface DayRatePoint {
+export interface DaySeriesPoint {
   day: string;
-  rate: number;
+  value: number;
   /** The sentence shown under the chart while this day is the one being read. */
   detail: string;
 }
@@ -33,16 +35,16 @@ export interface DayRatePoint {
 const W = 600;
 const H = 110;
 const PAD_TOP = 8;
-/** Where 0% sits, leaving the line room to be seen when it rests there. */
+/** Where zero sits, leaving the line room to be seen when it rests there. */
 const BASE = H - 4;
 
-export function DayRateChart({
+export function DaySeriesChart({
   points,
   tint,
   ariaLabel,
   caption,
 }: {
-  points: DayRatePoint[];
+  points: DaySeriesPoint[];
   tint: string;
   ariaLabel: string;
   /** What the readout says when nobody is pointing at a day — the summary of
@@ -54,15 +56,15 @@ export function DayRateChart({
 
   if (points.length === 0) return null;
 
-  const max = Math.max(0.1, ...points.map((p) => p.rate));
+  const max = Math.max(0.1, ...points.map((p) => p.value));
   const x = (i: number) => (points.length === 1 ? W / 2 : (i / (points.length - 1)) * W);
-  const y = (rate: number) => BASE - (rate / max) * (BASE - PAD_TOP);
+  const y = (value: number) => BASE - (value / max) * (BASE - PAD_TOP);
   // One point can't make a line, so it becomes a flat one edge to edge — and
   // the fill reuses these same coordinates so it always sits under the line.
   const linePoints =
     points.length === 1
-      ? [`0,${y(points[0].rate).toFixed(1)}`, `${W},${y(points[0].rate).toFixed(1)}`]
-      : points.map((p, i) => `${x(i).toFixed(1)},${y(p.rate).toFixed(1)}`);
+      ? [`0,${y(points[0].value).toFixed(1)}`, `${W},${y(points[0].value).toFixed(1)}`]
+      : points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`);
   const line = linePoints.join(" ");
 
   /** Nearest day to a screen x. Points are evenly spaced by index, so this is
@@ -97,7 +99,7 @@ export function DayRateChart({
 
   const current = active === null ? null : points[active];
   const markerLeft = current === null ? 0 : (x(active as number) / W) * 100;
-  const markerTop = current === null ? 0 : (y(current.rate) / H) * 100;
+  const markerTop = current === null ? 0 : (y(current.value) / H) * 100;
 
   return (
     <div className="mt-3">
@@ -118,7 +120,7 @@ export function DayRateChart({
           className="block h-36 w-full"
           aria-hidden
         >
-          {/* Baseline at 0% — the one recessive gridline this needs. */}
+          {/* Baseline at zero — the one recessive gridline this needs. */}
           <line
             x1={0}
             y1={BASE}

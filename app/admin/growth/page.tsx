@@ -46,29 +46,38 @@ function leadFilterFrom(searchParams: SP) {
   return LEAD_FILTERS.find((f) => f.key === raw) ?? LEAD_FILTERS[0];
 }
 
-/** 30 days of runs as bars. Inline SVG on purpose: no chart dependency, and
- *  the numbers live in <title> tooltips rather than labels — this is a shape,
- *  not a report. Colors go through style, not SVG attributes, because CSS
- *  var() only resolves in styles. */
-function RunSparkline({ series }: { series: { day: string; users: number; runs: number }[] }) {
+/** Runs per day across the selected window, as bars. Inline SVG on purpose:
+ *  no chart dependency, and the numbers live in <title> tooltips rather than
+ *  labels — this is a shape, not a report. Colors go through style, not SVG
+ *  attributes, because CSS var() only resolves in styles. */
+function RunSparkline({
+  series,
+  label,
+}: {
+  series: { day: string; users: number; runs: number }[];
+  label: string;
+}) {
   const max = Math.max(1, ...series.map((d) => d.runs));
   const barW = 600 / series.length;
+  // A year of days is 1.6px per bar, so the gap has to shrink with them or the
+  // bars come out negative-width and vanish.
+  const gap = Math.min(3, barW * 0.25);
   return (
     <svg
       viewBox="0 0 600 110"
       preserveAspectRatio="none"
       className="h-32 w-full"
       role="img"
-      aria-label="Runs per day, last 30 days"
+      aria-label={`Runs per day, ${label}`}
     >
       {series.map((d, i) => {
         const h = d.runs === 0 ? 2 : Math.max(4, (d.runs / max) * 100);
         return (
           <rect
             key={d.day}
-            x={i * barW + 1.5}
+            x={i * barW + gap / 2}
             y={106 - h}
-            width={barW - 3}
+            width={barW - gap}
             height={h}
             rx={1.5}
             style={{
@@ -108,14 +117,22 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
   const filter = leadFilterFrom(searchParams);
   const leads = report.leads.filter(filter.pick);
   const leadCounts = new Map(LEAD_FILTERS.map((f) => [f.key, report.leads.filter(f.pick).length]));
-  const bestDay = activity.series.reduce((a, b) => (b.runs > a.runs ? b : a), activity.series[0]);
+  const bestDay = activity.series.reduce<{ day: string; runs: number } | undefined>(
+    (a, b) => (a === undefined || b.runs > a.runs ? b : a),
+    undefined,
+  );
 
   return (
     <div className="space-y-10">
       <SectionHeading
         title="Growth"
         description="Activity measured in runs, and the lead list it produces. Emails are shown in the clear here: this page exists for outbound."
-        action={<PeopleDirectory accounts={report.accounts} />}
+        action={
+          <div className="flex items-center gap-2">
+            <PeriodSelect value={period} param="g" label="Time period" />
+            <PeopleDirectory accounts={report.accounts} />
+          </div>
+        }
       />
 
       {report.degraded && (
@@ -128,10 +145,15 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
       )}
 
       {/* ---- Row 1: the fixed windows ---------------------------------------
-          These four are defined BY their windows — a "daily active" that
-          followed a year-to-date selector would not be daily active any more —
-          so they sit above the period control and never move. */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          The one row the selector does NOT govern: these four are defined BY
+          their windows — a "daily active" that followed a year-to-date
+          selector would not be daily active any more — so they are labeled as
+          rolling and never move. */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          Active now · rolling windows, fixed
+        </h3>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Daily active"
           value={activity.daily.users.toLocaleString()}
@@ -156,19 +178,18 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           hint={`DAU / MAU · ${signups.total.toLocaleString()} signups total`}
           accent="sand"
         />
-      </div>
+        </div>
+      </section>
 
       {/* ---- Row 2: the windowed numbers -------------------------------------
-          The two figures that mean something different over a week than over a
-          year, with the control that moves them sitting between the rows —
-          close enough to what it governs to be read as a caption on it rather
-          than as a page-level filter, which is what it would look like up in
-          the heading next to the People button. */}
+          Everything from here down reads the period in the page header, and
+          every card and panel names the window it is showing — the complaint
+          that produced this was a "30d" chart sitting under a selector set to
+          7 days. */}
       <section className="space-y-3">
-        <div className="flex items-center justify-end gap-3">
-          <span className="text-xs text-ink-faint">Sign-ups and retention over</span>
-          <PeriodSelect value={period} param="g" label="Sign-up and retention window" />
-        </div>
+        <h3 className="text-sm font-medium uppercase tracking-wider text-ink-faint">
+          {label} · everything below follows the period
+        </h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <StatCard
             label="New sign-ups"
@@ -201,25 +222,36 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           <div className="flex flex-1 flex-col px-5 pb-4 pt-5">
             <div className="flex items-baseline justify-between gap-3">
               <h3 className="text-sm font-semibold text-ink">Runs per day</h3>
-              <span className="text-xs text-ink-faint">30d</span>
+              <span className="text-xs text-ink-faint">{label}</span>
             </div>
-            <div className="mt-3 flex flex-1 items-end">
-              <RunSparkline series={activity.series} />
-            </div>
-            <p className="mt-3 text-xs tabular-nums text-ink-faint">
-              {activity.monthly.runs.toLocaleString()} runs total · best day {bestDay.runs} ·
-              hover bars for counts
-            </p>
+            {activity.series.length === 0 ? (
+              <p className="flex flex-1 items-center text-sm text-ink-faint">
+                No runs {period === "all" ? "yet" : `in the ${label.replace("last ", "")}`}.
+              </p>
+            ) : (
+              <>
+                <div className="mt-3 flex flex-1 items-end">
+                  <RunSparkline series={activity.series} label={label} />
+                </div>
+                <p className="mt-3 text-xs tabular-nums text-ink-faint">
+                  {activity.window.runs.toLocaleString()} runs · {activity.window.users.toLocaleString()}{" "}
+                  user{activity.window.users === 1 ? "" : "s"} · best day {bestDay?.runs ?? 0} ·
+                  hover bars for counts
+                </p>
+              </>
+            )}
           </div>
         </Card>
 
         <Card className="lg:col-span-3">
           <div className="flex items-baseline justify-between gap-3 px-5 pb-2 pt-5">
             <h3 className="text-sm font-semibold text-ink">Most active accounts</h3>
-            <span className="text-xs text-ink-faint">by runs, 30d</span>
+            <span className="text-xs text-ink-faint">by runs, {label}</span>
           </div>
           {report.topAccounts.length === 0 ? (
-            <p className="px-5 py-8 text-sm text-ink-faint">No runs in the last 30 days.</p>
+            <p className="px-5 py-8 text-sm text-ink-faint">
+              No runs {period === "all" ? "yet" : `in the ${label.replace("last ", "")}`}.
+            </p>
           ) : (
             <div className="max-h-72 divide-y divide-ink/5 overflow-y-auto">
               {report.topAccounts.map((account, i) => (
@@ -233,7 +265,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-mono text-[13px] text-ink">
                       {account.email ?? account.userId}
-                      {i === 0 && account.runs30d > 0 && (
+                      {i === 0 && account.runs > 0 && (
                         <Flame
                           className="ml-1 inline h-3.5 w-3.5 align-[-2px] text-terracotta"
                           aria-hidden
@@ -247,7 +279,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
                   </div>
                   <Badge tone={CLASS_TONE[account.emailClass]}>{account.emailClass}</Badge>
                   <span className="w-14 shrink-0 text-right font-mono text-sm tabular-nums text-ink">
-                    {account.runs30d.toLocaleString()}
+                    {account.runs.toLocaleString()}
                   </span>
                 </div>
               ))}
@@ -267,7 +299,9 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         </div>
         <Card>
           {report.recentRuns.length === 0 ? (
-            <p className="px-5 py-8 text-sm text-ink-faint">No runs in the last 30 days.</p>
+            <p className="px-5 py-8 text-sm text-ink-faint">
+              No runs {period === "all" ? "yet" : `in the ${label.replace("last ", "")}`}.
+            </p>
           ) : (
             <>
               <div className="flex items-center gap-4 border-b border-ink/10 px-5 py-2">
@@ -401,10 +435,14 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         more separate days” — five runs in one afternoon is one evaluation session, not a
         return, and a wider window raises the figure by construction, so read it next to the
         window it names. New sign-ups is the one figure counted off accounts rather than runs:
-        the gap between it and daily active is the activation problem. The top row is fixed —
-        a “daily active” that followed the selector would no longer be daily active. Email
-        classes: work = company domain, personal = consumer providers, burner = disposable
-        inboxes.{" "}
+        the gap between it and daily active is the activation problem. The period in the header
+        governs every panel below the top row — sign-ups, retention, runs per day, the most
+        active accounts and the run feed all read the same window, and each says which one it
+        is. Two things deliberately ignore it: the top row, because a “daily active” that
+        followed the selector would no longer be daily active, and the lapsed-lead list, which
+        is defined as “no run in 7 days” and shows runs over a fixed 30 days (as does the
+        People directory). Email classes: work = company domain, personal = consumer providers,
+        burner = disposable inboxes.{" "}
         <Link href="/admin" className="underline">
           Back to operations
         </Link>

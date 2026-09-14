@@ -124,14 +124,18 @@ describe("POST /api/onboarding/complete — cadence reaches the project insert",
     });
   });
 
-  // The onboarding CTA always sends a schedule, but any older client doesn't —
-  // absent must still land on the schedule this route used to hard-code rather
-  // than reject the whole signup.
-  it("defaults to daily when no schedule is sent", async () => {
+  // The onboarding CTA always sends a cadence, so an absent one means a caller
+  // who never chose: a stale client, a replayed body, an integration. It must
+  // still create the project — rejecting the signup over a missing optional
+  // field is worse — but it must not put anyone on a schedule they didn't ask
+  // for. This route defaulted to daily until Sep 14 2026, which is how every
+  // organization made between Aug 20 and Sep 11 ended up monitoring daily on
+  // the operator's trial keys.
+  it("schedules nothing when no cadence is sent, rather than defaulting to daily", async () => {
     const res = await POST(req(BASE));
     expect(res.status).toBe(200);
     expect(projectInsert()).toMatchObject({
-      schedule: "daily",
+      schedule: "off",
       schedule_interval_days: null,
     });
   });

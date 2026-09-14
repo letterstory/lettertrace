@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/admin";
 import { classifyEmail } from "@/lib/growth";
 import { deriveCompany } from "@/lib/accounts";
 import { createServiceClient } from "@/lib/supabase/service";
+import { selectAllNoted } from "@/lib/paging";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { formatDate, scheduleLabel, timeAgo } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
@@ -171,11 +172,25 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
   const now = Date.now();
   const since30d = new Date(now - 30 * DAY_MS).toISOString();
 
-  const emptyRows = Promise.resolve({ data: [] as unknown[] });
-  const [recentQ, totalRunsQ, cadenceQ, topicsQ, promptsQ, competitorsQ, watchQ, activityQ] =
+  // Reads that can outgrow a page go through selectAll: PostgREST caps a plain
+  // select at 1,000 rows and reports nothing (lib/paging.ts), which on a heavy
+  // account — the exact account this page exists for — would have silently
+  // capped the cadence numbers the comment below promises are accurate. A read
+  // that fails names itself in `failed` and comes back empty, so one broken
+  // query costs a section rather than the page.
+  const failed: string[] = [];
+  const none = <T,>() => Promise.resolve([] as T[]);
+  /** Per-account row cap: above what the heaviest account has today (the
+   *  busiest is ~5,800 active prompts) and low enough that a runaway one can't
+   *  take the page down with it. A read that actually hits it says so in the
+   *  banner below rather than quietly showing a smaller account. */
+  const PER_ACCOUNT_CAP = 20_000;
+
+  const [recentQ, totalRunsQ, cadence, topics, prompts, competitors, watches, activityQ] =
     await Promise.all([
       // The Recent-runs list: the latest few, whatever their age. Capped at what
-      // the section renders so the count and the list can never disagree.
+      // the section renders so the count and the list can never disagree — well
+      // under a page, so it needs no paging.
       projectIds.length
         ? svc
             .from("runs")
@@ -185,7 +200,7 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
             .in("project_id", projectIds)
             .order("created_at", { ascending: false })
             .limit(60)
-        : emptyRows,
+        : Promise.resolve({ data: [] as unknown[] }),
       // Total runs, exact — the headline number, never capped.
       projectIds.length
         ? svc.from("runs").select("id", { count: "exact", head: true }).in("project_id", projectIds)
@@ -195,45 +210,94 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
       // at a row cap (the whole reason this page exists is the busy ones). Mirrors
       // the 30-day fetch the Growth top-accounts list uses.
       projectIds.length
-        ? svc
-            .from("runs")
-            .select("created_at")
-            .in("project_id", projectIds)
-            .gte("created_at", since30d)
-            .limit(5_000)
-        : emptyRows,
+        ? selectAllNoted<{ created_at: string }>(
+            failed,
+            "runs",
+            (from, to) =>
+              svc
+                .from("runs")
+                .select("created_at")
+                .in("project_id", projectIds)
+                .gte("created_at", since30d)
+                .range(from, to),
+            PER_ACCOUNT_CAP,
+          )
+        : none<{ created_at: string }>(),
       projectIds.length
-        ? svc.from("topics").select("id, project_id, name").in("project_id", projectIds)
-        : emptyRows,
-    projectIds.length
-      ? svc
-          .from("prompts")
-          .select("id, project_id, topic_id, text, target_url")
-          .in("project_id", projectIds)
-          .eq("is_active", true)
-          .limit(1_000)
-      : emptyRows,
-    projectIds.length
-      ? svc.from("competitors").select("id, project_id, name, domain").in("project_id", projectIds)
-      : emptyRows,
-    projectIds.length
-      ? svc.from("web_mention_watch").select("project_id, enabled, sites").in("project_id", projectIds)
-      : emptyRows,
-    svc
-      .from("activity_logs")
-      .select("id, category, action, status, summary, channel, created_at")
-      .eq("user_id", profile.id)
-      .order("created_at", { ascending: false })
-      .limit(40),
-  ]);
+        ? selectAllNoted<TopicRow>(
+            failed,
+            "topics",
+            (from, to) =>
+              svc
+                .from("topics")
+                .select("id, project_id, name")
+                .in("project_id", projectIds)
+                .range(from, to),
+            PER_ACCOUNT_CAP,
+          )
+        : none<TopicRow>(),
+      projectIds.length
+        ? selectAllNoted<PromptRow>(
+            failed,
+            "prompts",
+            (from, to) =>
+              svc
+                .from("prompts")
+                .select("id, project_id, topic_id, text, target_url")
+                .in("project_id", projectIds)
+                .eq("is_active", true)
+                .range(from, to),
+            PER_ACCOUNT_CAP,
+          )
+        : none<PromptRow>(),
+      projectIds.length
+        ? selectAllNoted<CompetitorRow>(
+            failed,
+            "competitors",
+            (from, to) =>
+              svc
+                .from("competitors")
+                .select("id, project_id, name, domain")
+                .in("project_id", projectIds)
+                .range(from, to),
+            PER_ACCOUNT_CAP,
+          )
+        : none<CompetitorRow>(),
+      projectIds.length
+        ? selectAllNoted<WatchRow>(
+            failed,
+            "web_mention_watch",
+            (from, to) =>
+              svc
+                .from("web_mention_watch")
+                .select("project_id, enabled, sites")
+                .in("project_id", projectIds)
+                .range(from, to),
+            PER_ACCOUNT_CAP,
+          )
+        : none<WatchRow>(),
+      svc
+        .from("activity_logs")
+        .select("id, category, action, status, summary, channel, created_at")
+        .eq("user_id", profile.id)
+        .order("created_at", { ascending: false })
+        .limit(40),
+    ]);
+
+  // A read that came back exactly at the cap probably has more behind it.
+  const capped = (
+    [
+      ["runs", cadence.length],
+      ["topics", topics.length],
+      ["prompts", prompts.length],
+      ["competitors", competitors.length],
+    ] as const
+  )
+    .filter(([, count]) => count >= PER_ACCOUNT_CAP)
+    .map(([name]) => name);
 
   const runs = (recentQ.data ?? []) as RunRow[];
   const totalRuns = (totalRunsQ as { count: number | null }).count ?? runs.length;
-  const cadence = (cadenceQ.data ?? []) as { created_at: string }[];
-  const topics = (topicsQ.data ?? []) as TopicRow[];
-  const prompts = (promptsQ.data ?? []) as PromptRow[];
-  const competitors = (competitorsQ.data ?? []) as CompetitorRow[];
-  const watches = (watchQ.data ?? []) as WatchRow[];
   const activity = (activityQ.data ?? []) as ActivityRow[];
 
   // ---- Derived identity ----------------------------------------------------
@@ -319,6 +383,18 @@ export default async function AdminAccountPage({ params }: { params: { id: strin
           action={<Badge tone={emailClass === "work" ? "teal" : emailClass === "burner" ? "terracotta" : "sand"}>{emailClass}</Badge>}
         />
       </div>
+
+      {(failed.length > 0 || capped.length > 0) && (
+        <Card className="border-terracotta/40 bg-terracotta/[0.04]">
+          <p className="px-6 py-4 text-sm text-terracotta-dark">
+            {failed.length > 0 &&
+              `Some of this account's data could not be loaded (${failed.join(", ")}). `}
+            {capped.length > 0 &&
+              `This account is large enough to hit the page's row cap of ${PER_ACCOUNT_CAP.toLocaleString()} (${capped.join(", ")}), so those counts are a floor. `}
+            Read the sections below as incomplete rather than as whole.
+          </p>
+        </Card>
+      )}
 
       {/* ---- The numbers ---------------------------------------------------- */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
