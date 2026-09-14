@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardBody } from "@/components/ui";
 import { scheduleLabel } from "@/lib/utils";
-import type { ReactNode } from "react";
 import {
   SchedulePicker,
   type ActiveSchedule,
@@ -18,7 +17,6 @@ export function ScheduleControl({
   scheduleIntervalDays: savedIntervalDays,
   keySource,
   providerLabel,
-  actions,
 }: {
   schedule: Schedule;
   /** Days between runs when schedule is 'custom'; ignored otherwise. */
@@ -29,11 +27,6 @@ export function ScheduleControl({
    *  make visible instead of silent. */
   keySource: KeySource;
   providerLabel: string;
-  /** Manual-run buttons, rendered inside this card under the cadence pills —
-   *  "run it now" and "run it on a schedule" are the same decision, and the
-   *  page reads as one block instead of a header action floating above a
-   *  card about the same thing. */
-  actions?: ReactNode;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -170,11 +163,6 @@ export function ScheduleControl({
             );
           }}
         />
-        {actions && (
-          <div className="mt-5 flex flex-wrap items-start gap-2 border-t border-ink/10 pt-4 sm:pl-8">
-            {actions}
-          </div>
-        )}
       </CardBody>
     </Card>
   );
