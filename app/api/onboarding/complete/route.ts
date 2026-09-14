@@ -113,13 +113,19 @@ export async function POST(request: Request) {
     );
   }
 
-  // Absent remains daily for backwards compatibility with the dashboard
-  // wizard. The v1 one-shot flow uses the same parser with an "off" fallback.
+  // An absent cadence means NO schedule, same as the v1 one-shot flow. It used
+  // to mean "daily", and that default is what PR #143 (acdf683) shipped: every
+  // organization created through this route between Aug 20 and Sep 11 2026
+  // started monitoring daily without anyone choosing it, on our trial keys.
+  // The wizard has sent an explicit cadence since the picker landed (#178), so
+  // the old fallback only ever fires for a caller who didn't choose — a stale
+  // client, a replayed body — and the safe reading of "didn't choose" is off,
+  // not "spend their allowance every morning".
   // This route's body uses camelCase `intervalDays`, so the field name is
   // passed through rather than string-rewritten out of the parser's message.
   let cadence: ReturnType<typeof parseOnboardingCadence>;
   try {
-    cadence = parseOnboardingCadence(body.schedule, body.intervalDays, "daily", "intervalDays");
+    cadence = parseOnboardingCadence(body.schedule, body.intervalDays, "off", "intervalDays");
   } catch (error) {
     if (error instanceof OnboardError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
