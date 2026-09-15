@@ -119,7 +119,9 @@ export async function trialSnapshot(
     remaining: Math.max(0, limit - usage.runs),
     spendMicros: usage.spendMicros,
     capMicros,
-    active: usage.runs < limit && usage.spendMicros < capMicros,
+    // A comped account is always active: its ceilings are lifted, so a
+    // trial-funded run can still be granted no matter what the meters read.
+    active: usage.comped || (usage.runs < limit && usage.spendMicros < capMicros),
   };
 }
 
@@ -306,7 +308,8 @@ export async function firstSweep(opts: {
 
   const funded: ResolvedKey[] = [];
   for (const k of keys) {
-    if (k.source === "trial" && !(await meter.consume())) continue;
+    // A comped account runs on the trial keys without spending its run allowance.
+    if (k.source === "trial" && !k.comped && !(await meter.consume())) continue;
     funded.push(k);
   }
   if (funded.length === 0) {

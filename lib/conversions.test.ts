@@ -11,7 +11,7 @@ import {
   shapeKeyedStats,
   shapeRateSeries,
   shapeScheduledStats,
-  shapeScheduleSeries,
+  shapeScheduledSeries,
   type KeyRow,
   type OutboundClickRow,
   type ScheduleProjectRow,
@@ -374,13 +374,13 @@ describe("median", () => {
 
 describe("shapeScheduledStats", () => {
   // u1 runs two organizations, one of them weekly — so accounts and scheduled
-  // reports are deliberately different numbers. u2 is daily, u3 turned it off,
-  // u4 has no project at all.
+  // reports are deliberately different numbers. u2 is on a custom interval, u3
+  // turned it off, u4 has no project at all.
   const projects: ScheduleProjectRow[] = [
-    { user_id: "u1", schedule: "daily", created_at: iso(50) },
-    { user_id: "u1", schedule: "weekly", created_at: iso(40) },
-    { user_id: "u2", schedule: "daily", created_at: iso(6) },
-    { user_id: "u3", schedule: "off", created_at: iso(2) },
+    { user_id: "u1", schedule: "daily", schedule_interval_days: null, created_at: iso(50) },
+    { user_id: "u1", schedule: "weekly", schedule_interval_days: null, created_at: iso(40) },
+    { user_id: "u2", schedule: "custom", schedule_interval_days: 4, created_at: iso(6) },
+    { user_id: "u3", schedule: "off", schedule_interval_days: null, created_at: iso(2) },
   ];
   const profiles: GrowthProfileRow[] = [
     { id: "u1", email: "a@x.com", created_at: iso(50) },
@@ -389,111 +389,136 @@ describe("shapeScheduledStats", () => {
     { id: "u4", email: "d@x.com", created_at: iso(1) },
   ];
 
-  it("counts accounts, not projects, and ignores the ones switched off", () => {
+  it("counts reports rather than accounts, and ignores the ones switched off", () => {
     const stats = shapeScheduledStats(projects, profiles, null);
-    expect(stats.allTime).toBe(2);
-    expect(stats.projects).toBe(3);
-    expect(stats.rateAllTime).toBe(50);
+    expect(stats.reports).toBe(3);
+    expect(stats.accounts).toBe(2);
+    expect(stats.totalUsers).toBe(4);
   });
 
-  it("rates the window's SIGNUP COHORT, so the numerator can't escape the denominator", () => {
-    // Last 7 days: u2, u3 and u4 signed up, and only u2 schedules.
+  it("dates a scheduled report by the day its project was made", () => {
+    // Last 7 days: only u2's project is that new, and u3's is off.
     const stats = shapeScheduledStats(projects, profiles, NOW - 7 * DAY_MS);
-    expect(stats).toMatchObject({ cohortSize: 3, cohortScheduled: 1, rate: 33.3 });
-    // The stock rate ignores the window, so it still sees u1.
-    expect(stats.allTime).toBe(2);
+    expect(stats.newInPeriod).toBe(1);
+    // The stock ignores the window, so it still sees both of u1's.
+    expect(stats.reports).toBe(3);
+  });
+
+  it("counts everything as new on all time, since nothing is excluded", () => {
+    expect(shapeScheduledStats(projects, profiles, null).newInPeriod).toBe(3);
   });
 
   it("averages the cadence over scheduled reports and breaks it down", () => {
     const stats = shapeScheduledStats(projects, profiles, null);
-    // daily + daily + weekly = (1 + 1 + 7) / 3.
-    expect(stats.avgIntervalDays).toBe(3);
+    // daily + weekly + every 4 days = (1 + 7 + 4) / 3.
+    expect(stats.avgIntervalDays).toBe(4);
+    // 1/1 + 1/7 + 1/4 = 1.39 runs a day.
+    expect(stats.runsPerDay).toBe(1.4);
     expect(stats.byInterval).toEqual([
-      { schedule: "daily", days: 1, projects: 2 },
-      { schedule: "weekly", days: 7, projects: 1 },
+      { label: "daily", days: 1, reports: 1 },
+      { label: "every 4 days", days: 4, reports: 1 },
+      { label: "weekly", days: 7, reports: 1 },
     ]);
+  });
+
+  it("counts a custom interval, which the cron runs and this page used to miss", () => {
+    const custom: ScheduleProjectRow[] = [
+      { user_id: "u1", schedule: "custom", schedule_interval_days: 2, created_at: iso(3) },
+      { user_id: "u2", schedule: "custom", schedule_interval_days: 2, created_at: iso(3) },
+    ];
+    const stats = shapeScheduledStats(custom, profiles, null);
+    expect(stats.reports).toBe(2);
+    // Same interval is one line, not two.
+    expect(stats.byInterval).toEqual([{ label: "every 2 days", days: 2, reports: 2 }]);
   });
 
   it("treats an unknown schedule value as not scheduled rather than throwing", () => {
     const stats = shapeScheduledStats(
-      [{ user_id: "u1", schedule: "hourly", created_at: iso(1) }],
+      [{ user_id: "u1", schedule: "hourly", schedule_interval_days: null, created_at: iso(1) }],
       profiles,
       null,
     );
-    expect(stats).toMatchObject({ allTime: 0, projects: 0, avgIntervalDays: null, byInterval: [] });
+    expect(stats).toMatchObject({ reports: 0, accounts: 0, avgIntervalDays: null, byInterval: [] });
   });
 
-  it("never counts a project whose owner has no profile row", () => {
+  it("counts a report whose owner has no profile row — it still runs", () => {
     const stats = shapeScheduledStats(
-      [{ user_id: "ghost", schedule: "daily", created_at: iso(1) }],
+      [{ user_id: "ghost", schedule: "daily", schedule_interval_days: null, created_at: iso(1) }],
       profiles,
       null,
     );
-    expect(stats.allTime).toBe(0);
-    expect(stats.rateAllTime).toBe(0);
-    // The report itself is still real, and still counts as one.
-    expect(stats.projects).toBe(1);
+    expect(stats.reports).toBe(1);
+    expect(stats.accounts).toBe(1);
   });
 
-  it("nulls both rates when nobody has signed up", () => {
+  it("nulls the cadence figures when nothing is scheduled", () => {
     expect(shapeScheduledStats([], [], null)).toMatchObject({
-      rate: null,
-      rateAllTime: null,
+      reports: 0,
+      accounts: 0,
       avgIntervalDays: null,
+      runsPerDay: null,
       totalUsers: 0,
     });
   });
 });
 
-describe("shapeScheduleSeries", () => {
+describe("shapeScheduledSeries", () => {
   const projects: ScheduleProjectRow[] = [
-    { user_id: "u1", schedule: "weekly", created_at: iso(3) },
-    { user_id: "u2", schedule: "off", created_at: iso(3) },
-    { user_id: "u3", schedule: "daily", created_at: iso(2) },
-  ];
-  const profiles: GrowthProfileRow[] = [
-    { id: "u1", email: null, created_at: iso(3) },
-    { id: "u2", email: null, created_at: iso(3) },
-    { id: "u3", email: null, created_at: iso(2) },
+    { user_id: "u1", schedule: "weekly", schedule_interval_days: null, created_at: iso(3) },
+    { user_id: "u2", schedule: "off", schedule_interval_days: null, created_at: iso(3) },
+    { user_id: "u3", schedule: "daily", schedule_interval_days: null, created_at: iso(2) },
   ];
 
-  it("buckets by signup day and rates that day's cohort", () => {
-    const series = shapeScheduleSeries(projects, profiles, NOW - 3 * DAY_MS, NOW);
+  it("runs a total that climbs on the day each project was made", () => {
+    const series = shapeScheduledSeries(projects, NOW - 3 * DAY_MS, NOW);
     const days = Object.fromEntries(series.map((p) => [p.day, p]));
-    const threeDaysAgo = iso(3).slice(0, 10);
-    const twoDaysAgo = iso(2).slice(0, 10);
-    expect(days[threeDaysAgo]).toMatchObject({ signups: 2, scheduled: 1, rate: 50 });
-    expect(days[twoDaysAgo]).toMatchObject({ signups: 1, scheduled: 1, rate: 100 });
+    expect(days[iso(3).slice(0, 10)]).toMatchObject({ added: 1, total: 1 });
+    expect(days[iso(2).slice(0, 10)]).toMatchObject({ added: 1, total: 2 });
   });
 
-  it("leaves a day nobody signed up as null rather than zero", () => {
-    const series = shapeScheduleSeries(projects, profiles, NOW - 3 * DAY_MS, NOW);
-    const yesterday = iso(1).slice(0, 10);
-    expect(series.find((p) => p.day === yesterday)).toMatchObject({
-      signups: 0,
-      scheduled: 0,
-      rate: null,
+  it("holds the total flat on a day nothing was added", () => {
+    const series = shapeScheduledSeries(projects, NOW - 3 * DAY_MS, NOW);
+    expect(series.find((p) => p.day === iso(1).slice(0, 10))).toMatchObject({
+      added: 0,
+      total: 2,
     });
+    expect(series.at(-1)?.total).toBe(2);
   });
 
-  it("runs from the first signup for all-time, and is empty with no signups", () => {
-    const series = shapeScheduleSeries(projects, profiles, null, NOW);
+  it("carries older reports in as the line's starting height", () => {
+    const older: ScheduleProjectRow[] = [
+      { user_id: "u9", schedule: "daily", schedule_interval_days: null, created_at: iso(90) },
+      ...projects,
+    ];
+    const series = shapeScheduledSeries(older, NOW - 3 * DAY_MS, NOW);
+    // The 90-day-old one is off the left edge, but it is already in the count:
+    // the first day adds one and stands at two.
+    expect(series[0]).toMatchObject({ added: 1, total: 2 });
+    expect(series.at(-1)?.total).toBe(3);
+  });
+
+  it("runs from the first scheduled project for all-time, and is empty with none", () => {
+    const series = shapeScheduledSeries(projects, null, NOW);
     expect(series[0].day).toBe(iso(3).slice(0, 10));
     expect(series.at(-1)?.day).toBe(new Date(NOW).toISOString().slice(0, 10));
-    expect(shapeScheduleSeries(projects, [], null, NOW)).toEqual([]);
+    expect(shapeScheduledSeries([], null, NOW)).toEqual([]);
   });
 
-  it("ignores signups from the future and unparseable timestamps", () => {
-    const series = shapeScheduleSeries(
-      projects,
+  it("ignores projects from the future and unparseable timestamps", () => {
+    const series = shapeScheduledSeries(
       [
-        ...profiles,
-        { id: "u4", email: null, created_at: new Date(NOW + DAY_MS).toISOString() },
-        { id: "u5", email: null, created_at: "nope" },
+        ...projects,
+        {
+          user_id: "u4",
+          schedule: "daily",
+          schedule_interval_days: null,
+          created_at: new Date(NOW + DAY_MS).toISOString(),
+        },
+        { user_id: "u5", schedule: "daily", schedule_interval_days: null, created_at: "nope" },
       ],
       NOW - 3 * DAY_MS,
       NOW,
     );
-    expect(series.reduce((n, p) => n + p.signups, 0)).toBe(3);
+    expect(series.at(-1)?.total).toBe(2);
   });
 });

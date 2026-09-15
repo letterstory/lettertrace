@@ -108,6 +108,30 @@ const SEVERITY = {
  *
  * Never throws: rule 1 of lib/ops.ts.
  */
+/**
+ * Push buffered log records to the exporter and wait for them.
+ *
+ * Log records go through a BatchLogRecordProcessor, so they sit in a buffer
+ * until its timer fires. Vercel freezes the function the instant the response
+ * is sent, and the 2026-09-15 08:00 cron tick showed what that costs: the
+ * invocation finished in one second, wrote fifteen operations records, and not
+ * one of them reached the exporter - the very records that existed to explain
+ * that tick. Long invocations never showed it, because the batch timer fires
+ * many times inside them.
+ *
+ * Call this immediately before returning from a route whose records you intend
+ * to read. It never throws and never rejects: an unflushed record is a missing
+ * diagnostic, while a throwing flush would be a failed request.
+ */
+export async function flushLogs(): Promise<void> {
+  try {
+    const provider = logs.getLoggerProvider() as { forceFlush?: () => Promise<void> };
+    await provider.forceFlush?.();
+  } catch {
+    // A telemetry pipeline must not be able to fail the thing it observes.
+  }
+}
+
 export function emitOpsLog(
   kind: string,
   level: keyof typeof SEVERITY,

@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/service";
+import { selectAllNoted } from "./paging";
 import { shapeAccounts, type AccountRow } from "./accounts";
 import { periodStart, type Period } from "@/lib/periods";
 
@@ -194,7 +195,12 @@ export interface Activity {
   /** daily.users / monthly.users — the classic stickiness ratio, null until
    *  there is a month of anyone to divide by. */
   stickiness: number | null;
-  /** Last 30 UTC days, oldest first, zero-filled — a gap is a real zero. */
+  /** The SELECTED window, which is the one the chart under it is drawn over —
+   *  so the caption and the bars can never disagree. */
+  window: ActivityWindow;
+  /** One point per UTC day across the selected window, oldest first,
+   *  zero-filled — a gap is a real zero. All-time starts at the first run
+   *  there is. */
   series: ActivityDay[];
 }
 
@@ -204,12 +210,23 @@ function utcDay(iso: string): string {
   return iso.slice(0, 10);
 }
 
-/** Rolling windows (24h / 7d / 30d back from `now`), not calendar buckets —
- *  an admin checking at 9am should not see a DAU that reset at midnight. */
+/**
+ * Rolling windows (24h / 7d / 30d back from `now`), not calendar buckets — an
+ * admin checking at 9am should not see a DAU that reset at midnight. Those
+ * three are defined BY their windows and ignore `since` entirely; a "daily
+ * active" that followed the page's period selector would not be daily active
+ * any more.
+ *
+ * Everything else here — the window totals and the per-day series — follows
+ * `since` instead, so the chart spans exactly the period the page is set to.
+ * Pass the full fetched run set: this slices what each figure needs, and a
+ * 7-day window still has a month of rows behind it for MAU.
+ */
 export function shapeActivity(
   runs: GrowthRunRow[],
   projectOwner: Map<string, string>,
   now: number,
+  since: number | null = now - 30 * DAY_MS,
 ): Activity {
   const cutoffs = { daily: now - DAY_MS, weekly: now - 7 * DAY_MS, monthly: now - 30 * DAY_MS };
   const win = {
@@ -217,18 +234,25 @@ export function shapeActivity(
     weekly: { users: new Set<string>(), runs: 0 },
     monthly: { users: new Set<string>(), runs: 0 },
   };
+  const selected = { users: new Set<string>(), runs: 0 };
   const byDay = new Map<string, { users: Set<string>; runs: number }>();
+  const windowStart = since ?? Number.NEGATIVE_INFINITY;
+  let earliest: number | null = null;
 
   for (const run of runs) {
     const t = Date.parse(run.created_at);
     const owner = projectOwner.get(run.project_id);
-    if (!Number.isFinite(t) || t < cutoffs.monthly || t > now) continue;
+    if (!Number.isFinite(t) || t > now) continue;
     for (const key of ["daily", "weekly", "monthly"] as const) {
       if (t >= cutoffs[key]) {
         win[key].runs += 1;
         if (owner) win[key].users.add(owner);
       }
     }
+    if (t < windowStart) continue;
+    if (earliest === null || t < earliest) earliest = t;
+    selected.runs += 1;
+    if (owner) selected.users.add(owner);
     const day = utcDay(run.created_at);
     const bucket = byDay.get(day) ?? { users: new Set<string>(), runs: 0 };
     bucket.runs += 1;
@@ -236,11 +260,26 @@ export function shapeActivity(
     byDay.set(day, bucket);
   }
 
+  // Whole UTC days ending today: "last 7 days" draws seven bars, not eight,
+  // so the bar count matches the window the card names. All-time opens at the
+  // first run there is rather than at the epoch; with no runs at all there is
+  // nothing to draw and the series is empty, which the page renders as "no
+  // runs" instead of as a flat line of zeroes.
+  const today = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const first = since ?? earliest;
   const series: ActivityDay[] = [];
-  for (let i = 29; i >= 0; i--) {
-    const day = new Date(now - i * DAY_MS).toISOString().slice(0, 10);
-    const bucket = byDay.get(day);
-    series.push({ day, users: bucket?.users.size ?? 0, runs: bucket?.runs ?? 0 });
+  if (first !== null) {
+    const days =
+      since === null
+        ? Math.floor(
+            (today - Date.parse(`${utcDay(new Date(first).toISOString())}T00:00:00.000Z`)) / DAY_MS,
+          ) + 1
+        : Math.max(1, Math.ceil((now - since) / DAY_MS));
+    for (let i = days - 1; i >= 0; i--) {
+      const day = new Date(today - i * DAY_MS).toISOString().slice(0, 10);
+      const bucket = byDay.get(day);
+      series.push({ day, users: bucket?.users.size ?? 0, runs: bucket?.runs ?? 0 });
+    }
   }
 
   const monthlyUsers = win.monthly.users.size;
@@ -249,6 +288,7 @@ export function shapeActivity(
     weekly: { users: win.weekly.users.size, runs: win.weekly.runs },
     monthly: { users: monthlyUsers, runs: win.monthly.runs },
     stickiness: monthlyUsers > 0 ? Math.round((win.daily.users.size / monthlyUsers) * 100) : null,
+    window: { users: selected.users.size, runs: selected.runs },
     series,
   };
 }
@@ -380,7 +420,9 @@ export interface TopAccount {
   userId: string;
   email: string | null;
   emailClass: EmailClass;
-  runs30d: number;
+  /** Runs inside whatever window the caller handed in — the page names it on
+   *  the card, so this is just "runs", not a fixed 30 days. */
+  runs: number;
   projects: number;
   /** The account's brands, for "who is this" at a glance. */
   brands: string[];
@@ -407,7 +449,7 @@ export function shapeTopAccounts(
   }
   // projects.last_run_at reaches further back than the fetched run window, so
   // an account whose last run predates the window still shows WHEN, even
-  // though its 30d count is zero.
+  // though its count for the window is zero.
   const byUser = new Map<string, { projects: number; brands: string[]; lastRunAt: string | null }>();
   for (const p of projects) {
     const entry = byUser.get(p.user_id) ?? { projects: 0, brands: [], lastRunAt: null };
@@ -427,13 +469,13 @@ export function shapeTopAccounts(
         userId,
         email,
         emailClass: classifyEmail(email),
-        runs30d: a.runs,
+        runs: a.runs,
         projects: meta?.projects ?? 0,
         brands: (meta?.brands ?? []).slice(0, 3),
         lastRunAt: a.lastRunAt ?? meta?.lastRunAt ?? null,
       };
     })
-    .sort((a, b) => b.runs30d - a.runs30d || (b.lastRunAt ?? "").localeCompare(a.lastRunAt ?? ""))
+    .sort((a, b) => b.runs - a.runs || (b.lastRunAt ?? "").localeCompare(a.lastRunAt ?? ""))
     .slice(0, limit);
 }
 
@@ -589,67 +631,80 @@ export async function growthReport(
   const monthAgo = now - 30 * DAY_MS;
   const fetchFrom = windowStart === null ? null : Math.min(monthAgo, windowStart);
 
-  const [runsQ, projectsQ, profilesQ] = await Promise.all([
-    (fetchFrom === null
-      ? svc
-          .from("runs")
-          .select(
-            "id, project_id, status, provider, model, prompt_count, completed_count, created_at",
-          )
-      : svc
-          .from("runs")
-          .select(
-            "id, project_id, status, provider, model, prompt_count, completed_count, created_at",
-          )
-          .gte("created_at", new Date(fetchFrom).toISOString())
-    )
-      .order("created_at", { ascending: false })
-      .limit(RUNS_CAP),
+  // Every one of these reads through selectAll, because PostgREST caps a plain
+  // select at 1,000 rows and says nothing about it (see lib/paging.ts). Read
+  // that way, "1,000 runs" was the answer this page gave for any window with
+  // more than a thousand runs in it — a MAU, a retention rate and a chart all
+  // computed over the newest thousand rows and presented as the whole truth.
+  // The caps below are still caps; they are just enforced here rather than by
+  // a silent server default.
+  const runColumns =
+    "id, project_id, status, provider, model, prompt_count, completed_count, created_at";
+  const failed: string[] = [];
+  const [runs, projects, profiles] = await Promise.all([
+    selectAllNoted<GrowthRunRow>(
+      failed,
+      "runs",
+      (from, to) => {
+        const q = svc.from("runs").select(runColumns);
+        return (fetchFrom === null ? q : q.gte("created_at", new Date(fetchFrom).toISOString()))
+          .order("created_at", { ascending: false })
+          .range(from, to);
+      },
+      RUNS_CAP,
+    ),
     // Ordered oldest-first so shapeAccounts' brands[0] (the company label for a
     // consumer-email account) is the oldest project's brand — the same brand the
     // account detail page headlines, which also orders projects created_at asc.
     // Without a stable order the two surfaces can disagree on the label.
-    svc
-      .from("projects")
-      .select("id, user_id, name, brand_name, last_run_at")
-      .order("created_at", { ascending: true })
-      .limit(ROWS_CAP),
-    svc
-      .from("profiles")
-      .select("id, email, created_at")
-      .order("created_at", { ascending: false })
-      .limit(ROWS_CAP),
+    selectAllNoted<GrowthProjectRow>(
+      failed,
+      "projects",
+      (from, to) =>
+        svc
+          .from("projects")
+          .select("id, user_id, name, brand_name, last_run_at")
+          .order("created_at", { ascending: true })
+          .range(from, to),
+      ROWS_CAP,
+    ),
+    selectAllNoted<GrowthProfileRow>(
+      failed,
+      "profiles",
+      (from, to) =>
+        svc
+          .from("profiles")
+          .select("id, email, created_at")
+          .order("created_at", { ascending: false })
+          .range(from, to),
+      ROWS_CAP,
+    ),
   ]);
 
-  const failed = [
-    runsQ.error && "runs",
-    projectsQ.error && "projects",
-    profilesQ.error && "profiles",
-  ].filter(Boolean);
-
-  const runs = (runsQ.data ?? []) as GrowthRunRow[];
-  const projects = (projectsQ.data ?? []) as GrowthProjectRow[];
-  const profiles = (profilesQ.data ?? []) as GrowthProfileRow[];
   const projectOwner = new Map(projects.map((p) => [p.id, p.user_id]));
 
-  // Everything except retention is defined over thirty days and SAYS so on the
-  // card — "most active accounts, by runs, 30d". Handing those shapers the
-  // wider fetch would silently redefine them the moment someone picked a
-  // longer window, so the 30-day slice is taken back out here.
+  // Two slices, because two definitions live on this page. The window slice
+  // is what the period selector governs — the chart, the top accounts, the
+  // run feed — and the thirty-day slice belongs to the figures that NAME
+  // thirty days on screen: the People directory's run column and the lead
+  // list's R/30d. Handing a shaper the whole fetch instead would quietly
+  // redefine whichever of the two it belongs to.
+  const inWindow = (r: GrowthRunRow, from: number) => {
+    const t = Date.parse(r.created_at);
+    return Number.isFinite(t) && t >= from;
+  };
   const runs30d =
-    fetchFrom !== null && fetchFrom >= monthAgo
-      ? runs
-      : runs.filter((r) => {
-          const t = Date.parse(r.created_at);
-          return Number.isFinite(t) && t >= monthAgo;
-        });
+    fetchFrom !== null && fetchFrom >= monthAgo ? runs : runs.filter((r) => inWindow(r, monthAgo));
+  const windowRuns = windowStart === null ? runs : runs.filter((r) => inWindow(r, windowStart));
 
   return {
-    activity: shapeActivity(runs30d, projectOwner, now),
+    // The full set, plus the window: DAU/WAU/MAU stay rolling and the series
+    // follows the selector, which needs both in one pass.
+    activity: shapeActivity(runs, projectOwner, now, windowStart),
     signups: shapeSignups(profiles, windowStart, now),
     retention: shapeRetention(runs, projectOwner, windowStart, now),
-    topAccounts: shapeTopAccounts(runs30d, projects, profiles),
-    recentRuns: shapeRecentRuns(runs30d, projects, profiles),
+    topAccounts: shapeTopAccounts(windowRuns, projects, profiles),
+    recentRuns: shapeRecentRuns(windowRuns, projects, profiles),
     leads: shapeLeads(runs30d, projects, profiles, now),
     accounts: shapeAccounts(runs30d, projects, profiles),
     totalUsers: profiles.length,

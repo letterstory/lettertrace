@@ -661,6 +661,50 @@ describe("the free-tier spend ceiling", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Operator comp: a user id in the COMPED_USER_IDS env allowlist runs on the
+// shared trial keys with BOTH ceilings lifted. It is an operator env setting,
+// never account data, so these cases pin that a listed id is served past either
+// ceiling (with runs carrying no budget so nothing stops them), and that an id
+// NOT on the list at the same meters is still exhausted.
+// ---------------------------------------------------------------------------
+describe("an operator-comped account", () => {
+  beforeEach(() => {
+    process.env.TRIAL_ANTHROPIC_API_KEY = "sk-ant-operator";
+    process.env.TRIAL_SPEND_LIMIT_USD = "5";
+    process.env.COMPED_USER_IDS = "u1";
+  });
+  afterEach(() => {
+    delete process.env.TRIAL_SPEND_LIMIT_USD;
+    delete process.env.COMPED_USER_IDS;
+  });
+
+  it("is served past the run ceiling", async () => {
+    const key = await resolveKey(meters(999, 0), "u1", "anthropic");
+    expect(key.source).toBe("trial");
+    expect(key.comped).toBe(true);
+  });
+
+  it("is served past the spend ceiling", async () => {
+    const key = await runKeyFor(meters(0, 500_000_000), "u1", "anthropic");
+    expect(key.source).toBe("trial");
+    expect(key.comped).toBe(true);
+  });
+
+  it("runs with no budget ceiling, the way an own key does", async () => {
+    const key = await resolveKey(meters(999, 500_000_000), "u1", "anthropic");
+    // A capped trial run this far over would get budget 0 and stop on entry;
+    // comp must return null so the run is unbounded.
+    expect(runBudgetMicros(key)).toBeNull();
+  });
+
+  it("does not comp a user id that is not on the list", async () => {
+    const key = await resolveKey(meters(999, 500_000_000), "u2", "anthropic");
+    expect(key.source).toBe("exhausted");
+    expect(key.comped).toBeFalsy();
+  });
+});
+
 // The free tier can be funded by one shared Concentrate key instead of four
 // direct provider keys: it routes the engines Concentrate serves through the
 // gateway (one capped key, discount) — including AI Overviews, on its backing

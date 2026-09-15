@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { selectAll } from "@/lib/paging";
+import type { PostgrestError } from "@supabase/supabase-js";
+import { selectAll, selectAllNoted } from "@/lib/paging";
 
 /** A fake table of `total` rows that honours an inclusive range, the way
  *  PostgREST does, and records the ranges it was asked for. */
@@ -70,5 +71,47 @@ describe("selectAll", () => {
       [100, 199],
       [200, 299],
     ]);
+  });
+});
+
+describe("selectAll with a ceiling", () => {
+  it("stops at maxRows instead of reading the whole table", async () => {
+    const t = fakeTable(5000);
+    const rows = await selectAll(t.page, 1000, 2000);
+    expect(rows).toHaveLength(2000);
+    expect(t.asked).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+  });
+
+  it("trims to exactly maxRows when it doesn't fall on a page boundary", async () => {
+    const t = fakeTable(5000);
+    expect(await selectAll(t.page, 1000, 1500)).toHaveLength(1500);
+  });
+});
+
+describe("selectAllNoted", () => {
+  it("names the failed table and returns nothing rather than throwing", async () => {
+    const problems: string[] = [];
+    const rows = await selectAllNoted<{ i: number }>(problems, "runs", async () => ({
+      data: null as { i: number }[] | null,
+      error: {
+        message: "boom",
+        details: "",
+        hint: "",
+        code: "500",
+        name: "PostgrestError",
+      } as PostgrestError,
+    }));
+    expect(rows).toEqual([]);
+    expect(problems).toEqual(["runs"]);
+  });
+
+  it("stays quiet on success", async () => {
+    const problems: string[] = [];
+    const t = fakeTable(1200);
+    expect(await selectAllNoted(problems, "runs", t.page)).toHaveLength(1200);
+    expect(problems).toEqual([]);
   });
 });
