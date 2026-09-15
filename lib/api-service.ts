@@ -1270,7 +1270,8 @@ export async function triggerRunForProject(
   // Atomically consume a free run BEFORE executing, so concurrent requests
   // can't all slip past the gate while the counter lags. A consumed run counts
   // even if it later fails.
-  if (key.source === "trial" && !(await consumeTrialRunFor(supabase, payer))) {
+  // A comped account runs on the trial keys without spending its run allowance.
+  if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(supabase, payer))) {
     return {
       ok: false,
       code: "trial_exhausted",
