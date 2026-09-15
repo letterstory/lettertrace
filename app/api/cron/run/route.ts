@@ -9,7 +9,7 @@ import {
   recordTrialSpendFor,
   runBudgetMicros,
 } from "@/lib/trial";
-import { withSpan } from "@/lib/otel";
+import { withSpan, flushLogs } from "@/lib/otel";
 import { isScheduleDue } from "@/lib/utils";
 import { recordOps } from "@/lib/ops";
 import type { Span } from "@opentelemetry/api";
@@ -57,7 +57,11 @@ async function handle(request: Request) {
   // One span over the whole tick, parenting every run it starts. The counts it
   // carries are the ones that explain a quiet day: due, skipped for want of a
   // key, and actually run.
-  return withSpan("cron.run", {}, (span) => sweepAndRun(span));
+  const response = await withSpan("cron.run", {}, (span) => sweepAndRun(span));
+  // Every decision this tick recorded is still in the log buffer, and Vercel
+  // freezes the function the moment this response is sent.
+  await flushLogs();
+  return response;
 }
 
 async function sweepAndRun(span: Span) {
