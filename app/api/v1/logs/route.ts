@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { queryActivityLogs, type LogQuery } from "@/lib/logs";
 import { logApiRequest } from "@/lib/activity";
-import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +50,6 @@ export async function GET(request: Request) {
       page_count: result.pageCount,
     });
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }

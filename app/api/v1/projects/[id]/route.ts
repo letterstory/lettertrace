@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { getAccessibleProject, projectSummary, updateProject } from "@/lib/api-service";
 import { logApiRequest } from "@/lib/activity";
-import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +84,6 @@ export async function PATCH(
     });
     return NextResponse.json({ project: projectSummary(outcome.project) });
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }

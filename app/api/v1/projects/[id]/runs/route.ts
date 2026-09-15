@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
+import { apiFailure } from "@/lib/api-errors";
 import { listRuns, triggerRunForProject } from "@/lib/api-service";
 import { apiActor, logApiRequest } from "@/lib/activity";
 import { isProvider, PROVIDERS } from "@/lib/models";
-import { humanError } from "@/lib/llm";
 import type { Provider } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -117,6 +117,6 @@ export async function POST(
     });
     return NextResponse.json(outcome.result, { status: statusCode });
   } catch (e) {
-    return NextResponse.json({ error: humanError(e) }, { status: 500 });
+    return apiFailure(request, e);
   }
 }
