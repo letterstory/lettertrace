@@ -16,7 +16,7 @@ vi.mock("@/lib/supabase/service", () => ({ createServiceClient: vi.fn() }));
 // A minimal stand-in for the supabase client covering the exact chains
 // lib/api-auth uses: for api_keys, select().eq().maybeSingle(); for
 // oauth_access_tokens, select().eq().is().gt().maybeSingle(); and
-// update().eq() (awaited) on both. maybeSingle returns the row registered for
+// update().eq() (fire-and-forget, never awaited) on both. maybeSingle returns the row registered for
 // the table being queried, so a request can hit the api_keys path, the OAuth
 // fallback, or neither.
 function fakeServiceClient(
@@ -123,6 +123,30 @@ describe("authenticateApiKey", () => {
     for (const call of client.eqCalls) expect(call).not.toContain(token);
     // Usage is stamped for the settings page (one update: the api_keys row).
     expect(client.updates).toHaveLength(1);
+    expect(client.updates[0]).toHaveProperty("last_used_at");
+  });
+
+  // INC-246: the last_used_at stamp is display-only, and awaiting it meant a
+  // stalling database held up the caller's request before its work even began.
+  // A stamp that never settles must not delay, or block, authentication.
+  it("does not wait for the last_used_at stamp to settle", async () => {
+    const client = fakeServiceClient({ id: "key-1", user_id: "user-1" });
+    const realFrom = client.from.bind(client);
+    client.from = (table: string) => {
+      const q = realFrom(table) as Record<string, unknown>;
+      const update = q.update as (patch: unknown) => unknown;
+      q.update = (patch: unknown) => {
+        update(patch);
+        // A write that hangs forever, exactly as a stalled call behaves.
+        return { eq: () => ({ then: () => {} }) };
+      };
+      return q as never;
+    };
+    vi.mocked(createServiceClient).mockReturnValue(client as never);
+
+    const ctx = await authenticateApiKey(generateApiKey());
+
+    expect(ctx?.userId).toBe("user-1");
     expect(client.updates[0]).toHaveProperty("last_used_at");
   });
 

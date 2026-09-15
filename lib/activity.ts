@@ -1,6 +1,7 @@
 import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { ApiAuthContext, ResourceAudience, TokenType } from "@/lib/api-auth";
 import type { ActorType, LogCategory, LogChannel, LogStatus } from "@/lib/types";
+import { fireAndForget } from "@/lib/notify";
 
 // Re-export for callers that build actor/channel bits without pulling types.ts.
 export type { LogCategory, LogChannel, LogStatus } from "@/lib/types";
@@ -217,6 +218,17 @@ export async function logDashboard(
  * Log one authenticated request to the programmatic surface (REST v1 or MCP),
  * filling in the actor, channel, and request metadata from the auth context and
  * the Request. The caller supplies only what it knows about the outcome.
+ *
+ * The insert is handed to `fireAndForget`, NOT awaited (2026-09-14, INC-246).
+ * Every caller is a request handler that has already done the work it is
+ * recording, so awaiting this row only adds one more Supabase round trip to the
+ * time the client waits. During the intermittent Supabase tail stalls, 7 of the
+ * 46 stalls that landed inside interactive requests over five hours were on this
+ * very insert — 3-6 s a caller waited for its own audit row. The function stays
+ * `async` so the ~30 `await logApiRequest(...)` call sites need no edit; it now
+ * resolves immediately and the write completes in the background (waitUntil on
+ * Vercel). Failures were already swallowed, so this changes ordering, not
+ * durability guarantees.
  */
 export async function logApiRequest(
   ctx: ApiAuthContext,
@@ -236,13 +248,15 @@ export async function logApiRequest(
   },
 ): Promise<void> {
   const meta = requestMeta(request);
-  await logActivity({
-    userId: ctx.userId,
-    ...apiActor(ctx, surface),
-    method: meta.method,
-    path: meta.path,
-    ip: meta.ip,
-    userAgent: meta.userAgent,
-    ...event,
-  });
+  fireAndForget(
+    logActivity({
+      userId: ctx.userId,
+      ...apiActor(ctx, surface),
+      method: meta.method,
+      path: meta.path,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      ...event,
+    }),
+  );
 }
