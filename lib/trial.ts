@@ -53,6 +53,36 @@ export function trialRunLimit(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TRIAL_RUN_LIMIT;
 }
 
+/**
+ * Accounts the operator has comped: they run on the operator's shared trial
+ * keys with BOTH free-tier ceilings lifted. A comma-separated list of auth user
+ * ids in env COMPED_USER_IDS.
+ *
+ * Env rather than a database flag on purpose. The list is settable only where
+ * env is — the deployment's Vercel project — so editing it is already gated by
+ * the same people who administer the deployment; there is nothing a signed-in
+ * user could write to comp themselves, and no migration or admin UI to protect.
+ * Empty by default, so every deployment and self-host comps nobody until its
+ * operator names an id. User ids (not emails): an id is assigned by the auth
+ * server and can't be claimed by signing up, the same reason ADMIN_USER_IDS is
+ * preferred over ADMIN_EMAILS in lib/admin.ts.
+ */
+export function compedUserIds(): string[] {
+  return (process.env.COMPED_USER_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** Is this user id on the comp list? Empty list means nobody. */
+export function isCompedUser(userId: string | null | undefined): boolean {
+  const id = userId?.trim().toLowerCase();
+  if (!id) return false;
+  const allowed = compedUserIds();
+  if (allowed.length === 0) return false;
+  return allowed.includes(id);
+}
+
 const TRIAL_KEY_ENV: Record<Provider, string> = {
   anthropic: "TRIAL_ANTHROPIC_API_KEY",
   openai: "TRIAL_OPENAI_API_KEY",
@@ -158,6 +188,9 @@ export async function getTrialSpendMicros(
 export interface TrialUsage {
   runs: number;
   spendMicros: number;
+  /** Operator-comped account: both trial ceilings are lifted. Driven by the
+   *  COMPED_USER_IDS env allowlist (see isCompedUser), never by account data. */
+  comped: boolean;
 }
 
 /**
@@ -182,6 +215,9 @@ export async function getTrialUsage(
   return {
     runs: Number(row?.trial_runs_used ?? 0),
     spendMicros: Number(row?.trial_spend_micros ?? 0),
+    // Comp is an operator env allowlist, not account data — so it applies even
+    // to a brand-new profile the signup trigger hasn't written yet.
+    comped: isCompedUser(userId),
   };
 }
 
@@ -194,6 +230,9 @@ export async function getTrialUsage(
  * /suggest spends without touching the run counter at all.
  */
 function withinTrial(usage: TrialUsage, runLimit: number, capMicros: number): boolean {
+  // A comped account is inside the trial by fiat: the operator has lifted both
+  // ceilings for it, so neither meter can exhaust it.
+  if (usage.comped) return true;
   return usage.runs < runLimit && usage.spendMicros < capMicros;
 }
 
@@ -236,6 +275,9 @@ export interface ResolvedKey {
    *  both in micro-dollars. */
   spentMicros?: number;
   capMicros?: number;
+  /** For 'trial': the account is operator-comped, so no per-run budget ceiling
+   *  applies (runBudgetMicros returns null). Absent/false is the normal case. */
+  comped?: boolean;
   /** For 'mismatch': providers the user DOES hold a key for, so the message can
    *  name the one-click fix instead of just refusing. */
   available?: Provider[];
@@ -334,6 +376,7 @@ export async function resolveKey(
         limit,
         spentMicros: usage.spendMicros,
         capMicros: cap,
+        comped: usage.comped,
       };
     }
   }
@@ -440,6 +483,7 @@ export async function resolveRunKeyFor(
         limit,
         spentMicros: trialUsage.spendMicros,
         capMicros: cap,
+        comped: trialUsage.comped,
       };
     }
   }
@@ -621,6 +665,9 @@ export async function recordTrialUsage(
  */
 export function runBudgetMicros(key: ResolvedKey): number | null {
   if (key.source !== "trial") return null;
+  // Comped accounts have no ceiling, so the run is unbounded — same as an own
+  // key. Returning 0 here (cap already passed) would instead stop it on entry.
+  if (key.comped) return null;
   return Math.max(0, (key.capMicros ?? 0) - (key.spentMicros ?? 0));
 }
 

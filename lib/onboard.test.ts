@@ -6,7 +6,7 @@ vi.mock("@/lib/trial", () => ({
   resolveRunKey: vi.fn(),
   resolveKey: vi.fn(),
   engineKeyMessage: vi.fn((k: { source: string }) => `message for ${k.source}`),
-  getTrialUsage: vi.fn(async () => ({ runs: 0, spendMicros: 0 })),
+  getTrialUsage: vi.fn(async () => ({ runs: 0, spendMicros: 0, comped: false })),
   trialRunLimit: () => 15,
   trialCoveredProviders: vi.fn(() => []),
   pickDefaultProvider: vi.fn(() => "anthropic"),
@@ -174,7 +174,7 @@ beforeEach(() => {
   vi.mocked(trial.resolveRunKeyFor).mockReset();
   vi.mocked(trial.resolveRunKey).mockReset();
   vi.mocked(trial.resolveKey).mockReset();
-  vi.mocked(trial.getTrialUsage).mockReset().mockResolvedValue({ runs: 0, spendMicros: 0 });
+  vi.mocked(trial.getTrialUsage).mockReset().mockResolvedValue({ runs: 0, spendMicros: 0, comped: false });
   vi.mocked(trial.trialCoveredProviders).mockReset().mockReturnValue([]);
   vi.mocked(trial.pickDefaultProvider).mockReset().mockReturnValue("anthropic");
   vi.mocked(data.getConfiguredProviders).mockReset().mockResolvedValue([]);
@@ -257,7 +257,7 @@ describe("firstSweep", () => {
   });
 
   it("does not consult the trial once it is inactive", async () => {
-    vi.mocked(trial.getTrialUsage).mockResolvedValue({ runs: 15, spendMicros: 0 });
+    vi.mocked(trial.getTrialUsage).mockResolvedValue({ runs: 15, spendMicros: 0, comped: false });
     vi.mocked(trial.trialCoveredProviders).mockReturnValue(["anthropic"]);
     vi.mocked(trial.resolveRunKeyFor).mockImplementation(async (_db, _u, p) => own(p));
     vi.mocked(engine.executeRun).mockResolvedValue(completed("run-openai"));

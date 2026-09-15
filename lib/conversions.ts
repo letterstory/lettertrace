@@ -1,6 +1,9 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { classifyEmail, type EmailClass, type GrowthProfileRow } from "./growth";
 import { periodStart, type Period } from "@/lib/periods";
+import { selectAllNoted } from "./paging";
+import { scheduleIntervalDays } from "@/lib/utils";
+import type { Schedule } from "@/lib/types";
 
 /**
  * Cross-product conversions: who leaves lettertrace for another Letter
@@ -273,69 +276,75 @@ export function shapeKeyedStats(
 }
 
 // ---------------------------------------------------------------------------
-// Put a report on a cadence
+// Reports on a cadence
 // ---------------------------------------------------------------------------
 
-/** A project as this module reads it: who owns it and what cadence it runs on.
- *  `schedule` is the column's own vocabulary ('off' | 'daily' | 'weekly'), kept
- *  as a plain string so a value added to the check constraint before this file
- *  hears about it degrades to "no interval" rather than to a crash. */
+/** A project as this module reads it: who owns it, when it was made, and what
+ *  cadence it runs on. `schedule` stays a plain string so a value added to the
+ *  check constraint before this file hears about it degrades to "no interval"
+ *  rather than to a crash; the arithmetic itself is lib/utils' and is shared
+ *  with the cron's due-check, so 'custom' counts here the moment it counts
+ *  there. */
 export interface ScheduleProjectRow {
   user_id: string;
   schedule: string;
+  schedule_interval_days: number | null;
   created_at: string;
 }
 
-/** Days between runs, per cadence. The map IS the definition of "scheduled":
- *  a schedule with no entry here (today only 'off') does not count anywhere
- *  below, so adding 'monthly' to the column means adding one line here. */
-export const SCHEDULE_INTERVAL_DAYS: Record<string, number> = {
-  daily: 1,
-  weekly: 7,
-};
+/** Days between this project's runs, or null when it isn't on a cadence. The
+ *  ?? null is load-bearing: scheduleIntervalDays switches over the Schedule
+ *  union and returns undefined for a value the union doesn't know yet. */
+export function projectIntervalDays(project: ScheduleProjectRow): number | null {
+  const days =
+    scheduleIntervalDays(project.schedule as Schedule, project.schedule_interval_days) ?? null;
+  return days !== null && days > 0 ? days : null;
+}
+
+/** How a cadence reads in the breakdown. 'custom' is the only one whose
+ *  interval isn't in its own name, so it's the only one that says the number —
+ *  and two custom projects on the same interval are one line, not two. */
+export function cadenceLabel(schedule: string, days: number): string {
+  return schedule === "custom" ? `every ${days} days` : schedule;
+}
 
 export interface ScheduledStats {
-  /** Accounts owning at least one project on a schedule right now, whenever
-   *  they signed up. A stock, not an event — see the note on the shaper. */
-  allTime: number;
-  /** Every account, for the all-time rate's denominator. */
+  /** The headline: reports running on a cadence right now. A REPORT, not an
+   *  account — one company running six URLs on three schedules is three. */
+  reports: number;
+  /** Of those, the ones whose project was created inside the window. The only
+   *  thing here the period can honestly scope: see the note on the shaper. */
+  newInPeriod: number;
+  /** Accounts behind those reports, for context in a hint — the fan-out
+   *  (reports per account) is the point, not a rate. */
+  accounts: number;
+  /** Every account, so the hint can say what share of the base that is. */
   totalUsers: number;
-  /** The window's SIGNUP COHORT rate: of the accounts created inside it, the
-   *  share that have a report on a schedule today. Same construction as the
-   *  API-key activation card, and for the same reason — the numerator has to
-   *  stay inside the denominator. One decimal. */
-  rate: number | null;
-  cohortSize: number;
-  cohortScheduled: number;
-  /** The stock rate over everyone who ever signed up. Equal to `rate` on the
-   *  all-time period, by construction. */
-  rateAllTime: number | null;
-  /** Scheduled projects, which is not the same as scheduled accounts: one
-   *  owner can run several organizations on a cadence. */
-  projects: number;
-  /** Those projects split by cadence, most frequent first — the breakdown
-   *  behind the average, since a mean of two values is only readable next to
-   *  the counts it came from. */
-  byInterval: { schedule: string; days: number; projects: number }[];
-  /** Mean days between runs across every scheduled project, one decimal.
+  /** Scheduled reports by cadence, most frequent first — the breakdown behind
+   *  the average, since a mean is only readable next to its counts. */
+  byInterval: { label: string; days: number; reports: number }[];
+  /** Mean days between runs across every scheduled report, one decimal.
    *  Null when nothing is scheduled. */
   avgIntervalDays: number | null;
+  /** Runs a day all these schedules add up to (the sum of 1/interval), one
+   *  decimal — what the cron actually has to get through. */
+  runsPerDay: number | null;
 }
 
 /**
- * How many accounts have a report running on a cadence, and how often it runs.
+ * How many reports are running on a cadence, how often, and what that costs
+ * the scheduler per day.
  *
- * Unlike every other figure on this page, this one reads a STATE and not an
- * event: projects.schedule says what the cadence is now, and nothing anywhere
- * records when it became that. So there is no "scheduled in the last 7 days"
- * to be had — the period scopes the SIGNUP COHORT instead, exactly as the
- * API-key activation card does, and the question it answers is "of the people
- * who joined in this window, how many are on a cadence today".
+ * Counted in PROJECTS on purpose. An account is the wrong unit here: one
+ * company can keep six brands on three different cadences, and the operator
+ * question — how much scheduled work exists, and is it growing — is about the
+ * reports, not about how many people own them.
  *
- * Read the number knowing that onboarding has created projects with a daily
- * schedule since 2026-08-20, so for anyone who signed up after that this
- * measures "did not turn it off" rather than "went and switched it on". The
- * page says so too; a rate near 100% here is the default, not enthusiasm.
+ * Unlike every other figure on this page this one reads a STATE: projects.
+ * schedule says what the cadence is now and nothing records when it became
+ * that, so the only date a scheduled report has is the day its project was
+ * created. That is what `newInPeriod` and the series below are built on, and
+ * why neither claims to be "reports scheduled in this window".
  */
 export function shapeScheduledStats(
   projects: ScheduleProjectRow[],
@@ -343,102 +352,94 @@ export function shapeScheduledStats(
   since: number | null,
 ): ScheduledStats {
   const owners = new Set<string>();
-  const byInterval = new Map<string, number>();
+  const byInterval = new Map<string, { label: string; days: number; reports: number }>();
   let intervalSum = 0;
-  let scheduledProjects = 0;
+  let runsPerDay = 0;
+  let reports = 0;
+  let newInPeriod = 0;
 
   for (const project of projects) {
-    const days = SCHEDULE_INTERVAL_DAYS[project.schedule];
-    if (days === undefined) continue;
+    const days = projectIntervalDays(project);
+    if (days === null) continue;
     owners.add(project.user_id);
-    byInterval.set(project.schedule, (byInterval.get(project.schedule) ?? 0) + 1);
+    const label = cadenceLabel(project.schedule, days);
+    const entry = byInterval.get(label) ?? { label, days, reports: 0 };
+    entry.reports += 1;
+    byInterval.set(label, entry);
     intervalSum += days;
-    scheduledProjects += 1;
+    runsPerDay += 1 / days;
+    reports += 1;
+    const created = Date.parse(project.created_at);
+    if (since !== null && Number.isFinite(created) && created >= since) newInPeriod += 1;
   }
 
-  let cohortSize = 0;
-  let cohortScheduled = 0;
-  let allTimeScheduled = 0;
-  for (const profile of profiles) {
-    const created = Date.parse(profile.created_at);
-    // A profile with an unreadable created_at can still be counted all-time —
-    // it is a real account — it just cannot be placed in a window.
-    if (owners.has(profile.id)) allTimeScheduled += 1;
-    if (!Number.isFinite(created)) continue;
-    if (since !== null && created < since) continue;
-    cohortSize += 1;
-    if (owners.has(profile.id)) cohortScheduled += 1;
-  }
-
-  const totalUsers = profiles.length;
   return {
-    // Counted through profiles, so an orphaned project (owner deleted, or a
-    // profile the row cap cut off) can never push the rate past 100%.
-    allTime: allTimeScheduled,
-    totalUsers,
-    rate: cohortSize > 0 ? Math.round((cohortScheduled / cohortSize) * 1000) / 10 : null,
-    cohortSize,
-    cohortScheduled,
-    rateAllTime:
-      totalUsers > 0 ? Math.round((allTimeScheduled / totalUsers) * 1000) / 10 : null,
-    projects: scheduledProjects,
-    byInterval: [...byInterval.entries()]
-      .map(([schedule, count]) => ({
-        schedule,
-        days: SCHEDULE_INTERVAL_DAYS[schedule],
-        projects: count,
-      }))
-      .sort((a, b) => a.days - b.days),
-    avgIntervalDays:
-      scheduledProjects > 0 ? Math.round((intervalSum / scheduledProjects) * 10) / 10 : null,
+    reports,
+    newInPeriod: since === null ? reports : newInPeriod,
+    accounts: owners.size,
+    totalUsers: profiles.length,
+    byInterval: [...byInterval.values()].sort(
+      (a, b) => a.days - b.days || a.label.localeCompare(b.label),
+    ),
+    avgIntervalDays: reports > 0 ? Math.round((intervalSum / reports) * 10) / 10 : null,
+    runsPerDay: reports > 0 ? Math.round(runsPerDay * 10) / 10 : null,
   };
 }
 
 export interface SchedulePoint {
-  /** UTC day accounts SIGNED UP on — not a day something was scheduled. */
+  /** UTC day. */
   day: string;
-  /** Of that day's signups, the share with a report on a schedule today. Null
-   *  on a day nobody signed up, which draws as a gap rather than as a zero. */
-  rate: number | null;
-  scheduled: number;
-  signups: number;
+  /** Scheduled reports in existence by the end of this day. */
+  total: number;
+  /** Of those, the ones created on this day. */
+  added: number;
 }
 
 /**
- * Scheduling by signup cohort: one point per UTC day, each the share of that
- * day's signups that are on a cadence today.
+ * Scheduled reports over time: one point per UTC day, each the running total
+ * of reports on a cadence.
  *
- * This deliberately is NOT "what percentage of users had a schedule on, on
- * this day" — the curve everyone pictures. Drawing that needs the history of
- * schedule changes, and there isn't one: the column holds only its current
- * value, and the activity log records a change only when it came through the
- * dashboard toggle, never when a project was born scheduled. Rewinding a
- * partial log would produce a smooth line that is quietly wrong, so this shows
- * the thing the data can actually support — whether newer cohorts keep a
- * cadence more than older ones — and says so on the page.
+ * Built from the CURRENT schedule and the project's creation date, which is
+ * the only honest line the data supports. It means the curve can only climb —
+ * a report someone switched off last week was never in it, and one switched on
+ * last week sits back on the day its project was made. Drawing the true stock
+ * would need the history of schedule changes, and there isn't one: the column
+ * holds today's value, and the activity log records a change only when it came
+ * through the dashboard toggle, never when a project was born scheduled.
+ * Rewinding a partial log produces a smooth line that is quietly wrong, so
+ * this shows what is real — how the current book of scheduled work was built
+ * up — and the page says as much.
+ *
+ * The running total carries in from before the window, so narrowing the period
+ * zooms the x-axis instead of resetting the count to zero.
  */
-export function shapeScheduleSeries(
+export function shapeScheduledSeries(
   projects: ScheduleProjectRow[],
-  profiles: GrowthProfileRow[],
   since: number | null,
   now: number,
 ): SchedulePoint[] {
-  const owners = new Set<string>();
-  for (const project of projects) {
-    if (SCHEDULE_INTERVAL_DAYS[project.schedule] !== undefined) owners.add(project.user_id);
+  const created = projects
+    .filter((p) => projectIntervalDays(p) !== null)
+    .map((p) => Date.parse(p.created_at))
+    .filter((t) => Number.isFinite(t) && t <= now)
+    .sort((a, b) => a - b);
+
+  if (created.length === 0) return [];
+
+  let idx = 0;
+  let total = 0;
+  // Everything older than the window is the line's starting height, not a
+  // point on it.
+  if (since !== null) {
+    while (idx < created.length && created[idx] < since) {
+      total += 1;
+      idx += 1;
+    }
   }
 
-  const signups = profiles
-    .map((p) => ({ id: p.id, t: Date.parse(p.created_at) }))
-    .filter((p) => Number.isFinite(p.t) && p.t <= now && (since === null || p.t >= since))
-    .sort((a, b) => a.t - b.t);
-
-  const firstDay = since ?? signups[0]?.t;
-  if (firstDay === undefined) return [];
-
+  const firstDay = since ?? created[0];
   const startDay = new Date(firstDay).toISOString().slice(0, 10);
   const series: SchedulePoint[] = [];
-  let idx = 0;
 
   for (
     let dayStart = Date.parse(`${startDay}T00:00:00.000Z`);
@@ -446,19 +447,13 @@ export function shapeScheduleSeries(
     dayStart += DAY_MS
   ) {
     const dayEnd = dayStart + DAY_MS;
-    let daySignups = 0;
-    let dayScheduled = 0;
-    while (idx < signups.length && signups[idx].t < dayEnd) {
-      daySignups += 1;
-      if (owners.has(signups[idx].id)) dayScheduled += 1;
+    let added = 0;
+    while (idx < created.length && created[idx] < dayEnd) {
+      added += 1;
+      total += 1;
       idx += 1;
     }
-    series.push({
-      day: new Date(dayStart).toISOString().slice(0, 10),
-      rate: daySignups > 0 ? Math.round((dayScheduled / daySignups) * 1000) / 10 : null,
-      scheduled: dayScheduled,
-      signups: daySignups,
-    });
+    series.push({ day: new Date(dayStart).toISOString().slice(0, 10), total, added });
   }
   return series;
 }
@@ -618,36 +613,59 @@ export async function conversionsReport(
   const svc = createServiceClient();
 
   // All keys, all time: the period filter applies to a user's FIRST key, which
-  // can only be found by looking at every row they have.
-  // Projects come in whole and unfiltered for the same reason: a schedule has
-  // no timestamp of its own, so the period can only be applied to the OWNER's
-  // signup date, which lives in profiles.
-  const [clicksQ, profilesQ, providerKeysQ, routerKeysQ, projectsQ] = await Promise.all([
-    svc
-      .from("outbound_clicks")
-      .select("user_id, url, clicked_at")
-      .order("clicked_at", { ascending: false })
-      .limit(ROWS_CAP),
-    svc.from("profiles").select("id, email, created_at").limit(ROWS_CAP),
-    svc.from("provider_keys").select("user_id, created_at").limit(ROWS_CAP),
-    svc.from("router_keys").select("user_id, created_at").limit(ROWS_CAP),
-    svc.from("projects").select("user_id, schedule, created_at").limit(ROWS_CAP),
+  // can only be found by looking at every row they have. Projects come in whole
+  // and unfiltered for the same reason: a schedule has no timestamp of its own,
+  // so a project made outside the window can still be running on a cadence
+  // today and has to be counted.
+  //
+  // Each read pages through selectAll, because PostgREST caps a plain select at
+  // 1,000 rows and reports nothing (see lib/paging.ts) — past that ceiling a
+  // table quietly becomes a smaller, wrong one. The caps below are still caps;
+  // they are just ours, and visible.
+  const failed: string[] = [];
+  const [clicks, profiles, providerKeys, routerKeys, projects] = await Promise.all([
+    selectAllNoted<OutboundClickRow>(
+      failed,
+      "outbound_clicks",
+      (from, to) =>
+        svc
+          .from("outbound_clicks")
+          .select("user_id, url, clicked_at")
+          .order("clicked_at", { ascending: false })
+          .range(from, to),
+      ROWS_CAP,
+    ),
+    selectAllNoted<GrowthProfileRow>(
+      failed,
+      "profiles",
+      (from, to) => svc.from("profiles").select("id, email, created_at").range(from, to),
+      ROWS_CAP,
+    ),
+    selectAllNoted<KeyRow>(
+      failed,
+      "provider_keys",
+      (from, to) => svc.from("provider_keys").select("user_id, created_at").range(from, to),
+      ROWS_CAP,
+    ),
+    selectAllNoted<KeyRow>(
+      failed,
+      "router_keys",
+      (from, to) => svc.from("router_keys").select("user_id, created_at").range(from, to),
+      ROWS_CAP,
+    ),
+    selectAllNoted<ScheduleProjectRow>(
+      failed,
+      "projects",
+      (from, to) =>
+        svc
+          .from("projects")
+          .select("user_id, schedule, schedule_interval_days, created_at")
+          .range(from, to),
+      ROWS_CAP,
+    ),
   ]);
 
-  const failed = [
-    clicksQ.error && "outbound_clicks",
-    profilesQ.error && "profiles",
-    providerKeysQ.error && "provider_keys",
-    routerKeysQ.error && "router_keys",
-    projectsQ.error && "projects",
-  ].filter(Boolean);
-  const clicks = (clicksQ.data ?? []) as OutboundClickRow[];
-  const profiles = (profilesQ.data ?? []) as GrowthProfileRow[];
-  const keys = [
-    ...((providerKeysQ.data ?? []) as KeyRow[]),
-    ...((routerKeysQ.data ?? []) as KeyRow[]),
-  ];
-  const projects = (projectsQ.data ?? []) as ScheduleProjectRow[];
+  const keys = [...providerKeys, ...routerKeys];
   const since = periodStart(period, now);
 
   return {
@@ -655,7 +673,7 @@ export async function conversionsReport(
     keyed: shapeKeyedStats(keys, profiles, since),
     scheduled: shapeScheduledStats(projects, profiles, since),
     series: shapeRateSeries(clicks, profiles, since, now),
-    scheduleSeries: shapeScheduleSeries(projects, profiles, since, now),
+    scheduleSeries: shapeScheduledSeries(projects, since, now),
     // The table reads through the same window: destinations, counts and
     // first/latest are period-scoped, so it always agrees with the cards.
     connected: shapeConnectedUsers(clicksSince(clicks, since), profiles),
