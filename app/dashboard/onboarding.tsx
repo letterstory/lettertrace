@@ -408,7 +408,15 @@ export function Onboarding() {
 
       {step === "topics" && (
         <div>
-          <h1 className="text-3xl font-semibold text-ink">Does this look right?</h1>
+          <div className="flex items-start justify-between gap-4">
+            <h1 className="text-3xl font-semibold text-ink">Does this look right?</h1>
+            {/* Same action as the "Start monitoring" button below, surfaced up
+                here too so starting doesn't require scrolling. */}
+            <Button size="lg" onClick={handleStart} disabled={busy} className="shrink-0">
+              <Check className="h-4 w-4" />
+              Start
+            </Button>
+          </div>
           {note && <p className="mt-2 text-ink-soft">{note}</p>}
 
           {/* Identity read from the site. Editable, because a scrape gets the
