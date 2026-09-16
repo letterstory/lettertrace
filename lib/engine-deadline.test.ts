@@ -11,7 +11,7 @@
 // short and why.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/lib/llm", () => ({
   runQuery: vi.fn(),
@@ -31,6 +31,7 @@ import {
   resumeRun,
   INVOCATION_CEILING_MS,
   RUN_TIME_BUDGET_MS,
+  DRAIN_GRACE_MS,
   type PreparedRun,
 } from "@/lib/engine";
 
@@ -128,6 +129,67 @@ describe("the time budget", () => {
     // and the final writes; a smaller margin re-creates the 09-11 death.
     expect(INVOCATION_CEILING_MS - RUN_TIME_BUDGET_MS).toBe(120 * 1000);
     expect(RUN_TIME_BUDGET_MS).toBeGreaterThan(0);
+  });
+
+  it("leaves room inside that margin for the settle writes", () => {
+    // The run waits at most DRAIN_GRACE_MS past its budget for asks still in
+    // flight; what is left of the reserve is what the settle writes get. A
+    // grace as large as the reserve puts the settle back on the ceiling.
+    expect(DRAIN_GRACE_MS).toBeLessThan(INVOCATION_CEILING_MS - RUN_TIME_BUDGET_MS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The drain deadline.
+//
+// Stopping dispatch on time is not enough: the provider client retries a
+// dropped call four times at 60s each, so one straggling ask can hold the pool
+// for five minutes after the last dispatch. The 03:01 UTC 2026-09-16 Luna run
+// stopped dispatching at 675s, drained to 740s, and was killed still waiting
+// for the last ask — 142 answers stored, its own row never settled, and the
+// sweeper marked it abandoned five hours later.
+// ---------------------------------------------------------------------------
+describe("a run held open by an ask that never comes back", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** Answers the first `n` asks; every ask after that hangs forever. */
+  function hangAfter(n: number) {
+    let calls = 0;
+    vi.mocked(runQuery).mockImplementation(() =>
+      ++calls <= n ? Promise.resolve(answer) : new Promise(() => {}),
+    );
+  }
+
+  it("settles itself at the drain deadline instead of waiting to be killed", async () => {
+    hangAfter(12);
+    const pending = run(60, 40);
+    await vi.advanceTimersByTimeAsync(DRAIN_GRACE_MS + 1000);
+    const { result, runUpdates } = await pending;
+
+    const settle = runUpdates.find((u) => "status" in u)!;
+    expect(settle.status).toBe("completed");
+    expect(settle.finished_at).toBeTruthy();
+    expect(result.timeStopped).toBe(true);
+    // The twelve answers it did store are kept and counted.
+    expect(result.totalResponses).toBe(12);
+    expect(settle.completed_count).toBe(12);
+    expect(String(settle.error)).toMatch(/time limit/i);
+  });
+
+  it("does not settle before the deadline while asks are still in flight", async () => {
+    hangAfter(12);
+    let settled = false;
+    const pending = run(60, 40).then((v) => {
+      settled = true;
+      return v;
+    });
+    await vi.advanceTimersByTimeAsync(DRAIN_GRACE_MS - 1000);
+    // Still waiting: a straggler gets the whole grace to come back.
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    await pending;
+    expect(settled).toBe(true);
   });
 });
 

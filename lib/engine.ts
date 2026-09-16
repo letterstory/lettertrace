@@ -55,6 +55,19 @@ export const INVOCATION_CEILING_MS = 800 * 1000;
 // and left reading "running" for 23 hours until the sweeper found it.
 export const RUN_TIME_BUDGET_MS = INVOCATION_CEILING_MS - 120 * 1000;
 
+// How long past its time budget a run waits for the asks already in flight
+// before settling anyway. Waiting for the pool to drain is not safe on its
+// own: the provider client retries a dropped call four times at 60s each, so a
+// SINGLE straggling ask can hold the pool for five minutes after the last
+// dispatch — far longer than the margin above reserves. That is how the
+// 03:01 UTC 2026-09-16 Luna run died: it stopped dispatching on time at 675s,
+// drained to 740s, and was killed still waiting, so its row never settled and
+// the sweeper marked it abandoned five hours later. The answers already stored
+// are what matter; a straggler that lands after the settle still stores its
+// answer, it just no longer decides whether the run gets to state its result.
+// Kept below the 120s reserve so the settle writes are inside the ceiling.
+export const DRAIN_GRACE_MS = 60 * 1000;
+
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
 // wider pool doesn't make completed_count staler for whoever reads it mid-run.
@@ -453,7 +466,7 @@ async function resumeRunMeasured(
   let timeStopped = false;
   const outOfTime = () => Date.now() - startedMs >= timeBudgetMs;
 
-  await mapPool(jobs, CONCURRENCY, async (prompt) => {
+  const pool = mapPool(jobs, CONCURRENCY, async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
     // the point where in-flight answers have already reported their cost. Jobs
     // already dispatched finish and are kept — a stored answer is real data,
@@ -630,6 +643,32 @@ async function resumeRunMeasured(
       }
     }
   });
+
+  // Settle at the drain deadline whether or not every ask has come back. The
+  // race, not the pool, is what guarantees the run records its own ending.
+  let poolError: unknown;
+  // Attached here so a late rejection can never surface as an unhandled one.
+  const drained: Promise<"drained"> = pool.then(
+    () => "drained" as const,
+    (err) => {
+      poolError = err;
+      return "drained" as const;
+    },
+  );
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  const graceExpired = new Promise<"deadline">((resolve) => {
+    drainTimer = setTimeout(
+      () => resolve("deadline"),
+      Math.max(0, startedMs + timeBudgetMs + DRAIN_GRACE_MS - Date.now()),
+    );
+  });
+  const drainOutcome = await Promise.race([drained, graceExpired]);
+  clearTimeout(drainTimer);
+  // A pool that threw is a real failure and still surfaces as one.
+  if (drainOutcome === "drained" && poolError) throw poolError;
+  // Otherwise asks are still out. Whatever they return stores itself; the run
+  // is not going to sit here and be killed with its own result unsaid.
+  if (drainOutcome === "deadline") timeStopped = true;
 
   const finishedAt = new Date().toISOString();
   // A run only "completed" if at least one answer was actually stored; otherwise
