@@ -12,6 +12,7 @@ import {
   listRuns,
   projectSummary,
   updatePrompt,
+  updateProject,
   triggerRunForProject,
 } from "@/lib/api-service";
 import {
@@ -239,6 +240,32 @@ describe("getAccessibleProject", () => {
   it("returns null when the project does not exist", async () => {
     const db = fakeDb({ projects: () => ({ data: null }) });
     expect(await getAccessibleProject(db as never, "user-2", "proj-1")).toBeNull();
+  });
+});
+
+describe("updateProject", () => {
+  it("lets an invited teammate update the project without an owner filter on the write", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: { ...PROJECT, name: "Renamed" } }),
+      project_members: () => ({ data: { user_id: "user-2" } }),
+    });
+    const outcome = await updateProject(db as never, "user-2", "proj-1", { name: "Renamed" });
+    expect(outcome.ok).toBe(true);
+    const write = db.queries.find(
+      (q) => q.table === "projects" && q.modifiers.some((m) => m[0] === "update"),
+    );
+    expect(write).toBeDefined();
+    expect(write!.filters).toEqual([["eq", "id", "proj-1"]]);
+  });
+
+  it("refuses a stranger before writing anything", async () => {
+    const db = fakeDb({
+      projects: () => ({ data: PROJECT }),
+      project_members: () => ({ data: null }),
+    });
+    const outcome = await updateProject(db as never, "user-3", "proj-1", { name: "Renamed" });
+    expect(outcome).toEqual({ ok: false, code: "not_found", message: "Project not found." });
+    expect(db.queries.some((q) => q.modifiers.some((m) => m[0] === "update"))).toBe(false);
   });
 });
 
