@@ -297,10 +297,15 @@ function failureLabel(failure: ReportEmailFailure): string {
 function allFailedEmail(input: MultiReportEmailInput): ReportEmailContent {
   const url = reportsUrl(input.baseUrl);
   const engineCopy = countLabel(input.requestedEngineCount, "engine");
+  const single = input.requestedEngineCount === 1;
+  const heading = `${input.brandName} ${single ? "report" : "reports"} didn't finish`;
+  const explanation = single
+    ? "We couldn't complete this report. Open Reports to review what happened and try again."
+    : `We couldn't complete any of the ${engineCopy} in this batch. Open Reports to review what happened and try again.`;
   const labels = input.failures.map(failureLabel);
   const body = `<p style="margin:0 0 8px;font-family:${FONT_STACK};font-size:12px;font-weight:700;line-height:18px;letter-spacing:.08em;text-transform:uppercase;color:${COLORS.warningInk};">Report update</p>
-<h1 style="margin:0;font-family:${SERIF_STACK};font-size:28px;font-weight:400;line-height:34px;color:${COLORS.ink};">${escapeHtml(input.brandName)} reports didn&#39;t finish</h1>
-<p style="margin:12px 0 0;font-family:${FONT_STACK};font-size:14px;line-height:22px;color:${COLORS.soft};">We couldn&#39;t complete any of the ${escapeHtml(engineCopy)} in this batch. Open Reports to review what happened and try again.</p>
+<h1 style="margin:0;font-family:${SERIF_STACK};font-size:28px;font-weight:400;line-height:34px;color:${COLORS.ink};">${escapeHtml(heading)}</h1>
+<p style="margin:12px 0 0;font-family:${FONT_STACK};font-size:14px;line-height:22px;color:${COLORS.soft};">${escapeHtml(explanation)}</p>
 ${
   labels.length > 0
     ? `<p style="margin:20px 0 0;padding:14px 16px;background:${COLORS.warningBg};border:1px solid ${COLORS.warningBorder};font-family:${FONT_STACK};font-size:13px;line-height:20px;color:${COLORS.warningInk};word-break:break-word;">Didn&#39;t finish: ${escapeHtml(labels.join(", "))}</p>`
@@ -309,9 +314,9 @@ ${
 ${ctaHtml("Review reports", url)}
 ${footerHtml(input.baseUrl)}`;
   const text = [
-    `${input.brandName} reports didn't finish`,
+    heading,
     "",
-    `We couldn't complete any of the ${engineCopy} in this batch.`,
+    single ? "We couldn't complete this report." : `We couldn't complete any of the ${engineCopy} in this batch.`,
     labels.length > 0 ? `Didn't finish: ${labels.join(", ")}` : "",
     "",
     `Review reports and try again: ${url}`,
@@ -320,10 +325,24 @@ ${footerHtml(input.baseUrl)}`;
     .filter((line, index, lines) => line !== "" || lines[index - 1] !== "")
     .join("\n");
   return {
-    subject: subjectText(`${input.brandName}: your reports didn't finish`),
-    html: wrapHtml(`${input.brandName}: your reports didn't finish`, body),
+    subject: subjectText(`${input.brandName}: your ${single ? "report" : "reports"} didn't finish`),
+    html: wrapHtml(`${input.brandName}: your ${single ? "report" : "reports"} didn't finish`, body),
     text,
   };
+}
+
+export function buildFailedReportEmail(input: {
+  brandName: string;
+  failure: ReportEmailFailure;
+  baseUrl: string;
+}): ReportEmailContent {
+  return allFailedEmail({
+    brandName: input.brandName,
+    requestedEngineCount: 1,
+    reports: [],
+    failures: [input.failure],
+    baseUrl: input.baseUrl,
+  });
 }
 
 export function buildMultiReportEmail(input: MultiReportEmailInput): ReportEmailContent {

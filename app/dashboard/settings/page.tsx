@@ -1,4 +1,4 @@
-import { KeyRound, Building2, Palette, Plug, Shuffle, Users } from "lucide-react";
+import { KeyRound, Building2, Palette, Plug, Shuffle, Users, Mail } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getProject, getProviderKeysPublic, getRouterKeysPublic } from "@/lib/data";
@@ -9,6 +9,7 @@ import RoutersManager from "./routers-manager";
 import ApiKeysManager from "./api-keys-manager";
 import ProjectForm from "./project-form";
 import TeamManager from "./team-manager";
+import { ReportEmailToggle } from "./report-email-toggle";
 import type { ApiKeyPublic } from "@/lib/types";
 import { trialEnabled } from "@/lib/trial";
 import { loadTeam } from "@/lib/team";
@@ -134,6 +135,23 @@ export default async function SettingsPage() {
           />
         </CardBody>
       </Card>
+
+      {project && (
+        <Card>
+          <CardBody className="space-y-5">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 rounded bg-terracotta/15 p-2 text-terracotta">
+                <Mail className="h-5 w-5" />
+              </span>
+              <div>
+                <h3 className="text-lg font-semibold text-ink">Report emails</h3>
+                <p className="mt-1 text-sm text-ink-soft">For {project.brand_name}, the organization selected in the sidebar. Emails go only to its owner.</p>
+              </div>
+            </div>
+            <ReportEmailToggle enabled={project.report_emails_enabled} isOwner={isOwner} />
+          </CardBody>
+        </Card>
+      )}
 
       {project && team && (
         <Card>
