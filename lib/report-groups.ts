@@ -129,10 +129,22 @@ export async function finishGroup(supabase: SupabaseClient, group: ReportGroup):
       .from("projects").select("*").eq("id", group.project_id).single();
     if (projectError) throw projectError;
     const runs = await groupRuns(supabase, group.id);
-    // An engine whose model could not be resolved has no model label to print.
-    // Leaving it undefined prints "OpenAI (ChatGPT)"; filling it with the
-    // provider id printed "OpenAI (ChatGPT) (openai)".
+    // A provider that produced a run — completed OR failed — already has its
+    // real attempted model on that row. Prefer it. Falling back to the
+    // project's catalog default here named the wrong model for a failed trial
+    // run: the trial forces a cheap model (claude-haiku-4-5), so a failure
+    // was reported to the owner as "Claude Opus 4.8 didn't finish" — measured
+    // live, 2026-09-18, against a genuine invalid-key failure. Only a provider
+    // with NO run row at all (skipped before ever attempting) has no real
+    // model to read, so that case still falls back to a best-effort guess.
+    //
+    // An engine whose model could not even be resolved that way has no model
+    // label to print. Leaving it undefined prints "OpenAI (ChatGPT)"; filling
+    // it with the provider id printed "OpenAI (ChatGPT) (openai)".
+    const attemptedModel = new Map(runs.map((run) => [run.provider, run.model]));
     const requested = group.requested_providers.map((provider) => {
+      const real = attemptedModel.get(provider);
+      if (real) return { provider, model: real };
       const engine = resolveEngine(provider, undefined);
       return { provider, model: engine.ok ? engine.model : undefined };
     });

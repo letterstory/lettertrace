@@ -167,6 +167,35 @@ describe("finalizing a batch", () => {
     expect(state.groups[0].email_status).toBe("sent");
   });
 
+  // Live-tested 2026-09-18: the trial forces claude-haiku-4-5, that run's key
+  // was invalid and it failed — the run row correctly said "Claude Haiku 4.5"
+  // failed, but resolveEngine(provider, undefined) fell back to the catalog
+  // default and the OWNER'S EMAIL said "Claude Opus 4.8" didn't finish. A
+  // failed run still has a real model on its row; only a genuinely skipped
+  // engine (no row at all) has no real model to read.
+  it("names a FAILED run's actual model, not the project's catalog default", async () => {
+    const { db } = fakeDb(
+      [makeGroup()],
+      [makeRun("anthropic", { status: "failed", completed_count: 0, model: "claude-haiku-4-5" }), makeRun("openai")],
+    );
+    await finalizeGroupIfComplete(db, "group-1");
+    const requested = (mail.build.mock.calls.at(-1) as unknown as [unknown, unknown, { provider: string; model?: string }[]] | undefined)?.[2];
+    expect(requested).toContainEqual({ provider: "anthropic", model: "claude-haiku-4-5" });
+  });
+
+  // The counterpart: an engine that never got a run row at all (no key, ever)
+  // has no real model to read, so the best-effort catalog default is correct
+  // there — this must keep working alongside the fix above.
+  it("still falls back to the catalog default for a SKIPPED engine with no run row", async () => {
+    const { db } = fakeDb([makeGroup()], [makeRun("anthropic")]);
+    await recordGroupSkip(db, "group-1", "openai", "No OpenAI key saved.");
+    await finalizeGroupIfComplete(db, "group-1");
+    const requested = (mail.build.mock.calls.at(-1) as unknown as [unknown, unknown, { provider: string; model?: string }[]] | undefined)?.[2];
+    const openai = requested?.find((r) => r.provider === "openai");
+    expect(openai?.model).toBeTruthy();
+    expect(openai?.model).not.toBe("claude-haiku-4-5");
+  });
+
   it("claims once when two finalizers meet the same finished batch", async () => {
     const group = makeGroup();
     const { db, state } = fakeDb([group], [makeRun("anthropic"), makeRun("openai")]);
