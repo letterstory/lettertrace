@@ -621,7 +621,18 @@ async function resumeRunMeasured(
       // ...but every one of them is recorded. Only the FIRST becomes the run's
       // error message, so without this a run that lost 90 of 100 answers to a
       // rate limit looks identical to one that lost a single answer.
-      recordOpsError("engine.answer", err, { provider, model, route: route?.router ?? "direct" });
+      // key_source travels with the error because the alarms have to tell a
+      // customer's own exhausted key from ours. Route is not that signal: a
+      // trial run falls back to the per-provider TRIAL_*_API_KEY on the direct
+      // route whenever Concentrate cannot serve the engine, so "direct" covers
+      // both wallets and a muted-by-route rule hides the operator's own
+      // credit exhaustion behind an identical message.
+      recordOpsError("engine.answer", err, {
+        provider,
+        model,
+        route: route?.router ?? "direct",
+        key_source: params.keySource ?? "unknown",
+      });
     } finally {
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
