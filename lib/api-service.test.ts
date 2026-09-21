@@ -127,8 +127,6 @@ const PROJECT: Project = {
   schedule: "off",
   schedule_interval_days: null,
   use_web_search: true,
-  report_emails_enabled: false,
-  schedule_skip_alerted_at: null,
   replicates: 1,
   last_run_at: null,
   created_at: "2026-07-01T00:00:00Z",
@@ -145,7 +143,6 @@ function makeRun(overrides: Partial<Run>): Run {
     // Direct provider key, as every run before router support was.
     route: null,
     key_source: null,
-    report_group_id: null,
     prompt_count: 2,
     completed_count: 2,
     replicates: 1,
