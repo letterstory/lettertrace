@@ -255,6 +255,17 @@ alter table public.projects
 alter table public.projects
   add column if not exists use_web_search boolean not null default true;
 
+alter table public.projects
+  add column if not exists report_emails_enabled boolean not null default false;
+
+-- When we last told the owner a DUE scheduled run could not start (no key,
+-- allowance spent). Without it the sweep mails the same sentence every
+-- interval for as long as the key stays missing, which is the one failure
+-- mode guaranteed to keep happening. Cleared by the next run that starts, so
+-- the next breakage is reported again.
+alter table public.projects
+  add column if not exists schedule_skip_alerted_at timestamptz;
+
 -- Phantomsites: a brand can have several domains — the main site plus phantom
 -- sites that build rapport for the same brand. The first entry is the primary
 -- (main TLD); every entry counts for source ownership. Migrates the old single
@@ -518,6 +529,47 @@ alter table public.prompts
   check (specificity is null or specificity in ('general', 'mid', 'niche'));
 
 -- ---------- runs -----------------------------------------------------
+-- A batch of runs the user asked for in one click ("run on all engines"), so
+-- the N of them can be summarised in ONE email instead of N. The browser
+-- drives the runs; this row only records what was asked for and what became
+-- of each engine, which is why there is no claim/cursor state here.
+--
+-- `skipped` maps a provider to the reason it never produced a run at all —
+-- no key, spent allowance, abandoned when the tab closed. An engine that DID
+-- produce a run is accounted for by the run row instead, whether it succeeded
+-- or failed. The two together decide when the group is complete.
+create table if not exists public.report_groups (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects (id) on delete cascade,
+  requested_providers text[] not null,
+  skipped jsonb not null default '{}'::jsonb,
+  email_status text not null default 'pending',
+  email_attempted_at timestamptz,
+  email_sent_at timestamptz,
+  finished_at timestamptz,
+  -- Bumped every time an engine is accounted for. The sweeper reads this, not
+  -- created_at: a batch of four slow engines is not abandoned just because it
+  -- started an hour ago.
+  last_activity_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table public.report_groups drop constraint if exists report_groups_email_status_check;
+alter table public.report_groups add constraint report_groups_email_status_check
+  check (email_status in ('pending', 'claimed', 'sent', 'failed', 'suppressed'));
+
+-- The FIFTH place a provider id is constrained, after provider_keys,
+-- projects.default_provider, runs and responses. Widening the allow-list has
+-- to touch all five now: a value that passes here and fails there surfaces as
+-- a crash in PROVIDERS[...] while building the email, long after the run.
+alter table public.report_groups drop constraint if exists report_groups_providers_check;
+alter table public.report_groups add constraint report_groups_providers_check
+  check (requested_providers <@ array['anthropic', 'openai', 'google', 'perplexity']::text[]
+         and array_length(requested_providers, 1) >= 2);
+
+create index if not exists idx_report_groups_pending
+  on public.report_groups (last_activity_at) where email_status = 'pending';
+
 create table if not exists public.runs (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references public.projects (id) on delete cascade,
@@ -531,6 +583,45 @@ create table if not exists public.runs (
   finished_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.runs add column if not exists report_group_id uuid
+  references public.report_groups (id) on delete set null;
+create unique index if not exists idx_runs_report_group_provider
+  on public.runs (report_group_id, provider) where report_group_id is not null;
+
+-- The browser tells /api/runs which group a run belongs to, so the link
+-- arrives with the user's own credential rather than the server's and cannot
+-- simply be forbidden. Validate it instead: the group must exist and belong to
+-- the same project as the run. Deliberately NOT security definer — the lookup
+-- runs under the caller's RLS, so report_groups_member_read also has to pass,
+-- which stops one account naming another's group.
+--
+-- The link is write-once. Moving a finished run between groups would change
+-- which measurements a sent email had already summarised.
+create or replace function public.guard_run_report_group()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user in ('authenticated', 'anon') then
+    if tg_op = 'UPDATE' and new.report_group_id is distinct from old.report_group_id then
+      raise exception 'A run''s report group cannot be changed after the run is created';
+    end if;
+    if new.report_group_id is not null and not exists (
+      select 1 from public.report_groups g
+      where g.id = new.report_group_id and g.project_id = new.project_id
+    ) then
+      raise exception 'That report group does not belong to this project';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_run_report_group_write on public.runs;
+create trigger guard_run_report_group_write
+  before insert or update on public.runs
+  for each row execute function public.guard_run_report_group();
 
 -- Replicates the run was executed with, recorded so a historical run can still
 -- be read correctly after the project's setting changes. prompt_count counts
@@ -702,6 +793,7 @@ alter table public.profiles       enable row level security;
 alter table public.provider_keys  enable row level security;
 alter table public.router_keys    enable row level security;
 alter table public.projects       enable row level security;
+alter table public.report_groups  enable row level security;
 alter table public.competitors    enable row level security;
 alter table public.topics         enable row level security;
 alter table public.prompts        enable row level security;
@@ -795,6 +887,10 @@ create policy "projects_member_write" on public.projects
   for update using (public.can_access_project(id))
   with check (public.can_access_project(id));
 
+drop policy if exists "report_groups_member_read" on public.report_groups;
+create policy "report_groups_member_read" on public.report_groups
+  for select using (public.can_access_project(project_id));
+
 -- Ownership is not an editable field.
 --
 -- projects_member_write lets a teammate UPDATE the row, and without this a
@@ -817,6 +913,11 @@ as $$
 begin
   if current_user in ('authenticated', 'anon') and new.user_id is distinct from old.user_id then
     new.user_id := old.user_id;
+  end if;
+  if current_user in ('authenticated', 'anon')
+     and new.report_emails_enabled is distinct from old.report_emails_enabled
+     and auth.uid() is distinct from old.user_id then
+    raise exception 'Only the organization owner can change report email delivery';
   end if;
   return new;
 end;

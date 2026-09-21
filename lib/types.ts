@@ -107,6 +107,10 @@ export interface Project {
    *  number to go with it. See scheduleIntervalDays in lib/utils.ts. */
   schedule_interval_days: number | null;
   use_web_search: boolean;
+  report_emails_enabled: boolean;
+  /** When we last told the owner a due scheduled run couldn't start. Null once
+   *  a run starts again, so the next breakage is reported rather than swallowed. */
+  schedule_skip_alerted_at: string | null;
   /** Times each active prompt is asked per run (1–10). >1 buys confidence in a "no mention". */
   replicates: number;
   last_run_at: string | null;
@@ -169,6 +173,7 @@ export interface Run {
   /** Whose credential paid: the operator's shared trial key, or the account's
    *  own. Null on runs from before this was recorded. */
   key_source: "own" | "trial" | null;
+  report_group_id: string | null;
   /** Planned answers for this run: active prompts x replicates. */
   prompt_count: number;
   completed_count: number;
