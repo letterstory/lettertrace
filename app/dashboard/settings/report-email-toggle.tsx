@@ -36,11 +36,11 @@ export function ReportEmailToggle({ enabled, isOwner }: { enabled: boolean; isOw
           onChange={(event) => void change(event.target.checked)}
           className="h-4 w-4 accent-terracotta"
         />
-        Email report results
+        Send reports to my inbox
       </label>
       <p className="text-sm text-ink-soft">
         {isOwner
-          ? "Get one email when a report or group finishes, including failures. Off by default."
+          ? "Receive all reports directly by email. Maximum one report per day. Unsubscribe at any time."
           : "Only the organization owner can change report email delivery."}
       </p>
       {error && <p className="text-sm text-terracotta">{error}</p>}

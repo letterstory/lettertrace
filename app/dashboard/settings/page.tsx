@@ -144,7 +144,7 @@ export default async function SettingsPage() {
                 <Mail className="h-5 w-5" />
               </span>
               <div>
-                <h3 className="text-lg font-semibold text-ink">Report emails</h3>
+                <h3 className="text-lg font-semibold text-ink">Email</h3>
                 <p className="mt-1 text-sm text-ink-soft">For {project.brand_name}, the organization selected in the sidebar. Emails go only to its owner.</p>
               </div>
             </div>
