@@ -31,6 +31,7 @@ import {
   resumeRun,
   INVOCATION_CEILING_MS,
   RUN_TIME_BUDGET_MS,
+  runTimeBudgetFor,
   type PreparedRun,
 } from "@/lib/engine";
 
@@ -128,6 +129,24 @@ describe("the time budget", () => {
     // and the final writes; a smaller margin re-creates the 09-11 death.
     expect(INVOCATION_CEILING_MS - RUN_TIME_BUDGET_MS).toBe(120 * 1000);
     expect(RUN_TIME_BUDGET_MS).toBeGreaterThan(0);
+  });
+
+  // The onboarding sweep and the MCP trigger_run tool run under
+  // `maxDuration = 300`, not 800. Handing those a budget derived from the
+  // 800s ceiling is what stranded three onboarding sweeps on 2026-09-22: the
+  // Gemini Pro leg was still dispatching when the platform killed it, so the
+  // run never settled and read "running" until an admin page view found it.
+  it("shrinks with the calling route's ceiling", () => {
+    expect(runTimeBudgetFor(300 * 1000)).toBe(180 * 1000);
+    expect(runTimeBudgetFor(300 * 1000)).toBeLessThan(300 * 1000);
+    expect(runTimeBudgetFor(INVOCATION_CEILING_MS)).toBe(RUN_TIME_BUDGET_MS);
+  });
+
+  // A ceiling at or below the reserve would otherwise yield a zero or
+  // negative budget, i.e. a run that can never dispatch its first ask.
+  it("always leaves a short-ceiling caller room to dispatch", () => {
+    expect(runTimeBudgetFor(60 * 1000)).toBe(20 * 1000);
+    expect(runTimeBudgetFor(120 * 1000)).toBe(40 * 1000);
   });
 });
 

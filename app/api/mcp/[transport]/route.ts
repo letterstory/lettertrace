@@ -239,7 +239,7 @@ const handler = createMcpHandler(
             supabase,
             userIdOf(extra),
             project_id,
-            { context: mcpRunContext(extra) },
+            { context: mcpRunContext(extra), invocationCeilingMs: maxDuration * 1000 },
           );
           if (!outcome.ok) {
             await logMcp(extra, {

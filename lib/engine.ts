@@ -40,8 +40,16 @@ export interface RunContext {
 // that; RUN_TIME_BUDGET_MS below is what does.
 const CONCURRENCY = 8;
 
-// Every route that starts a run declares `maxDuration = 800`: the platform
-// kills the invocation at this point, mid-answer, and nothing after it runs.
+// The ceiling on the routes that exist to run a monitor — `/api/runs`,
+// `/api/v1/projects/[id]/runs`, `/api/cron/run` — all of which declare
+// `maxDuration = 800`: the platform kills the invocation at this point,
+// mid-answer, and nothing after it runs.
+//
+// It is NOT the only ceiling a run can be started under. The onboarding
+// sweep (`/api/onboarding/complete`, `/api/v1/onboard`) and the MCP
+// `trigger_run` tool (`/api/mcp/[transport]`) declare `maxDuration = 300`,
+// and a run started there gets 300 seconds, not 800. Those callers pass
+// their own ceiling through `invocationCeilingMs`; see `runTimeBudgetFor`.
 export const INVOCATION_CEILING_MS = 800 * 1000;
 
 // Stop dispatching NEW asks this long after the run started, so the asks
@@ -53,7 +61,27 @@ export const INVOCATION_CEILING_MS = 800 * 1000;
 // went past this instead of stopping was the 09:00 UTC 2026-09-11 Luna run:
 // 208 answers planned, 201 stored, killed at 797s with seven asks in flight
 // and left reading "running" for 23 hours until the sweeper found it.
-export const RUN_TIME_BUDGET_MS = INVOCATION_CEILING_MS - 120 * 1000;
+export const TIME_BUDGET_RESERVE_MS = 120 * 1000;
+
+/**
+ * The dispatch budget for a run started under `invocationCeilingMs`. Always
+ * derive it from the CALLER'S ceiling rather than reaching for
+ * `RUN_TIME_BUDGET_MS`: a 680-second budget inside a 300-second invocation is
+ * no budget at all — the platform kill always arrives first, the run never
+ * settles its own row, and it reads "running" until a sweep or an admin page
+ * view finds it (INC-432, three onboarding sweeps stranded on 2026-09-22).
+ *
+ * Floored at a third of the ceiling so a future short-ceiling caller reserves
+ * time to settle without being left unable to dispatch anything at all.
+ */
+export function runTimeBudgetFor(invocationCeilingMs: number): number {
+  return Math.max(
+    Math.floor(invocationCeilingMs / 3),
+    invocationCeilingMs - TIME_BUDGET_RESERVE_MS,
+  );
+}
+
+export const RUN_TIME_BUDGET_MS = runTimeBudgetFor(INVOCATION_CEILING_MS);
 
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
