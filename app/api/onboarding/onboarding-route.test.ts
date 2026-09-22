@@ -37,7 +37,10 @@ vi.mock("@/lib/trial", () => ({
   trialRunLimit: () => 15,
   trialCoveredProviders: () => [],
 }));
-vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
+vi.mock("@/lib/engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/engine")>()),
+  executeRun: vi.fn(),
+}));
 
 const { getConfiguredProviders } = await import("@/lib/data");
 const { POST } = await import("@/app/api/onboarding/complete/route");

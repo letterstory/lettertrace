@@ -67,7 +67,10 @@ vi.mock("@/lib/trial", () => ({
   trialRunLimit: () => 15,
   trialCoveredProviders: () => [],
 }));
-vi.mock("@/lib/engine", () => ({ executeRun: vi.fn() }));
+vi.mock("@/lib/engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/engine")>()),
+  executeRun: vi.fn(),
+}));
 
 const { getConfiguredProviders, getRouterKeysPublic } = await import("@/lib/data");
 const { pickDefaultProvider } = await import("@/lib/trial");
