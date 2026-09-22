@@ -118,6 +118,8 @@ const PROJECT: Project = {
   schedule: "off",
   schedule_interval_days: null,
   use_web_search: true,
+  report_emails_enabled: false,
+  schedule_skip_alerted_at: null,
   replicates: 1,
   last_run_at: null,
   created_at: "2026-09-01T00:00:00Z",

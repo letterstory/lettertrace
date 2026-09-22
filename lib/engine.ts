@@ -236,6 +236,7 @@ export interface ExecuteRunParams {
    * so honestly with null rather than guess.
    */
   keySource?: "own" | "trial" | null;
+  reportGroupId?: string | null;
   /**
    * How much operator money this run may spend, in micro-dollars. Omit (or
    * null) for a run on the user's own key, where there is nothing for us to
@@ -340,6 +341,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
       // engine that answered is what the run measured.
       route: route?.router ?? null,
       key_source: params.keySource ?? null,
+      report_group_id: params.reportGroupId ?? null,
       // Planned ANSWERS, not prompts — this is what the UI counts against.
       prompt_count: jobs.length,
       completed_count: 0,
