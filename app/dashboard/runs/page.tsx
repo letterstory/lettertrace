@@ -26,6 +26,7 @@ import {
 } from "@/components/ui";
 import { RunNow } from "./run-now";
 import { RunAllEngines } from "./run-all-engines";
+import { GroupProgressRefresh } from "./group-progress";
 import { ScheduleControl } from "./schedule-control";
 
 export const dynamic = "force-dynamic";
@@ -109,6 +110,20 @@ export default async function RunsPage() {
     .eq("project_id", project.id)
     .order("created_at", { ascending: false });
   const runs = (runRows ?? []) as Run[];
+  // Only batches still waiting on an engine. A finished one has nothing left to
+  // report that the run list below doesn't already show, and leaving old ones
+  // here accumulated a row per click that nobody could dismiss.
+  const { data: groupRows } = await supabase.from("report_groups")
+    .select("id, requested_providers, skipped, email_status, finished_at, created_at")
+    .eq("project_id", project.id).eq("email_status", "pending")
+    .order("created_at", { ascending: false }).limit(5);
+  const groups = (groupRows ?? []) as {
+    id: string;
+    requested_providers: string[];
+    skipped: Record<string, string>;
+    email_status: string;
+    finished_at: string | null;
+  }[];
 
   // Settle provably-dead runs on the way past — the same self-heal GET
   // /v1/runs/:id/status does. A run row is written "running" up front and settled
@@ -161,6 +176,29 @@ export default async function RunsPage() {
           />
         )}
       </div>
+
+      <GroupProgressRefresh active={groups.length > 0} />
+      {groups.length > 0 && (
+        <div className="space-y-2">
+          {groups.map((group) => {
+            // Counted from what actually happened, never from how far a cursor
+            // got: an engine that was refused a key produced no run, and
+            // counting it as finished reported four of four with nothing to
+            // show for it.
+            const done = runs.filter(
+              (run) => run.report_group_id === group.id && run.status !== "running",
+            ).length;
+            const skipped = Object.keys(group.skipped).length;
+            const total = group.requested_providers.length;
+            return (
+              <p key={group.id} className="text-sm text-ink-soft">
+                Running {total} reports: {done} finished
+                {skipped > 0 ? `, ${skipped} couldn't start` : ""}.
+              </p>
+            );
+          })}
+        </div>
+      )}
 
       {runs.length === 0 ? (
         <EmptyState
