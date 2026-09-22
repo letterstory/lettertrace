@@ -40,8 +40,16 @@ export interface RunContext {
 // that; RUN_TIME_BUDGET_MS below is what does.
 const CONCURRENCY = 8;
 
-// Every route that starts a run declares `maxDuration = 800`: the platform
-// kills the invocation at this point, mid-answer, and nothing after it runs.
+// The ceiling on the routes that exist to run a monitor — `/api/runs`,
+// `/api/v1/projects/[id]/runs`, `/api/cron/run` — all of which declare
+// `maxDuration = 800`: the platform kills the invocation at this point,
+// mid-answer, and nothing after it runs.
+//
+// It is NOT the only ceiling a run can be started under. The onboarding
+// sweep (`/api/onboarding/complete`, `/api/v1/onboard`) and the MCP
+// `trigger_run` tool (`/api/mcp/[transport]`) declare `maxDuration = 300`,
+// and a run started there gets 300 seconds, not 800. Those callers pass
+// their own ceiling through `invocationCeilingMs`; see `runTimeBudgetFor`.
 export const INVOCATION_CEILING_MS = 800 * 1000;
 
 // Stop dispatching NEW asks this long after the run started, so the asks
@@ -53,7 +61,64 @@ export const INVOCATION_CEILING_MS = 800 * 1000;
 // went past this instead of stopping was the 09:00 UTC 2026-09-11 Luna run:
 // 208 answers planned, 201 stored, killed at 797s with seven asks in flight
 // and left reading "running" for 23 hours until the sweeper found it.
-export const RUN_TIME_BUDGET_MS = INVOCATION_CEILING_MS - 120 * 1000;
+export const TIME_BUDGET_RESERVE_MS = 120 * 1000;
+
+/**
+ * The dispatch budget for a run started under `invocationCeilingMs`. Always
+ * derive it from the CALLER'S ceiling rather than reaching for
+ * `RUN_TIME_BUDGET_MS`: a 680-second budget inside a 300-second invocation is
+ * no budget at all — the platform kill always arrives first, the run never
+ * settles its own row, and it reads "running" until a sweep or an admin page
+ * view finds it (INC-432, three onboarding sweeps stranded on 2026-09-22).
+ *
+ * Floored at a third of the ceiling so a future short-ceiling caller reserves
+ * time to settle without being left unable to dispatch anything at all.
+ */
+export function runTimeBudgetFor(invocationCeilingMs: number): number {
+  return Math.max(
+    Math.floor(invocationCeilingMs / 3),
+    invocationCeilingMs - TIME_BUDGET_RESERVE_MS,
+  );
+}
+
+export const RUN_TIME_BUDGET_MS = runTimeBudgetFor(INVOCATION_CEILING_MS);
+
+/**
+ * Time held back, out of the reserve, for the run to settle once the last ask
+ * has returned: the run row, the project row, the activity record and the ops
+ * event. Everything before that point may be spent waiting on an answer.
+ */
+export const SETTLE_MARGIN_MS = 15 * 1000;
+
+/**
+ * Whether an ask gave up on the run's deadline rather than failing outright.
+ *
+ * Matched on the name rather than with `instanceof`: a dozen test files replace
+ * `@/lib/llm` wholesale, and a class imported purely for an identity check is a
+ * class every one of those mocks has to remember to re-export. The name is part
+ * of the error's contract either way.
+ */
+function isDeadlineExceeded(err: unknown): boolean {
+  return err instanceof Error && err.name === "DeadlineExceededError";
+}
+
+/**
+ * The point at which an ask already in flight must give up.
+ *
+ * `startedMs + timeBudgetMs + TIME_BUDGET_RESERVE_MS` is the invocation's kill
+ * time for every caller: the default budget is the ceiling minus the reserve,
+ * and the cron shortens the budget by the time its tick has already spent, so
+ * the sum lands on the tick's own ceiling either way. Back off the settle
+ * margin from that and an ask dispatched at the last possible moment still
+ * hands control back with time to record what happened.
+ *
+ * Without this the budget only gates NEW asks, and a Gemini Pro ask dispatched
+ * a moment under the budget could run another 330s into the platform kill —
+ * the exact failure the budget was supposed to prevent (INC-432).
+ */
+export function askDeadlineFor(startedMs: number, timeBudgetMs: number): number {
+  return startedMs + timeBudgetMs + TIME_BUDGET_RESERVE_MS - SETTLE_MARGIN_MS;
+}
 
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
@@ -255,6 +320,12 @@ export interface ExecuteRunParams {
    * ceiling have reason to pass anything else.
    */
   timeBudgetMs?: number;
+  /**
+   * Wall-clock epoch ms at which an ask already in flight must give up.
+   * Defaults to `askDeadlineFor(startedMs, timeBudgetMs)`; only tests have
+   * reason to pass anything else.
+   */
+  askDeadlineMs?: number;
 }
 
 /** A run row already created and logged, plus everything the job loop needs. */
@@ -453,7 +524,14 @@ async function resumeRunMeasured(
   // Stopping short of that point costs the unasked answers either way; this
   // way the run says so itself, immediately, in its own row.
   let timeStopped = false;
+  // Asks that were dispatched but gave up on the deadline. They count towards
+  // `processed`, so without tracking them the shortfall the run reports would
+  // read zero while several answers are in fact missing.
+  let timedOutAsks = 0;
   const outOfTime = () => Date.now() - startedMs >= timeBudgetMs;
+  // The budget gates dispatch; this gates the ask itself, so a slow provider
+  // cannot carry the run past the kill on an ask that started in time.
+  const askDeadlineMs = params.askDeadlineMs ?? askDeadlineFor(startedMs, timeBudgetMs);
 
   await mapPool(jobs, CONCURRENCY, async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
@@ -476,6 +554,7 @@ async function resumeRunMeasured(
         route,
         prompt: prompt.text,
         webSearch: project.use_web_search,
+        deadlineMs: askDeadlineMs,
       });
       tokensUsed += qTokens;
       spentMicros += spendMicros({
@@ -584,6 +663,7 @@ async function resumeRunMeasured(
           question: prompt.text,
           responseText: answer,
           entities,
+          deadlineMs: askDeadlineMs,
         });
         tokensUsed += aTokens;
         // Classification runs on the provider's cheap model and never searches,
@@ -618,6 +698,15 @@ async function resumeRunMeasured(
         await supabase.from("mentions").insert(mentionRows);
       }
     } catch (err) {
+      if (isDeadlineExceeded(err)) {
+        // Not a provider failure: the run ran out of invocation while this ask
+        // was in flight. Giving up here is what buys the settle path its time,
+        // and recording it as an engine error would make a merely slow Google
+        // indistinguishable from a Google that has stopped answering.
+        timeStopped = true;
+        timedOutAsks++;
+        return;
+      }
       // A single failed ask shouldn't kill the whole run.
       if (!hardError) hardError = humanError(err);
       // ...but every one of them is recorded. Only the FIRST becomes the run's
@@ -654,7 +743,7 @@ async function resumeRunMeasured(
   // shortfall, and a run that silently returns 40 of 200 answers would look
   // like the prompts stopped working. Say which it was, in the run's own row.
   const stoppedEarly = budgetStopped || timeStopped;
-  const shortfall = stoppedEarly ? jobs.length - processed : 0;
+  const shortfall = stoppedEarly ? jobs.length - processed + timedOutAsks : 0;
   const budgetNote = budgetStopped
     ? `Stopped after ${succeeded} of ${jobs.length} answers: this account reached its free-usage limit. ` +
       `Add your own provider key in Settings to run the remaining ${shortfall}.`

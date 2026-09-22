@@ -4,6 +4,8 @@ import {
   executeRun,
   prepareRun,
   resumeRun,
+  runTimeBudgetFor,
+  INVOCATION_CEILING_MS,
   settleAbandonedRun,
   type ExecuteRunParams,
   type RunContext,
@@ -277,8 +279,18 @@ export async function firstSweep(opts: {
   meter: TrialMeter;
   context: RunContext;
   background?: boolean;
+  /**
+   * The `maxDuration` of the route running this sweep, in milliseconds. Both
+   * onboarding routes declare 300 seconds, not the 800 the run-a-monitor
+   * routes declare, so the engine's default dispatch budget would outlive the
+   * invocation and the sweep's slowest leg would be killed mid-answer instead
+   * of stopping short and settling. Defaults to the 800-second ceiling so an
+   * existing caller keeps today's behaviour.
+   */
+  invocationCeilingMs?: number;
 }): Promise<SweepOutcome> {
   const { supabase, userId, project, meter } = opts;
+  const timeBudgetMs = runTimeBudgetFor(opts.invocationCeilingMs ?? INVOCATION_CEILING_MS);
 
   const trial = await trialSnapshot(supabase, userId);
   const sweep = Array.from(
@@ -339,6 +351,7 @@ export async function firstSweep(opts: {
         keySource: k.source as "own" | "trial",
         budgetMicros: budget === null ? null : Math.floor(budget / Math.max(trialRuns, 1)),
         context: opts.context,
+        timeBudgetMs,
       };
       const meterRun = async (result: RunResult) => {
         if (k.source !== "trial") return;
@@ -535,6 +548,8 @@ export async function onboardFromUrl(opts: {
   meter: TrialMeter;
   input: OnboardInput;
   context: RunContext;
+  /** The calling route's `maxDuration` in ms; see `firstSweep`. */
+  invocationCeilingMs?: number;
 }): Promise<OnboardOutcome> {
   const { supabase, userId, meter, input } = opts;
 
@@ -683,6 +698,7 @@ export async function onboardFromUrl(opts: {
       meter,
       context: opts.context,
       background: input.background ?? true,
+      invocationCeilingMs: opts.invocationCeilingMs,
     });
   }
 

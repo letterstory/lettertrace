@@ -23,7 +23,8 @@ vi.mock("@/lib/data", () => ({
   getConfiguredProviders: vi.fn(async () => []),
   getRouterKeysPublic: vi.fn(async () => []),
 }));
-vi.mock("@/lib/engine", () => ({
+vi.mock("@/lib/engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/engine")>()),
   executeRun: vi.fn(),
   prepareRun: vi.fn(),
   resumeRun: vi.fn(),

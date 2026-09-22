@@ -207,6 +207,9 @@ export async function POST(request: Request) {
       actorId: user.id,
       actorLabel: user.email ?? "You",
     },
+    // This route's ceiling, not the run routes' 800 seconds: the sweep's
+    // slowest leg has to stop short and settle inside it.
+    invocationCeilingMs: maxDuration * 1000,
   });
 
   if (!outcome.ran) {
