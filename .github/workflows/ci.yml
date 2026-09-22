@@ -56,3 +56,39 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  schema-drift:
+    name: Schema drift (prod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Closes the gap behind INC-426 (2026-09-21/22): PR #202 shipped app code
+    # that depended on new tables/columns supabase/schema.sql declared, but
+    # nobody ran schema.sql against prod first -- there was no CI signal, so
+    # it merged clean and broke every report start in production for ~7h.
+    #
+    # This repo has no supabase/migrations/ directory or Supabase-CLI
+    # migration ledger -- schema.sql is a single hand-maintained file, applied
+    # manually. So this isn't a port of letterstory/letterstory's
+    # migration-order/schema-drift jobs (those read
+    # supabase_migrations.schema_migrations, which doesn't exist here) --
+    # it's a from-scratch check for the failure mode that's actually possible
+    # in this repo's schema model: does every CREATE TABLE / ADD COLUMN in
+    # schema.sql actually exist in prod, checked via the read-only Management
+    # API (scripts/check-schema-drift.sh).
+    #
+    # Needs SUPABASE_ACCESS_TOKEN, unlike every other job in this file (see
+    # this workflow's header comment on why CI is otherwise secret-free) --
+    # this repo is public, so a fork's pull_request run gets no secret and
+    # this job fails for external contributors touching schema.sql. That's a
+    # deliberate tradeoff: catching the exact bug that caused a 7h prod
+    # outage is worth an external contributor occasionally needing a
+    # maintainer to apply the schema and re-run, rather than silently
+    # skipping the check on any PR.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for drift against prod's schema
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: bash scripts/check-schema-drift.sh
