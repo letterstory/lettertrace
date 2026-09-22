@@ -14,11 +14,6 @@ import { isScheduleDue } from "@/lib/utils";
 import { recordOps } from "@/lib/ops";
 import type { Span } from "@opentelemetry/api";
 import type { Project } from "@/lib/types";
-import {
-  alertScheduleSkip,
-  clearScheduleSkipAlert,
-  sendSingleReportAttempt,
-} from "@/lib/report-email-delivery";
 
 export const maxDuration = 800;
 export const dynamic = "force-dynamic";
@@ -143,7 +138,6 @@ async function runDueProject(
   project: Project,
   timeBudgetMs: number,
 ): Promise<ProjectResult> {
-  let completedRunId: string | undefined;
   try {
     // Ask the run resolver rather than reading provider_keys directly. The
     // direct read predates router credentials and silently skipped anyone
@@ -164,7 +158,6 @@ async function runDueProject(
     const usable =
       (key.source === "own" || key.source === "trial") && Boolean(key.apiKey);
     if (!usable) {
-      await alertScheduleSkip(supabase, project, key.source === "own" ? "no key" : key.source);
       return {
         projectId: project.id,
         status: "skipped",
@@ -177,7 +170,6 @@ async function runDueProject(
       !key.comped &&
       !(await consumeTrialRunFor(supabase, project.user_id))
     ) {
-      await alertScheduleSkip(supabase, project, "exhausted");
       return { projectId: project.id, status: "skipped", reason: "exhausted" };
     }
 
@@ -198,14 +190,10 @@ async function runDueProject(
         actorLabel: "Scheduler",
       },
     });
-    completedRunId = result.runId;
     if (key.source === "trial") {
       await recordTrialUsageFor(supabase, project.user_id, result.tokensUsed);
       await recordTrialSpendFor(supabase, project.user_id, result.spendMicros);
     }
-    // The schedule is working again, so the next breakage is news once more.
-    await clearScheduleSkipAlert(supabase, project);
-    await sendSingleReportAttempt(supabase, project, { provider: key.provider, model: key.model }, result.runId);
     return {
       projectId: project.id,
       status: result.status,
@@ -213,12 +201,6 @@ async function runDueProject(
       totalResponses: result.totalResponses,
     };
   } catch (e) {
-    await sendSingleReportAttempt(
-      supabase,
-      project,
-      { provider: project.default_provider, model: project.default_model },
-      completedRunId,
-    );
     return {
       projectId: project.id,
       status: "failed",

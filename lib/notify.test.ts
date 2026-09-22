@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { sendAdminAlert, sendMail, signupAlert, adminAlertEmails } from "@/lib/notify";
+import { sendAdminAlert, signupAlert, adminAlertEmails } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
 
 const ENV = ["ADMIN_ALERT_EMAIL", "ADMIN_ALERT_FROM", "RESEND_API_KEY"] as const;
@@ -54,32 +54,7 @@ describe("sendAdminAlert", () => {
       subject: "New signup",
       text: "hello",
     });
-    expect(sent).not.toHaveProperty("html");
     expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer re_x" });
-  });
-
-  it("sends HTML with its plain-text alternative when supplied", async () => {
-    process.env.RESEND_API_KEY = "re_x";
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response("{}", { status: 200 }));
-
-    expect(
-      await sendMail({
-        to: ["reviewer@example.com"],
-        subject: "Report ready",
-        body: "Plain report",
-        html: "<html><body>Rich report</body></html>",
-      }),
-    ).toBe("sent");
-
-    const sent = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
-    expect(sent).toMatchObject({
-      to: ["reviewer@example.com"],
-      subject: "Report ready",
-      text: "Plain report",
-      html: "<html><body>Rich report</body></html>",
-    });
   });
 
   // An alert is a courtesy. It must never be able to break the thing it reports

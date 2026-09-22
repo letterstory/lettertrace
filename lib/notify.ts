@@ -61,10 +61,8 @@ export type AlertOutcome = "sent" | "not-configured" | "failed";
 export interface Mail {
   to: string[];
   subject: string;
-  /** Plain-text body, including the accessible fallback for HTML mail. */
+  /** Plain text. Kept plain on purpose: these are read on a phone. */
   body: string;
-  /** Optional rich body. Existing alerts and invitations remain text-only. */
-  html?: string;
   /** Where a reply should go, when there is a human on our side of it. An
    *  invitation is from a person, so replying to it should reach them rather
    *  than a no-reply address nobody watches. */
@@ -99,7 +97,6 @@ export async function sendMail(mail: Mail): Promise<AlertOutcome> {
         to,
         subject: mail.subject,
         text: mail.body,
-        ...(mail.html ? { html: mail.html } : {}),
         ...(mail.replyTo ? { reply_to: mail.replyTo } : {}),
       }),
       signal: AbortSignal.timeout(10_000),

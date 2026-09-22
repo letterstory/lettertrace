@@ -624,7 +624,6 @@ describe("GET /api/v1/runs/:id/status", () => {
       // Direct provider key, as every run before router support was.
       route: null,
       key_source: null,
-      report_group_id: null,
       prompt_count: 12,
       completed_count: 5,
       replicates: 2,
