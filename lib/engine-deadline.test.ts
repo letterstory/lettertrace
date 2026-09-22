@@ -13,6 +13,14 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+/** Stands in for the deadline error lib/llm throws; the engine matches on the
+ *  name, so that is the part the fake has to get right. */
+class FakeDeadlineExceededError extends Error {
+  constructor() {
+    super("The run ran out of time before this answer came back.");
+    this.name = "DeadlineExceededError";
+  }
+}
 vi.mock("@/lib/llm", () => ({
   runQuery: vi.fn(),
   analyzeResponse: vi.fn(),
@@ -32,6 +40,8 @@ import {
   INVOCATION_CEILING_MS,
   RUN_TIME_BUDGET_MS,
   runTimeBudgetFor,
+  askDeadlineFor,
+  SETTLE_MARGIN_MS,
   type PreparedRun,
 } from "@/lib/engine";
 
@@ -110,7 +120,12 @@ beforeEach(() => {
   vi.mocked(logActivity).mockReset().mockResolvedValue(undefined as never);
 });
 
-function run(jobs: number, timeBudgetMs: number | undefined, startedMs?: number) {
+function run(
+  jobs: number,
+  timeBudgetMs: number | undefined,
+  startedMs?: number,
+  askDeadlineMs?: number,
+) {
   const { db, runUpdates, responses } = makeDb();
   return resumeRun(prepared(jobs, startedMs), {
     supabase: db,
@@ -120,6 +135,7 @@ function run(jobs: number, timeBudgetMs: number | undefined, startedMs?: number)
     apiKey: "sk-user-own-key",
     budgetMicros: null,
     timeBudgetMs,
+    askDeadlineMs,
   } as never).then((result) => ({ result, runUpdates, responses }));
 }
 
@@ -147,6 +163,69 @@ describe("the time budget", () => {
   it("always leaves a short-ceiling caller room to dispatch", () => {
     expect(runTimeBudgetFor(60 * 1000)).toBe(20 * 1000);
     expect(runTimeBudgetFor(120 * 1000)).toBe(40 * 1000);
+  });
+});
+
+// The budget above only decides whether a NEW ask may start. On its own that
+// leaves the original failure intact on a short-ceiling route: a Google ask
+// dispatched a moment under the budget can run for another ~330s (four 60s
+// attempts plus 90s of backoff), sail past the 300s platform kill, and strand
+// the run exactly as before. These cases pin the second half of the fix.
+describe("the deadline on an ask already in flight", () => {
+  it("lands inside the invocation, leaving room to settle", () => {
+    // An onboarding sweep: 300s ceiling, 180s dispatch budget. The last ask
+    // may run to 285s, and the run still has 15s to write its own row.
+    const started = 1_000_000;
+    const deadline = askDeadlineFor(started, runTimeBudgetFor(300 * 1000));
+    expect(deadline - started).toBe(285 * 1000);
+    expect(deadline).toBeLessThan(started + 300 * 1000);
+    expect(started + 300 * 1000 - deadline).toBe(SETTLE_MARGIN_MS);
+  });
+
+  it("tracks the run routes' own ceiling unchanged", () => {
+    const started = 1_000_000;
+    const deadline = askDeadlineFor(started, RUN_TIME_BUDGET_MS);
+    expect(started + INVOCATION_CEILING_MS - deadline).toBe(SETTLE_MARGIN_MS);
+  });
+
+  it("is handed to every ask the run makes", async () => {
+    const started = Date.now();
+    await run(3, 60 * 1000, started);
+    const call = vi.mocked(runQuery).mock.calls[0][0] as { deadlineMs: number };
+    expect(call.deadlineMs).toBe(askDeadlineFor(started, 60 * 1000));
+  });
+
+  it("settles the run when a slow ask gives up on the deadline", async () => {
+    // The Gemini Pro case: the ask is dispatched inside the budget and is
+    // still running when the deadline arrives, so it throws rather than
+    // carrying the run into the platform kill.
+    const started = Date.now();
+    vi.mocked(runQuery)
+      .mockResolvedValueOnce(answer)
+      .mockRejectedValue(new FakeDeadlineExceededError());
+    const { result, runUpdates } = await run(6, 60 * 1000, started, started + 40);
+
+    const settle = runUpdates.find((u) => "status" in u)!;
+    expect(settle.status).toBe("completed");
+    expect(settle.finished_at).toBeTruthy();
+    expect(result.timeStopped).toBe(true);
+    // The answer stored before the deadline is kept.
+    expect(result.totalResponses).toBe(1);
+    expect(String(settle.error)).toMatch(/time limit/i);
+    // And the run settled well inside the invocation rather than being killed.
+    expect(Date.now() - started).toBeLessThan(60 * 1000);
+  });
+
+  it("does not report a slow engine as a broken one", async () => {
+    const started = Date.now();
+    vi.mocked(runQuery).mockRejectedValue(new FakeDeadlineExceededError());
+    const { runUpdates } = await run(4, 60 * 1000, started, started + 10);
+    const settle = runUpdates.find((u) => "status" in u)!;
+    // Nothing stored, so the run failed — but it failed on the clock, not on
+    // a provider error, and its message has to say so.
+    expect(settle.status).toBe("failed");
+    expect(String(settle.error)).toMatch(/time limit/i);
+    expect(String(settle.error)).not.toMatch(/every prompt failed/i);
   });
 });
 

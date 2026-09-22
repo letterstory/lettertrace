@@ -61,6 +61,94 @@ interface BaseCall {
    * only changes who we hand the request to on the way there.
    */
   route?: RouteInfo | null;
+  /**
+   * Wall-clock epoch ms after which this ask must give up, leaving the run
+   * enough of its invocation to settle its own row.
+   *
+   * The dispatch budget in lib/engine only stops NEW asks from starting; it
+   * says nothing about one already in flight. A single Google ask can run far
+   * longer than the reserve that budget leaves: GOOGLE_MAX_ATTEMPTS attempts
+   * at GOOGLE_TIMEOUT_MS each, plus up to GOOGLE_RETRY_BUDGET_MS asleep
+   * between them. So an ask dispatched a moment before the budget expires can
+   * still outlive the platform kill, and then the run never settles and reads
+   * "running" until a sweep finds it (INC-432). This is the bound on that.
+   */
+  deadlineMs?: number;
+}
+
+/**
+ * Thrown when an ask gave up because the run's deadline arrived rather than
+ * because the provider failed. The engine reads it as a time stop: the answers
+ * already stored are kept, the run settles itself and says it ran out of time.
+ * It is deliberately NOT recorded as a provider error — an engine that is
+ * merely slow must not read as an engine that is down.
+ */
+export class DeadlineExceededError extends Error {
+  constructor(message = "The run ran out of time before this answer came back.") {
+    super(message);
+    this.name = "DeadlineExceededError";
+  }
+}
+
+/**
+ * How long an attempt may take: the shorter of its own timeout and whatever is
+ * left before the deadline. Returns 0 when the deadline has already passed, so
+ * a caller can give up instead of starting an attempt that cannot finish.
+ *
+ * Combining the two this way rather than with `AbortSignal.any` keeps the
+ * decision a plain number the tests can pin.
+ */
+export function attemptWindowMs(
+  perAttemptMs: number,
+  deadlineMs: number | undefined,
+  now: number = Date.now(),
+): number {
+  if (deadlineMs === undefined) return perAttemptMs;
+  return Math.max(0, Math.min(perAttemptMs, deadlineMs - now));
+}
+
+/**
+ * Whether a retry that must first sleep `waitMs` is worth starting: there has
+ * to be room for the sleep AND for an attempt with a fighting chance after it.
+ * Without this check the last retry reliably sleeps into the platform kill.
+ */
+export function retryFitsDeadline(
+  waitMs: number,
+  minAttemptMs: number,
+  deadlineMs: number | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (deadlineMs === undefined) return true;
+  return now + waitMs + minAttemptMs <= deadlineMs;
+}
+
+/**
+ * Run `work` under the deadline. Providers that take the deadline themselves
+ * (the Google path below) abort their own socket; this is the backstop that
+ * hands control back to the run for every other path, so the run can settle
+ * whatever the provider SDK decides to do with its request.
+ */
+async function withDeadline<T>(deadlineMs: number | undefined, work: Promise<T>): Promise<T> {
+  if (deadlineMs === undefined) return work;
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) {
+    // The losing promise is still live; without this its rejection would
+    // surface as an unhandled rejection after we have already given up.
+    void work.catch(() => {});
+    throw new DeadlineExceededError();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new DeadlineExceededError()), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    void work.catch(() => {});
+  }
 }
 
 // Every low-level call reports its total token usage so the trial layer can
@@ -538,7 +626,7 @@ export async function runQuery(
     let tokens = 0;
     let outcome = "error";
     try {
-      const result = await runQueryUnmeasured(opts);
+      const result = await withDeadline(opts.deadlineMs, runQueryUnmeasured(opts));
       tokens = result.tokens;
       outcome = "success";
       span.setAttributes({ "llm.tokens": result.tokens, "llm.sources": result.sources.length });
@@ -582,7 +670,7 @@ async function runQueryUnmeasured(
   // Google's answer path handles its own grounding (and forces it for the AI
   // Overviews engine), so route it before the shared web-search branch.
   if (opts.provider === "google") {
-    return googleRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch);
+    return googleRunQuery(opts.apiKey, opts.model, opts.prompt, webSearch, opts.deadlineMs);
   }
   // Perplexity always searches, so it ignores the project toggle entirely.
   if (opts.provider === "perplexity") {
@@ -953,6 +1041,10 @@ const GOOGLE_MAX_RETRY_WAIT_MS = 45_000;
 // allows 300s for every prompt in the run, so a single prompt must not be able
 // to eat it and starve the rest.
 const GOOGLE_RETRY_BUDGET_MS = 90_000;
+// The least time a retry needs to be worth starting when the run has a
+// deadline. Measured against Gemini Pro's own speed: its median answer on this
+// account is 17-27s, so a window shorter than this cannot realistically land.
+const GOOGLE_MIN_RETRY_ATTEMPT_MS = 20_000;
 // The Gemini model the AI-Overviews pseudo-model runs on is AI_OVERVIEWS_BACKING_MODEL
 // (lib/models), shared with the router slug map so direct and routed AIO hit one model.
 // Gemini "thinking" tokens are billed as output and drawn from the same budget
@@ -1038,16 +1130,27 @@ function resolveGoogleModel(model: string): string {
   return model === GOOGLE_AI_OVERVIEWS_MODEL ? AI_OVERVIEWS_BACKING_MODEL : model;
 }
 
-async function googleFetch(realModel: string, apiKey: string, body: unknown): Promise<GoogleResponse> {
+async function googleFetch(
+  realModel: string,
+  apiKey: string,
+  body: unknown,
+  deadlineMs?: number,
+): Promise<GoogleResponse> {
   let lastErr: unknown;
   let sleptMs = 0;
   for (let attempt = 0; attempt < GOOGLE_MAX_ATTEMPTS; attempt++) {
+    // The ladder below is worth about 330s at worst (four 60s attempts plus
+    // 90s of backoff), which is longer than the whole invocation on the
+    // onboarding and MCP routes. Bound every attempt by the run's deadline so
+    // the socket is dropped in time for the run to settle (INC-432).
+    const windowMs = attemptWindowMs(GOOGLE_TIMEOUT_MS, deadlineMs);
+    if (windowMs <= 0) throw new DeadlineExceededError();
     try {
       const res = await fetch(`${GOOGLE_API_BASE}/models/${realModel}:generateContent`, {
         method: "POST",
         headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(windowMs),
       });
       if (res.ok) return (await res.json()) as GoogleResponse;
       const errBody = (await res.json().catch(() => ({}))) as GoogleResponse;
@@ -1077,9 +1180,16 @@ async function googleFetch(realModel: string, apiKey: string, body: unknown): Pr
     const backoffMs = 400 * 2 ** attempt;
     const waitMs = advised !== undefined ? Math.max(advised * 1000, backoffMs) : backoffMs;
     if (waitMs > GOOGLE_MAX_RETRY_WAIT_MS || sleptMs + waitMs > GOOGLE_RETRY_BUDGET_MS) break;
+    // A retry that cannot finish before the deadline is worse than no retry:
+    // it sleeps through the time the run needed to settle and then dies
+    // mid-request anyway. GOOGLE_MIN_RETRY_ATTEMPT_MS is what "finish" means
+    // here — a Gemini Pro answer takes tens of seconds, so anything less is
+    // spending the run's last seconds on a request that cannot land.
+    if (!retryFitsDeadline(waitMs, GOOGLE_MIN_RETRY_ATTEMPT_MS, deadlineMs)) break;
     await sleep(waitMs);
     sleptMs += waitMs;
   }
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new DeadlineExceededError();
   throw lastErr ?? new Error("Google request failed.");
 }
 
@@ -1088,6 +1198,8 @@ interface GoogleGenOpts {
   json?: boolean;
   grounding?: boolean;
   maxTokens: number;
+  /** See BaseCall.deadlineMs — the point past which this ask must give up. */
+  deadlineMs?: number;
 }
 
 async function googleGenerate(
@@ -1114,7 +1226,7 @@ async function googleGenerate(
   if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
   if (opts.grounding) body.tools = [{ google_search: {} }];
 
-  const data = await googleFetch(realModel, apiKey, body);
+  const data = await googleFetch(realModel, apiKey, body, opts.deadlineMs);
   const cand = data.candidates?.[0];
   // parts may include a separate "thought" summary part; keep only answer text.
   const text = (cand?.content?.parts ?? [])
@@ -1237,10 +1349,12 @@ async function googleRunQuery(
   model: string,
   prompt: string,
   webSearch: boolean,
+  deadlineMs?: number,
 ): Promise<QueryResult> {
   const isOverview = model === GOOGLE_AI_OVERVIEWS_MODEL;
   const grounding = isOverview || webSearch;
   const { text, tokens, groundingChunks } = await googleGenerate(apiKey, model, prompt, {
+    deadlineMs,
     // A plain Gemini model gets the search push too when the project asked for
     // web search — otherwise its numbers aren't comparable with Claude's or
     // ChatGPT's, both of which are forced to browse. Nothing about the answer's
@@ -1698,7 +1812,13 @@ Return a JSON object: { "results": [ { "key": "<key>", "sentiment": "positive|ne
   const analysisModel = analysisModelFor(opts.provider);
 
   try {
-    const res = await utilityChat(opts, analysisModel, ANALYZE_SYSTEM, user, 700, true);
+    // Enrichment runs after the answer is already stored, so it is the last
+    // thing standing between a slow run and its settle path. Bounded by the
+    // same deadline; the catch below turns a miss into neutral sentiment.
+    const res = await withDeadline(
+      opts.deadlineMs,
+      utilityChat(opts, analysisModel, ANALYZE_SYSTEM, user, 700, true),
+    );
     return { results: parseAnalysis(opts.entities, extractJson(res.text)), tokens: res.tokens };
   } catch {
     // Sentiment is best-effort enrichment; never fail a run over it.
