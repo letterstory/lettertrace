@@ -168,6 +168,14 @@ export interface CitedSource {
 
 export interface QueryResult extends ChatResult {
   sources: CitedSource[];
+  /**
+   * Set when this answer did not come back the way it was asked for and had
+   * to be recovered — currently only `tool_choice_mismatch` (see
+   * isToolChoiceMismatch below). Absent on every normal answer, so callers
+   * and the exported telemetry can tell "answered via fallback" from
+   * "answered normally" instead of the two looking identical.
+   */
+  fallback?: "tool_choice_mismatch";
 }
 
 // How many web searches a single monitored query may run.
@@ -630,6 +638,11 @@ export async function runQuery(
       tokens = result.tokens;
       outcome = "success";
       span.setAttributes({ "llm.tokens": result.tokens, "llm.sources": result.sources.length });
+      // Distinguishes "answered via fallback" from "answered normally" on the
+      // span itself, same rule as everything else here: the class, not the
+      // content. Absent (not false) on every normal call, so it doesn't add a
+      // low-value dimension to every row — see QueryResult.fallback.
+      if (result.fallback) span.setAttributes({ "llm.fallback": result.fallback });
       return result;
     } finally {
       // A failed call still costs time and is the thing worth alerting on, so
@@ -779,6 +792,30 @@ export function gatewaySources(
 
 // --- Native web-search query paths ---------------------------------------
 
+// Matches Anthropic's own wording for a request whose tool_choice names a
+// function absent from tools, e.g. `tool_choice references function
+// "web_search" which is not present in tools`. Anthropic's code for it is
+// "invalid_prompt" (a 400), which isToolChoiceMismatch checks in addition to
+// this text so a coincidentally-similar message from some other error class
+// can't trip the fallback below.
+const TOOL_CHOICE_MISMATCH_RE = /tool_choice references function .* which is not present in tools/i;
+
+/**
+ * Whether `err` is Anthropic rejecting a request because tool_choice named a
+ * tool that never made it into `tools` on the wire.
+ *
+ * Seen live 2026-09-23, Concentrate only: the gateway started dropping the
+ * web_search tool definition from the Anthropic-shaped request it forwards
+ * while still relaying our tool_choice, so every forced-search call through
+ * it 400s even though the request we sent is internally consistent (the same
+ * one Anthropic itself accepts). It is deterministic — the identical body
+ * 400s every time — so this is the one class of 400 anthropicWebSearch
+ * retries, and only once, unforced (see below).
+ */
+function isToolChoiceMismatch(err: unknown): boolean {
+  return err instanceof Anthropic.APIError && err.status === 400 && TOOL_CHOICE_MISMATCH_RE.test(err.message);
+}
+
 async function anthropicWebSearch(
   apiKey: string,
   model: string,
@@ -798,23 +835,51 @@ async function anthropicWebSearch(
   // Anthropic skin gets exactly the request Anthropic itself gets, so the forced
   // browse and the inline citations either arrive intact or the probe catches
   // that they didn't. Nothing here is rewritten into a normalized shape.
-  const params = {
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }];
+  const baseParams = {
     model: plan ? plan.slug : model,
     max_tokens: ANSWER_MAX_TOKENS,
-    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }],
-    // Force the browse, matching the OpenAI path. Left to choose, the model
-    // answers well-known questions from memory and cites nothing — in a live
-    // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
-    // which made the two providers' mention rates measure different things.
-    // use_web_search is opt-in per project, so when it's on the user has asked
-    // us to check the live web. Costs roughly 4x the tokens of a memory answer.
-    tool_choice: { type: "tool", name: "web_search" },
+    tools,
     messages: [{ role: "user", content: prompt }],
     ...(plan?.extraBody ?? {}),
   };
-  const msg = await client.messages.create(
-    params as unknown as Anthropic.MessageCreateParamsNonStreaming,
-  );
+
+  let fallback: QueryResult["fallback"];
+  let msg: Anthropic.Message;
+  try {
+    msg = await client.messages.create(
+      {
+        ...baseParams,
+        // Force the browse, matching the OpenAI path. Left to choose, the model
+        // answers well-known questions from memory and cites nothing — in a live
+        // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
+        // which made the two providers' mention rates measure different things.
+        // use_web_search is opt-in per project, so when it's on the user has
+        // asked us to check the live web. Costs roughly 4x the tokens of a
+        // memory answer.
+        tool_choice: { type: "tool", name: "web_search" },
+      } as unknown as Anthropic.MessageCreateParamsNonStreaming,
+      // A tool_choice mismatch is a deterministic request-shape rejection, not
+      // a transient one — retrying the identical body through the SDK's own
+      // ladder (CLIENT_OPTS.maxRetries) cannot help and only re-bills the
+      // gateway. Disabling it here makes that explicit rather than relying on
+      // Anthropic.APIError's default shouldRetry (which already excludes 4xx,
+      // but a gateway that mislabels its own error as retryable via
+      // `x-should-retry` could still override that).
+      { maxRetries: 0 },
+    );
+  } catch (err) {
+    if (!isToolChoiceMismatch(err)) throw err;
+    // Retry exactly once, unforced: still offer the tool (harmless if the
+    // gateway keeps dropping it, and lets the model use it if this call
+    // happens to get through intact) but stop mandating the browse, so the
+    // run gets an ungrounded answer instead of losing the ask outright.
+    fallback = "tool_choice_mismatch";
+    msg = await client.messages.create(
+      baseParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
+      { maxRetries: 0 },
+    );
+  }
 
   // The web_search block/citation shapes aren't in older SDK types; read them
   // structurally.
@@ -850,7 +915,7 @@ async function anthropicWebSearch(
   // results only when the model searched but cited nothing inline.
   const sources = dedupeSources(cited.length > 0 ? cited : retrieved);
   const tokens = (msg.usage?.input_tokens ?? 0) + (msg.usage?.output_tokens ?? 0);
-  return { text: text.trim(), tokens, sources };
+  return { text: text.trim(), tokens, sources, fallback };
 }
 
 // OpenAI native web search via the Responses API. Uses raw fetch so it doesn't
