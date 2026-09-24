@@ -85,3 +85,29 @@ export function stack(series: { values: number[] }[]) {
   series.forEach((s, k) => out.push(s.values.map((v, i) => v + (k ? out[k - 1][i] : 0))));
   return out;
 }
+
+// The same band, pulled in by `gap` px on both edges so neighbouring bands
+// separate into ribbons instead of touching.
+export function ribbonPath(upper: number[], lower: number[], b: Box, gap: number) {
+  const n = upper.length;
+  const top = upper.map((v, i) => {
+    const [x, y] = point(i, v, n, b);
+    return [x, y + gap / 2] as const;
+  });
+  const bot = lower
+    .map((v, i) => {
+      const [x, y] = point(i, v, n, b);
+      return [x, y - gap / 2] as const;
+    })
+    .reverse();
+  return `${smoothThrough(top)} ${smoothThrough(bot).replace(/^M/, "L")} Z`;
+}
+
+// Just the upper edge of a ribbon, for its highlight line.
+export function ribbonEdge(upper: number[], b: Box, gap: number) {
+  const n = upper.length;
+  return smoothThrough(upper.map((v, i) => {
+    const [x, y] = point(i, v, n, b);
+    return [x, y + gap / 2] as const;
+  }));
+}

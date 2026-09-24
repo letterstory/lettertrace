@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { EVENTS, SHARE, WEEKS, bandPath, point, smoothPath, stack, type Box } from "./series";
+import { EVENTS, SHARE, WEEKS, point, ribbonEdge, ribbonPath, stack, type Box } from "./series";
 import { useCompact } from "./use-compact";
 
 // Share of voice as a part-to-whole: every week's answers split 100% between
@@ -16,6 +16,16 @@ const WIDE: Box = { w: 1000, h: 400, max: 100, padX: 44, padR: 150, padY: 14 };
 // bands get the full width.
 const COMPACT: Box = { w: 360, h: 300, max: 100, padX: 34, padR: 6, padY: 14 };
 const TOPS = stack(SHARE);
+const GAP = 6; // px between ribbons
+
+// Ribbon fills: translucent, brightest at the top edge and fading down, so the
+// chart reads as light rather than blocks. The brand is a little richer.
+const FILL: Record<string, [number, number]> = {
+  acme: [0.62, 0.16],
+  notion: [0.4, 0.07],
+  linear: [0.36, 0.06],
+  others: [0.16, 0.03],
+};
 const ZERO = SHARE[0].values.map(() => 0);
 
 export function TraceChart() {
@@ -106,21 +116,25 @@ export function TraceChart() {
           ))}
         </ul>
 
-        <div ref={wrap} className="relative mt-5 select-none rounded-xl border border-ink/10 bg-surface/60 p-3 sm:p-6">
+        <div ref={wrap} className="relative mt-5 select-none rounded-2xl border border-ink/[0.07] bg-[radial-gradient(ellipse_80%_70%_at_30%_100%,rgb(var(--c-chart-1)/0.07),transparent_70%)] p-3 sm:p-6">
           <svg viewBox={`0 0 ${BOX.w} ${BOX.h + 24}`} className="h-auto w-full overflow-visible" role="img" aria-label="Share of voice, stacked to 100% over twelve weeks. Acme grows from 22% to 41%; Notion falls from 38% to 28%; Linear from 24% to 19%; others from 16% to 12%.">
             <defs>
               {SHARE.map((s) => (
                 <linearGradient key={s.key} id={`band-${s.key}`} x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" style={{ stopColor: s.color, stopOpacity: s.key === "others" ? 0.5 : 1 }} />
-                  <stop offset="100%" style={{ stopColor: s.color, stopOpacity: s.key === "others" ? 0.3 : 0.72 }} />
+                  <stop offset="0%" style={{ stopColor: s.color, stopOpacity: FILL[s.key][0] }} />
+                  <stop offset="100%" style={{ stopColor: s.color, stopOpacity: FILL[s.key][1] }} />
                 </linearGradient>
               ))}
+              <filter id="edge-glow" x="-5%" y="-50%" width="110%" height="200%">
+                <feGaussianBlur stdDeviation="6" />
+              </filter>
               <clipPath id="trace-reveal">
                 <rect
                   x={plotL}
-                  y={0}
+                  y={top - 4}
                   width={plotR - plotL + 2}
-                  height={BOX.h}
+                  height={base - top + 8}
+                  rx={14}
                   style={{
                     transformBox: "fill-box",
                     transformOrigin: "left",
@@ -131,13 +145,16 @@ export function TraceChart() {
               </clipPath>
             </defs>
 
-            {/* y ticks */}
+            {/* y ticks, with faint hairlines behind the ribbons */}
             {[0, 25, 50, 75, 100].map((g) => {
               const [, y] = point(0, g, WEEKS, BOX);
               return (
+                <g key={g}>
+                <line x1={plotL} x2={plotR} y1={y} y2={y} style={{ stroke: "rgb(var(--c-ink) / 0.05)" }} />
                 <text key={g} x={plotL - 12} y={y + 4} textAnchor="end" className="fill-ink-faint font-mono text-[11px]" style={{ fontVariantNumeric: "tabular-nums" }}>
                   {g}%
                 </text>
+                </g>
               );
             })}
 
@@ -147,17 +164,34 @@ export function TraceChart() {
               {SHARE.map((s, k) => (
                 <path
                   key={s.key}
-                  d={bandPath(TOPS[k], k ? TOPS[k - 1] : ZERO, BOX)}
+                  d={ribbonPath(TOPS[k], k ? TOPS[k - 1] : ZERO, BOX, GAP)}
                   fill={`url(#band-${s.key})`}
-                  style={{ opacity: dim(s.key), transition: "opacity 0.3s ease", stroke: "rgb(var(--c-surface))", strokeWidth: 2, strokeLinejoin: "round" }}
+                  style={{ opacity: dim(s.key), transition: "opacity 0.3s ease" }}
                 />
               ))}
-              {/* A soft highlight along the brand's upper edge. */}
+              {/* Glow under the brand's edge, then a crisp edge on every ribbon. */}
               <path
-                d={smoothPath(TOPS[0], BOX)}
+                d={ribbonEdge(TOPS[0], BOX, GAP)}
                 fill="none"
-                style={{ stroke: "rgb(255 255 255 / 0.35)", strokeWidth: 1.5, opacity: dim("acme"), transition: "opacity 0.3s ease" }}
+                filter="url(#edge-glow)"
+                style={{ stroke: SHARE[0].color, strokeWidth: 6, opacity: 0.7 * dim("acme"), transition: "opacity 0.3s ease" }}
               />
+              {SHARE.map((s, k) =>
+                s.key === "others" ? null : (
+                  <path
+                    key={s.key}
+                    d={ribbonEdge(TOPS[k], BOX, GAP)}
+                    fill="none"
+                    strokeLinecap="round"
+                    style={{
+                      stroke: s.color,
+                      strokeWidth: k === 0 ? 2.5 : 1.75,
+                      opacity: dim(s.key),
+                      transition: "opacity 0.3s ease",
+                    }}
+                  />
+                ),
+              )}
             </g>
 
             {/* Event pins: neutral ink, so they never read as a series. */}
@@ -165,9 +199,9 @@ export function TraceChart() {
               const [x] = point(ev.week, 0, WEEKS, BOX);
               return (
                 <g key={ev.week} className={cn("transition-opacity duration-700", on ? "opacity-100" : "opacity-0")} style={{ transitionDelay: `${1.6 + i * 0.2}s` }}>
-                  <line x1={x} x2={x} y1={top + 12} y2={base} style={{ stroke: "rgb(var(--c-surface) / 0.8)", strokeWidth: 1.5 }} strokeDasharray="1 4" strokeLinecap="round" />
-                  <circle cx={x} cy={top + 2} r={10} style={{ fill: "rgb(var(--c-ink))", stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />
-                  <text x={x} y={top + 6} textAnchor="middle" className="font-mono text-[11px] font-medium" style={{ fill: "rgb(var(--c-paper))" }}>
+                  <line x1={x} x2={x} y1={top + 10} y2={base} style={{ stroke: "rgb(var(--c-ink) / 0.28)", strokeWidth: 1 }} strokeDasharray="1 5" strokeLinecap="round" />
+                  <circle cx={x} cy={top - 2} r={9} style={{ fill: "rgb(var(--c-surface))", stroke: "rgb(var(--c-ink) / 0.45)", strokeWidth: 1 }} />
+                  <text x={x} y={top + 2} textAnchor="middle" className="font-mono text-[10px]" style={{ fill: "rgb(var(--c-ink) / 0.8)" }}>
                     {i + 1}
                   </text>
                 </g>
@@ -203,9 +237,10 @@ export function TraceChart() {
             {/* Hover layer */}
             {week !== null && (
               <g>
-                <line x1={cx} x2={cx} y1={top} y2={base} style={{ stroke: "rgb(var(--c-ink) / 0.55)", strokeWidth: 1.5 }} />
+                <line x1={cx} x2={cx} y1={top} y2={base} style={{ stroke: "rgb(var(--c-ink) / 0.4)", strokeWidth: 1 }} />
                 {SHARE.map((s, k) => {
-                  const [x, y] = point(week, TOPS[k][week], WEEKS, BOX);
+                  const [x, py] = point(week, TOPS[k][week], WEEKS, BOX);
+                  const y = py + GAP / 2;
                   return k === SHARE.length - 1 ? null : <circle key={s.key} cx={x} cy={y} r={4.5} style={{ fill: s.color, stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />;
                 })}
               </g>
@@ -245,7 +280,7 @@ export function TraceChart() {
               </ul>
               {event && (
                 <p className="mt-2 border-t border-ink/10 pt-2 text-xs text-ink-soft">
-                  <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-ink font-mono text-[10px] text-paper">
+                  <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full border border-ink/40 font-mono text-[9px] text-ink/80">
                     {EVENTS.indexOf(event) + 1}
                   </span>
                   {event.label}
@@ -283,7 +318,7 @@ export function TraceChart() {
         <ol className="mt-5 flex flex-wrap gap-x-8 gap-y-2 text-sm text-ink-soft">
           {EVENTS.map((ev, i) => (
             <li key={ev.week} className="flex items-center gap-2">
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-ink font-mono text-[11px] text-paper">{i + 1}</span>
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-ink/40 font-mono text-[10px] text-ink/80">{i + 1}</span>
               Week {ev.week + 1}: {ev.label}
             </li>
           ))}

@@ -258,8 +258,10 @@
   /* A filter paints only inside the element's box; at a tight line-height
      descenders and italic overhangs sit outside it and would pop in when the
      blur ends. Pad the box to hold the whole glyph, cancel it with margin. */
-  padding: 0.08em 0.06em 0.22em;
-  margin: -0.08em -0.06em -0.22em;
+  /* Italic f in Ibarra swings well past its box on both sides (its tail
+     left and down, its hook up and right), so the pad is generous. */
+  padding: 0.14em 0.3em 0.3em;
+  margin: -0.14em -0.3em -0.3em;
   animation: materialize 1.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
