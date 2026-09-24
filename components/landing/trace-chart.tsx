@@ -2,24 +2,37 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { EVENTS, SHARE, WEEKS, areaPath, point, smoothPath, type Box } from "./series";
+import { EVENTS, SHARE, WEEKS, bandPath, point, smoothPath, stack, type Box } from "./series";
+import { useCompact } from "./use-compact";
 
-// The trace itself: share of voice against competitors over twelve weekly
-// runs. Lines draw in when the chart scrolls into view; hovering (or dragging
-// on touch) scrubs a cursor across the weeks; the chips toggle competitors;
-// pins mark what moved the line. Illustrative data (brand "Acme").
+// Share of voice as a part-to-whole: every week's answers split 100% between
+// the brand and its competitors, stacked with the brand on the baseline so
+// its growth reads against a fixed edge. Bands reveal left to right when the
+// chart scrolls into view; hovering scrubs a crosshair; hovering a legend
+// chip spotlights its band; pins mark what moved the line. Illustrative data.
 
-const BOX: Box = { w: 1000, h: 380, max: 50, padX: 24, padY: 24 };
+const WIDE: Box = { w: 1000, h: 400, max: 100, padX: 44, padR: 150, padY: 14 };
+// Phones: no right-edge labels (the legend above carries identity) so the
+// bands get the full width.
+const COMPACT: Box = { w: 360, h: 300, max: 100, padX: 34, padR: 6, padY: 14 };
+const TOPS = stack(SHARE);
+const ZERO = SHARE[0].values.map(() => 0);
 
 export function TraceChart() {
   const wrap = useRef<HTMLDivElement>(null);
   const [on, setOn] = useState(false);
   const [week, setWeek] = useState<number | null>(null);
-  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+  const [focus, setFocus] = useState<string | null>(null);
+  const compact = useCompact();
+  const BOX = compact ? COMPACT : WIDE;
 
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setOn(true);
+      return;
+    }
     const io = new IntersectionObserver(
       ([e]) => {
         if (e.isIntersecting) {
@@ -33,19 +46,21 @@ export function TraceChart() {
     return () => io.disconnect();
   }, []);
 
-  const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
+  const plotL = BOX.padX!;
+  const plotR = BOX.w - BOX.padR!;
+  const top = BOX.padY!;
+  const base = BOX.h - BOX.padY!;
+
+  const onMove = (e: React.PointerEvent<SVGRectElement>) => {
+    const r = e.currentTarget.ownerSVGElement!.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * BOX.w;
-    const inner = BOX.w - (BOX.padX ?? 0) * 2;
-    const i = Math.round(((x - (BOX.padX ?? 0)) / inner) * (WEEKS - 1));
+    const i = Math.round(((x - plotL) / (plotR - plotL)) * (WEEKS - 1));
     setWeek(Math.min(WEEKS - 1, Math.max(0, i)));
   };
 
-  // With no cursor on the chart, the readout rests on the latest run.
-  const active = week ?? WEEKS - 1;
-  const [ax] = point(active, 0, WEEKS, BOX);
-  const series = SHARE.filter((s) => !hidden[s.key]);
-  const event = EVENTS.find((ev) => ev.week === active);
+  const [cx] = week === null ? [0] : point(week, 0, WEEKS, BOX);
+  const event = week === null ? undefined : EVENTS.find((ev) => ev.week === week);
+  const dim = (key: string) => (focus && focus !== key ? 0.22 : 1);
 
   return (
     <section id="trace" className="relative overflow-hidden">
@@ -57,142 +72,218 @@ export function TraceChart() {
               Every run is a <em className="italic text-terracotta-dark">datapoint</em>.
             </h2>
             <p className="mt-4 text-lg text-ink-soft">
-              Watch your share of the answer move against every competitor you track, and see
-              what moved it. Hover to scrub through the weeks.
+              Every answer in your category, split between you and the brands you track. Watch
+              your share grow, and see what moved it.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {SHARE.map((s, i) => {
-              const off = !!hidden[s.key];
-              return (
-                <button
-                  key={s.key}
-                  type="button"
-                  disabled={i === 0}
-                  onClick={() => setHidden((h) => ({ ...h, [s.key]: !h[s.key] }))}
-                  aria-pressed={!off}
-                  className={cn(
-                    "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition",
-                    off ? "border-ink/10 text-ink-faint" : "border-ink/20 text-ink",
-                    i === 0 ? "cursor-default" : "hover:border-ink/40",
-                  )}
-                >
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: off ? "transparent" : s.color, boxShadow: `inset 0 0 0 1.5px ${s.color}` }} />
-                  {s.label}
-                </button>
-              );
-            })}
+          <div className="text-right">
+            <p className="font-mono text-[11px] uppercase tracking-widest text-ink-faint">acme, 12 weeks</p>
+            <p className="mt-1 font-serif text-4xl text-ink">
+              22% <span className="text-ink-faint">→</span> 41%
+            </p>
+            <p className="font-mono text-xs text-mint-ink">▲ +19 pts share of voice</p>
           </div>
         </div>
 
-        <div
-          ref={wrap}
-          onPointerMove={onMove}
-          onPointerLeave={() => setWeek(null)}
-          className="relative mt-12 cursor-crosshair touch-pan-y select-none rounded-xl border border-ink/10 bg-surface/60 p-4 sm:p-6"
-        >
-          <svg viewBox={`0 0 ${BOX.w} ${BOX.h}`} className="h-auto w-full overflow-visible" role="img" aria-label="Share of voice by brand over twelve weeks; Acme rises from 22% to 41%">
+        {/* Legend: always present; hover or focus a chip to spotlight its band. */}
+        <ul className="mt-10 flex flex-wrap gap-2" onMouseLeave={() => setFocus(null)}>
+          {SHARE.map((s) => (
+            <li key={s.key}>
+              <button
+                type="button"
+                onMouseEnter={() => setFocus(s.key)}
+                onFocus={() => setFocus(s.key)}
+                onBlur={() => setFocus(null)}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition",
+                  focus === s.key ? "border-ink/40 text-ink" : "border-ink/15 text-ink-soft hover:text-ink",
+                )}
+              >
+                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
+                {s.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div ref={wrap} className="relative mt-5 select-none rounded-xl border border-ink/10 bg-surface/60 p-3 sm:p-6">
+          <svg viewBox={`0 0 ${BOX.w} ${BOX.h + 24}`} className="h-auto w-full overflow-visible" role="img" aria-label="Share of voice, stacked to 100% over twelve weeks. Acme grows from 22% to 41%; Notion falls from 38% to 28%; Linear from 24% to 19%; others from 16% to 12%.">
             <defs>
-              <linearGradient id="trace-area" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="rgb(224 120 80)" stopOpacity="0.22" />
-                <stop offset="100%" stopColor="rgb(224 120 80)" stopOpacity="0" />
-              </linearGradient>
+              {SHARE.map((s) => (
+                <linearGradient key={s.key} id={`band-${s.key}`} x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" style={{ stopColor: s.color, stopOpacity: s.key === "others" ? 0.5 : 1 }} />
+                  <stop offset="100%" style={{ stopColor: s.color, stopOpacity: s.key === "others" ? 0.3 : 0.72 }} />
+                </linearGradient>
+              ))}
+              <clipPath id="trace-reveal">
+                <rect
+                  x={plotL}
+                  y={0}
+                  width={plotR - plotL + 2}
+                  height={BOX.h}
+                  style={{
+                    transformBox: "fill-box",
+                    transformOrigin: "left",
+                    transform: on ? "scaleX(1)" : "scaleX(0)",
+                    transition: "transform 1.8s cubic-bezier(0.45, 0, 0.2, 1)",
+                  }}
+                />
+              </clipPath>
             </defs>
 
-            {[10, 20, 30, 40].map((g) => {
+            {/* y ticks */}
+            {[0, 25, 50, 75, 100].map((g) => {
               const [, y] = point(0, g, WEEKS, BOX);
               return (
-                <g key={g}>
-                  <line x1={BOX.padX} x2={BOX.w - (BOX.padX ?? 0)} y1={y} y2={y} strokeDasharray="3 6" style={{ stroke: "rgb(var(--c-ink) / 0.08)" }} />
-                  <text x={0} y={y + 4} className="fill-ink-faint font-mono text-[11px]">{g}%</text>
-                </g>
+                <text key={g} x={plotL - 12} y={y + 4} textAnchor="end" className="fill-ink-faint font-mono text-[11px]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {g}%
+                </text>
               );
             })}
 
-            {/* Event pins */}
+            {/* Bands. The surface-coloured stroke on each upper edge is the 2px
+                gap between segments. */}
+            <g clipPath="url(#trace-reveal)">
+              {SHARE.map((s, k) => (
+                <path
+                  key={s.key}
+                  d={bandPath(TOPS[k], k ? TOPS[k - 1] : ZERO, BOX)}
+                  fill={`url(#band-${s.key})`}
+                  style={{ opacity: dim(s.key), transition: "opacity 0.3s ease", stroke: "rgb(var(--c-surface))", strokeWidth: 2, strokeLinejoin: "round" }}
+                />
+              ))}
+              {/* A soft highlight along the brand's upper edge. */}
+              <path
+                d={smoothPath(TOPS[0], BOX)}
+                fill="none"
+                style={{ stroke: "rgb(255 255 255 / 0.35)", strokeWidth: 1.5, opacity: dim("acme"), transition: "opacity 0.3s ease" }}
+              />
+            </g>
+
+            {/* Event pins: neutral ink, so they never read as a series. */}
             {EVENTS.map((ev, i) => {
               const [x] = point(ev.week, 0, WEEKS, BOX);
               return (
-                <g key={ev.week} className={cn("transition-opacity duration-700", on ? "opacity-100" : "opacity-0")} style={{ transitionDelay: `${1.8 + i * 0.25}s` }}>
-                  <line x1={x} x2={x} y1={BOX.padY} y2={BOX.h - (BOX.padY ?? 0)} strokeDasharray="2 4" style={{ stroke: "rgb(var(--c-butter) / 0.6)" }} />
-                  <circle cx={x} cy={BOX.padY} r={9} style={{ fill: "rgb(var(--c-butter))" }} />
-                  <text x={x} y={(BOX.padY ?? 0) + 4} textAnchor="middle" className="font-mono text-[11px] font-medium" style={{ fill: "#1A1917" }}>
+                <g key={ev.week} className={cn("transition-opacity duration-700", on ? "opacity-100" : "opacity-0")} style={{ transitionDelay: `${1.6 + i * 0.2}s` }}>
+                  <line x1={x} x2={x} y1={top + 12} y2={base} style={{ stroke: "rgb(var(--c-surface) / 0.8)", strokeWidth: 1.5 }} strokeDasharray="1 4" strokeLinecap="round" />
+                  <circle cx={x} cy={top + 2} r={10} style={{ fill: "rgb(var(--c-ink))", stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />
+                  <text x={x} y={top + 6} textAnchor="middle" className="font-mono text-[11px] font-medium" style={{ fill: "rgb(var(--c-paper))" }}>
                     {i + 1}
                   </text>
                 </g>
               );
             })}
 
-            {!hidden.acme && on && <path d={areaPath(SHARE[0].values, BOX)} fill="url(#trace-area)" className="animate-fade-up [animation-delay:1.2s]" />}
-
-            {SHARE.map((s, i) =>
-              hidden[s.key] ? null : (
-                <path
-                  key={s.key}
-                  d={smoothPath(s.values, BOX)}
-                  fill="none"
-                  strokeWidth={i === 0 ? 3.5 : 2}
-                  strokeLinecap="round"
-                  className={on ? "trace-line" : ""}
-                  style={{
-                    stroke: s.color,
-                    opacity: on ? (i === 0 ? 1 : 0.75) : 0,
-                    ["--len" as string]: 1300,
-                    animationDelay: `${i * 0.2}s`,
-                  }}
-                />
-              ),
-            )}
-
-            {/* Scrub cursor */}
-            <line x1={ax} x2={ax} y1={BOX.padY} y2={BOX.h - (BOX.padY ?? 0)} style={{ stroke: "rgb(var(--c-ink) / 0.25)" }} className={cn("transition-opacity", on ? "opacity-100" : "opacity-0")} />
-            {series.map((s) => {
-              const [x, y] = point(active, s.values[active], WEEKS, BOX);
-              return <circle key={s.key} cx={x} cy={y} r={5} className={cn("transition-opacity", on ? "opacity-100" : "opacity-0")} style={{ fill: s.color, stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />;
+            {/* Direct labels at the right edge, in text tokens beside a key. */}
+            {!compact && SHARE.map((s, k) => {
+              const last = WEEKS - 1;
+              const mid = (TOPS[k][last] + (k ? TOPS[k - 1][last] : 0)) / 2;
+              const [, y] = point(last, mid, WEEKS, BOX);
+              return (
+                <g key={s.key} className={cn("transition-opacity duration-500", on ? "opacity-100" : "opacity-0")} style={{ transitionDelay: "1.7s", opacity: on ? dim(s.key) : 0 }}>
+                  <rect x={plotR + 14} y={y - 5} width={10} height={10} rx={2} style={{ fill: s.color }} />
+                  <text x={plotR + 32} y={y + 4} className="fill-ink text-[13px] font-medium">
+                    {s.label.replace(" (you)", "")}
+                    <tspan dx={6} className="fill-ink-soft font-normal">{s.values[last]}%</tspan>
+                  </text>
+                </g>
+              );
             })}
+
+            {/* x-axis */}
+            {(compact ? [0, 11] : [0, 3, 7, 11]).map((i) => {
+              const [x] = point(i, 0, WEEKS, BOX);
+              return (
+                <text key={i} x={x} y={BOX.h + 18} textAnchor={compact && i === WEEKS - 1 ? "end" : "middle"} className="fill-ink-faint font-mono text-[11px]">
+                  {i === WEEKS - 1 ? "this week" : `wk ${i + 1}`}
+                </text>
+              );
+            })}
+
+            {/* Hover layer */}
+            {week !== null && (
+              <g>
+                <line x1={cx} x2={cx} y1={top} y2={base} style={{ stroke: "rgb(var(--c-ink) / 0.55)", strokeWidth: 1.5 }} />
+                {SHARE.map((s, k) => {
+                  const [x, y] = point(week, TOPS[k][week], WEEKS, BOX);
+                  return k === SHARE.length - 1 ? null : <circle key={s.key} cx={x} cy={y} r={4.5} style={{ fill: s.color, stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />;
+                })}
+              </g>
+            )}
+            <rect
+              x={plotL}
+              y={0}
+              width={plotR - plotL}
+              height={BOX.h}
+              fill="transparent"
+              className="cursor-crosshair"
+              style={{ touchAction: "pan-y" }}
+              onPointerMove={onMove}
+              onPointerLeave={() => setWeek(null)}
+            />
           </svg>
 
-          {/* Readout */}
-          <div
-            className={cn(
-              "pointer-events-none absolute top-6 w-52 rounded-lg border border-ink/10 bg-paper/95 p-3 shadow-lift backdrop-blur transition-opacity",
-              on ? "opacity-100" : "opacity-0",
-              /* Phones: the chart is narrow, so the readout only shows while scrubbing. */
-              week === null && "max-sm:hidden",
-            )}
-            style={{
-              left: `calc(${(ax / BOX.w) * 100}% ${active > WEEKS / 2 ? "- 13.5rem" : "+ 1rem"})`,
-            }}
-          >
-            <p className="font-mono text-[11px] uppercase tracking-widest text-ink-faint">
-              week {active + 1}
-              {active === WEEKS - 1 ? " · latest" : ""}
-            </p>
-            <ul className="mt-2 space-y-1">
-              {series.map((s) => (
-                <li key={s.key} className="flex items-center gap-2 text-sm">
-                  <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-                  <span className="flex-1 text-ink-soft">{s.label}</span>
-                  <span className="font-medium text-ink">{s.values[active]}%</span>
-                </li>
-              ))}
-            </ul>
-            {event && (
-              <p className="mt-2 border-t border-ink/10 pt-2 text-xs text-ink-soft">
-                <span className="mr-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-butter font-mono text-[10px] text-[#1A1917]">
-                  {EVENTS.indexOf(event) + 1}
-                </span>
-                {event.label}
+          {week !== null && (
+            <div
+              className="pointer-events-none absolute top-6 w-48 rounded-lg sm:w-56 border border-ink/10 bg-paper/95 p-3 shadow-lift backdrop-blur"
+              style={{ left: `calc(${(cx / BOX.w) * 100}% ${week > WEEKS / 2 ? (compact ? "- 12.75rem" : "- 15rem") : "+ 1.25rem"})` }}
+            >
+              <p className="font-mono text-[11px] uppercase tracking-widest text-ink-faint">
+                week {week + 1}
+                {week === WEEKS - 1 ? " · latest" : ""}
               </p>
-            )}
-          </div>
+              <ul className="mt-2 space-y-1">
+                {[...SHARE].reverse().map((s) => (
+                  <li key={s.key} className="flex items-center gap-2 text-sm">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
+                    <span className="flex-1 text-ink-soft">{s.label}</span>
+                    <span className="font-medium text-ink" style={{ fontVariantNumeric: "tabular-nums" }}>
+                      {s.values[week]}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {event && (
+                <p className="mt-2 border-t border-ink/10 pt-2 text-xs text-ink-soft">
+                  <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-ink font-mono text-[10px] text-paper">
+                    {EVENTS.indexOf(event) + 1}
+                  </span>
+                  {event.label}
+                </p>
+              )}
+            </div>
+          )}
         </div>
+
+
+        {/* The same data as a table, for screen readers. */}
+        <table className="sr-only">
+          <caption>Share of voice by brand, weekly</caption>
+          <thead>
+            <tr>
+              <th scope="col">Week</th>
+              {SHARE.map((s) => (
+                <th key={s.key} scope="col">{s.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: WEEKS }, (_, i) => (
+              <tr key={i}>
+                <th scope="row">Week {i + 1}</th>
+                {SHARE.map((s) => (
+                  <td key={s.key}>{s.values[i]}%</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
         {/* Event key */}
         <ol className="mt-5 flex flex-wrap gap-x-8 gap-y-2 text-sm text-ink-soft">
           {EVENTS.map((ev, i) => (
             <li key={ev.week} className="flex items-center gap-2">
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-butter font-mono text-[11px] text-[#1A1917]">{i + 1}</span>
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-ink font-mono text-[11px] text-paper">{i + 1}</span>
               Week {ev.week + 1}: {ev.label}
             </li>
           ))}

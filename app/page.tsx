@@ -196,7 +196,7 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="grain relative overflow-hidden pb-36">
+      <section className="grain relative overflow-hidden pb-56">
         <div className="pointer-events-none absolute -left-24 top-10 h-96 w-96 rounded bg-terracotta/50 glow-blob" />
         <div className="pointer-events-none absolute -right-10 top-40 h-96 w-96 rounded bg-mint glow-blob" />
         <CursorLight />

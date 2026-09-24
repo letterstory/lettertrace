@@ -276,6 +276,18 @@ export function WatchItTrace() {
                 </span>
               </div>
               <svg viewBox={`0 0 ${TBOX.w} ${TBOX.h}`} className="mt-1 h-auto w-full overflow-visible" aria-hidden>
+                <defs>
+                  <linearGradient id="run-wash" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" style={{ stopColor: "rgb(var(--c-chart-1))", stopOpacity: 0.28 }} />
+                    <stop offset="100%" style={{ stopColor: "rgb(var(--c-chart-1))", stopOpacity: 0 }} />
+                  </linearGradient>
+                </defs>
+                <line x1={0} x2={TBOX.w} y1={TBOX.h - TBOX.padY!} y2={TBOX.h - TBOX.padY!} style={{ stroke: "rgb(var(--c-ink) / 0.12)" }} />
+                <path
+                  d={`${smoothThrough(trendOn ? pts : pts.slice(0, -1))} L${(trendOn ? lx : px).toFixed(1)} ${TBOX.h - TBOX.padY!} L${pts[0][0].toFixed(1)} ${TBOX.h - TBOX.padY!} Z`}
+                  fill="url(#run-wash)"
+                  style={{ transition: "d 0.9s ease" }}
+                />
                 <path
                   d={smoothThrough(pts.slice(0, -1))}
                   fill="none"
@@ -291,10 +303,10 @@ export function WatchItTrace() {
                       strokeWidth={3}
                       strokeLinecap="round"
                       className="trace-line"
-                      style={{ stroke: "rgb(var(--c-terracotta))", ["--len" as string]: 120, animationDuration: "0.9s" }}
+                      style={{ stroke: "rgb(var(--c-chart-1))", ["--len" as string]: 120, animationDuration: "0.9s" }}
                     />
-                    <circle cx={lx} cy={ly} r={4.5} className="pulse-ring" style={{ fill: "rgb(var(--c-terracotta))" }} />
-                    <circle cx={lx} cy={ly} r={4.5} style={{ fill: "rgb(var(--c-terracotta))" }} />
+                    <circle cx={lx} cy={ly} r={4.5} className="pulse-ring" style={{ fill: "rgb(var(--c-chart-1))" }} />
+                    <circle cx={lx} cy={ly} r={4.5} style={{ fill: "rgb(var(--c-chart-1))", stroke: "rgb(var(--c-surface))", strokeWidth: 2 }} />
                   </>
                 )}
               </svg>

@@ -48,6 +48,13 @@
   --c-terminal: 32 30 26;
   --c-terminal-ink: 244 243 239;
 
+  /* chart categorical slots, validated for this surface (dataviz
+     validate_palette: band, chroma, CVD, contrast all pass). Fixed order. */
+  --c-chart-1: 222 111 69;
+  --c-chart-2: 3 172 143;
+  --c-chart-3: 180 142 44;
+  --c-chart-other: 138 134 125;
+
   /* effect tints */
   --grid-line: 255 255 255;
   --grid-alpha: 0.05;
@@ -92,6 +99,11 @@
 
   --c-terminal: 26 25 23;
   --c-terminal-ink: 245 244 240;
+
+  --c-chart-1: 224 120 80;
+  --c-chart-2: 7 122 102;
+  --c-chart-3: 180 142 44;
+  --c-chart-other: 124 120 111;
 
   --grid-line: 20 20 24;
   --grid-alpha: 0.05;
@@ -301,10 +313,25 @@
   opacity: 0.12;
 }
 
+/* Bars growing from their baseline (horizontal and vertical). */
+@keyframes grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes rise {
+  from {
+    transform: scaleY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .apparition .w,
   .trace-line,
-  .pulse-ring {
+  .pulse-ring,
+  [class*="animate-[grow"],
+  [class*="animate-[rise"] {
     animation: none;
     stroke-dashoffset: 0;
   }
