@@ -221,3 +221,91 @@
   color: rgb(var(--c-ink-soft)) !important;
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------------
+   Landing-page motion, shared with the other Letter Company sites
+   (phantomstory.com uses the same apparition and glyph assembly).
+   ------------------------------------------------------------------ */
+
+/* Apparition: each word of a headline condenses out of blur, in turn. */
+@keyframes materialize {
+  from {
+    opacity: 0;
+    filter: blur(16px);
+    translate: 0 14px;
+  }
+  to {
+    opacity: 1;
+    filter: none;
+    translate: 0 0;
+  }
+}
+
+.apparition .w {
+  display: inline-block;
+  /* A filter paints only inside the element's box; at a tight line-height
+     descenders and italic overhangs sit outside it and would pop in when the
+     blur ends. Pad the box to hold the whole glyph, cancel it with margin. */
+  padding: 0.08em 0.06em 0.22em;
+  margin: -0.08em -0.06em -0.22em;
+  animation: materialize 1.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* A line that traces itself: set --len to (at least) the path length. */
+@keyframes trace {
+  from {
+    stroke-dashoffset: var(--len, 1200);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.trace-line {
+  stroke-dasharray: var(--len, 1200);
+  stroke-dashoffset: var(--len, 1200);
+  animation: trace 2.4s cubic-bezier(0.45, 0, 0.2, 1) forwards;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+.pulse-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+/* Film grain over glows, so they read as light rather than a flat gradient. */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+}
+
+:root[data-theme="light"] .grain::after {
+  mix-blend-mode: multiply;
+  filter: invert(1);
+  opacity: 0.12;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apparition .w,
+  .trace-line,
+  .pulse-ring {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
