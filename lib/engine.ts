@@ -547,7 +547,7 @@ async function resumeRunMeasured(
       return;
     }
     try {
-      const { text: answer, tokens: qTokens, sources } = await runQuery({
+      const { text: answer, tokens: qTokens, sources, fallback } = await runQuery({
         provider,
         model,
         apiKey,
@@ -563,6 +563,26 @@ async function resumeRunMeasured(
         tokens: qTokens,
         webSearch: project.use_web_search,
       });
+      if (fallback) {
+        // A distinct, own-kind signal (not folded into engine.answer, which
+        // is errors only) so "answered via fallback" is a rate we can chart
+        // and alert on rather than something buried in a span attribute. This
+        // is how a gateway breaking tool_choice (Concentrate, since
+        // 2026-09-23 — see isToolChoiceMismatch) gets measured for as long as
+        // it stays broken: every run this fires on asked for a grounded
+        // answer and got an ungrounded one instead.
+        recordOps("engine.answer.fallback", {
+          level: "warn",
+          signature: `engine.answer.fallback: ${fallback}`,
+          sample: {
+            provider,
+            model,
+            route: route?.router ?? "direct",
+            key_source: params.keySource ?? "unknown",
+            reason: fallback,
+          },
+        });
+      }
 
       const { data: respRow } = await supabase
         .from("responses")

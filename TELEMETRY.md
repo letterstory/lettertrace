@@ -86,11 +86,17 @@ underneath them, and they are the ones that describe the work:
 |---|---|---|---|
 | `cron.run` | `app/api/cron/run/route.ts` | one scheduler tick, parenting every run it starts | `cron.projects.scheduled` / `.processed` / `.skipped` / `.failed`, `cron.runs.swept` |
 | `run.execute` | `lib/engine.ts` (`resumeRun`) | one monitoring run, parenting its provider calls | `run.id`, `run.provider`, `run.model`, `run.route`, `run.channel`, `run.status`, `run.responses`, `run.prompts`, `run.tokens` |
-| `llm.query` | `lib/llm/index.ts` (`runQuery`) | one answer-engine call | `llm.provider`, `llm.model`, `llm.web_search`, `llm.route`, `llm.tokens`, `llm.sources` |
+| `llm.query` | `lib/llm/index.ts` (`runQuery`) | one answer-engine call | `llm.provider`, `llm.model`, `llm.web_search`, `llm.route`, `llm.tokens`, `llm.sources`, `llm.fallback` |
 
 `run.route` / `llm.route` is the router id (`concentrate`) or the literal
 `direct` for a direct provider key — the split that made #136 diagnosable.
 A failed call sets span status Error and records the exception.
+
+`llm.fallback` is only present when the call didn't come back the way it was
+asked for and had to be recovered — e.g. `tool_choice_mismatch`, when a
+gateway 400s a forced web-search tool_choice because it dropped the tool
+definition from the forwarded request (Concentrate, since 2026-09-23). Absent
+on a normal answer.
 
 **Metrics.** Emitted every 15s (short enough that a long cron run reports more
 than once before Vercel freezes the function).
@@ -112,7 +118,11 @@ OTel log record: body `<kind>: <signature>`, severity from the ops level, and
 the sample fields flattened under `ops.*` (`ops.kind`, `ops.signature`,
 `ops.provider`, …). The signature is the one `signatureOf()` already scrubbed,
 so ids and numbers are collapsed and no content rides along. `run.failed` and
-`error` records are the error stream worth alerting on.
+`error` records are the error stream worth alerting on. `engine.answer.fallback`
+(`lib/engine.ts`, level `warn`) fires once per answer that came back through a
+resilience fallback rather than normally — currently only the tool_choice
+mismatch above — so how long a gateway stays broken is a rate over this kind,
+not a manual read of `llm.fallback` spans.
 
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer
