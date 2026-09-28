@@ -92,6 +92,7 @@ export function resolveScheduleCommit(
 export function SchedulePicker({
   header,
   description,
+  footer,
   switchAriaLabel,
   enabled,
   cadence,
@@ -103,6 +104,13 @@ export function SchedulePicker({
   /** Rendered with the live (optimistic, not-yet-committed) state, so text
    *  like "runs weekly" updates the moment a pill is clicked. */
   description?: (state: {
+    enabled: boolean;
+    cadence: ActiveSchedule | null;
+    intervalDays: number;
+  }) => ReactNode;
+  /** Under the pills, in the same column. Same live state as `description`.
+   *  Optional so onboarding, which has no project yet, can omit it. */
+  footer?: (state: {
     enabled: boolean;
     cadence: ActiveSchedule | null;
     intervalDays: number;
@@ -187,6 +195,11 @@ export function SchedulePicker({
   }
 
   const days = normalizeCustomInterval(intervalDraft, confirmed.current.intervalDays);
+  const footerNode = footer?.({
+    enabled: localEnabled,
+    cadence: localCadence,
+    intervalDays: days,
+  });
   /** What clicking the switch will DO, which is the one thing its own
    *  appearance can't say. */
   const action = localEnabled ? "Turn off" : "Turn on";
@@ -279,6 +292,7 @@ export function SchedulePicker({
           </span>
         )}
       </div>
+      {footerNode ? <div className="mt-2 sm:pl-8">{footerNode}</div> : null}
     </div>
   );
 }

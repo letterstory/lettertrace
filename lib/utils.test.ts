@@ -4,6 +4,8 @@ import {
   CUSTOM_INTERVAL_DEFAULT,
   duration,
   isScheduleDue,
+  nextReportScheduleMessage,
+  nextScheduledReportAt,
   normalizeCustomInterval,
   parseCustomInterval,
   resolveRedirectBase,
@@ -265,5 +267,56 @@ describe("isScheduleDue", () => {
 
   it("refuses a 'custom' row with no interval rather than guessing one", () => {
     expect(isScheduleDue(project("custom", ago(90 * DAY), null), NOW)).toBe(false);
+  });
+});
+
+describe("nextScheduledReportAt", () => {
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it("names nothing when nothing is scheduled", () => {
+    expect(nextScheduledReportAt("off", null, null, at("2026-09-09T07:00:00Z"))).toBeNull();
+    expect(nextScheduledReportAt("custom", null, null, at("2026-09-09T07:00:00Z"))).toBeNull();
+    expect(nextReportScheduleMessage("off", null, null, at("2026-09-09T07:00:00Z"))).toBeNull();
+  });
+
+  it("names the next 08:00 UTC that is still ahead when a scheduled project has never run", () => {
+    expect(nextScheduledReportAt("weekly", null, null, at("2026-09-09T07:59:00Z"))?.toISOString()).toBe(
+      "2026-09-09T08:00:00.000Z",
+    );
+    expect(nextScheduledReportAt("daily", null, null, at("2026-09-09T08:00:00Z"))?.toISOString()).toBe(
+      "2026-09-10T08:00:00.000Z",
+    );
+    expect(nextScheduledReportAt("daily", null, null, at("2026-09-09T12:00:00Z"))?.toISOString()).toBe(
+      "2026-09-10T08:00:00.000Z",
+    );
+  });
+
+  it("adds the interval in whole UTC days, including a last run late the previous day", () => {
+    // Last run 23:59 UTC still belongs to that calendar day, so daily is the
+    // next morning — the same boundary isScheduleDue uses.
+    expect(
+      nextScheduledReportAt("daily", null, "2026-09-08T23:59:00Z", at("2026-09-09T07:00:00Z"))?.toISOString(),
+    ).toBe("2026-09-09T08:00:00.000Z");
+    expect(
+      nextScheduledReportAt("weekly", null, "2026-09-22T08:06:30Z", at("2026-09-22T12:00:00Z"))?.toISOString(),
+    ).toBe("2026-09-29T08:00:00.000Z");
+    expect(
+      nextScheduledReportAt("custom", 14, "2026-09-01T08:06:30Z", at("2026-09-09T07:00:00Z"))?.toISOString(),
+    ).toBe("2026-09-15T08:00:00.000Z");
+  });
+
+  it("moves to the following morning once that day's 08:00 UTC has arrived", () => {
+    expect(
+      nextScheduledReportAt("weekly", null, "2026-09-02T08:06:30Z", at("2026-09-09T08:00:00Z"))?.toISOString(),
+    ).toBe("2026-09-10T08:00:00.000Z");
+    expect(
+      nextScheduledReportAt("daily", null, "2026-09-08T23:59:00Z", at("2026-09-09T12:00:00Z"))?.toISOString(),
+    ).toBe("2026-09-10T08:00:00.000Z");
+  });
+
+  it("says the date in UTC, around 8:00", () => {
+    expect(
+      nextReportScheduleMessage("weekly", null, "2026-09-22T08:06:30Z", at("2026-09-22T12:00:00Z")),
+    ).toBe("Your next report is scheduled for September 29, 2026, around 8:00 UTC.");
   });
 });
