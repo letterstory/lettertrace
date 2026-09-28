@@ -255,8 +255,37 @@ alter table public.projects
 alter table public.projects
   add column if not exists use_web_search boolean not null default true;
 
+-- Report emails are on unless the owner turns them off. The column was added
+-- default-off, and an organization that never touched the switch is stored the
+-- same way as one whose owner later opted out. Flip every off row once, and
+-- only while the live default is still off: re-running this file must not undo
+-- an owner who has since turned delivery off. On a database that already has
+-- the column, ADD COLUMN is a no-op and leaves the old default in place, so
+-- the block below is what turns existing rows on.
 alter table public.projects
-  add column if not exists report_emails_enabled boolean not null default false;
+  add column if not exists report_emails_enabled boolean not null default true;
+
+do $$
+declare
+  current_default text;
+begin
+  select pg_get_expr(ad.adbin, ad.adrelid)
+    into current_default
+  from pg_attrdef ad
+  join pg_attribute a
+    on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+  where ad.adrelid = 'public.projects'::regclass
+    and a.attname = 'report_emails_enabled'
+    and not a.attisdropped;
+
+  if current_default = 'false' then
+    update public.projects
+      set report_emails_enabled = true
+      where not report_emails_enabled;
+    alter table public.projects
+      alter column report_emails_enabled set default true;
+  end if;
+end $$;
 
 -- When we last told the owner a DUE scheduled run could not start (no key,
 -- allowance spent). Without it the sweep mails the same sentence every

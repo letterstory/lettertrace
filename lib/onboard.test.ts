@@ -494,6 +494,9 @@ describe("onboardFromUrl", () => {
       description: "Payroll for platform teams.",
       schedule: "off",
     });
+    // Report delivery follows the column default (on). Writing the flag here
+    // would freeze every onboarded organization at off.
+    expect(inserted(db, "projects")[0]).not.toHaveProperty("report_emails_enabled");
     expect(outcome.saved).toEqual({ topics: 1, prompts: 1, competitors: 1 });
     // Then exactly one free run for the one trial-covered engine.
     expect(m.consume).toHaveBeenCalledTimes(1);

@@ -109,3 +109,14 @@ describe("POST /api/project — custom cadence validation", () => {
     expect(fields).not.toHaveProperty("schedule_interval_days");
   });
 });
+
+describe("POST /api/project — report emails", () => {
+  it("leaves report emails to the column default, which is on", async () => {
+    // New organizations inherit projects.report_emails_enabled. Writing the
+    // flag here would freeze every organization created through this route at
+    // off, after the column default moved to on.
+    const res = await POST(req({}));
+    expect(res.status).toBe(200);
+    expect(insertSpy.mock.calls[0][0]).not.toHaveProperty("report_emails_enabled");
+  });
+});
