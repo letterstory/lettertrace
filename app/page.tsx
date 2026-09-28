@@ -12,7 +12,7 @@ import {
   Timer,
 } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
-import { Logo } from "@/components/logo";
+import { LetterCompanyGlyph, Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
 import { InstallCli } from "@/components/install-cli";
 import { LetterCoTelemetry } from "@/components/letterco-telemetry";
@@ -235,6 +235,16 @@ export default function LandingPage() {
               <ArrowRight className="h-4 w-4" />
             </Button>
             <InstallCli />
+            <a
+              href="https://letter.company"
+              target="_blank"
+              rel="noopener"
+              aria-label="The Letter Company"
+              title="The Letter Company"
+              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded border border-ink/15 bg-black text-white transition-colors hover:border-ink/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+            >
+              <LetterCompanyGlyph className="h-7" />
+            </a>
           </div>
           <p className="mt-4 animate-fade-up font-mono text-xs text-ink-faint [animation-delay:750ms]">
             works with ChatGPT, Claude &amp; Gemini · self-host in minutes
