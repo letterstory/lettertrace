@@ -20,7 +20,7 @@ let currentFetch: (url: unknown, init?: unknown) => Promise<Response> = async ()
 };
 vi.stubGlobal("fetch", (url: unknown, init?: unknown) => currentFetch(url, init));
 
-const { runQuery, humanError } = await import("./index");
+const { runQuery, humanError, verifyKey } = await import("./index");
 
 const KEY = "sk-ant-test-key";
 
@@ -155,5 +155,34 @@ describe("anthropic runQuery with web search — tool_choice mismatch fallback",
 
     expect(res.fallback).toBeUndefined();
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("verifyKey for an unscoped Claude key", () => {
+  // Saving the key showed the raw 400 body, status code and all, including an
+  // instruction to send an anthropic-workspace-id header. This client never
+  // sends that header, so the sentence names the fix a person can actually do:
+  // generate a workspace key in the Anthropic Console.
+  it("tells the user to generate a workspace key instead of showing the JSON body", async () => {
+    mockFetch({
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace.",
+        },
+        request_id: null,
+      },
+    });
+
+    const res = await verifyKey("anthropic", KEY);
+
+    expect(res).toEqual({
+      ok: false,
+      error:
+        "This key isn't linked to a workspace. Please generate a workspace key in the Anthropic Console and paste it here.",
+    });
   });
 });
