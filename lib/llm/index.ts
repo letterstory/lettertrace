@@ -2090,6 +2090,18 @@ export function humanError(err: unknown): string {
     if (err.status === 429) return "Rate limited by the provider.";
     if (err.status === 403) return "This key lacks access to the requested model.";
     if (err.status && err.status >= 500) return "The AI provider had a temporary error. Please try again.";
+    // An org-level Claude key 400s and asks for an anthropic-workspace-id
+    // header. The SDK puts the status and the whole JSON body in err.message,
+    // which is what the settings card showed. The header is not a fix a person
+    // can apply here — this client never sends one. A key created inside a
+    // workspace in the Anthropic Console is.
+    if (
+      err instanceof Anthropic.APIError &&
+      err.status === 400 &&
+      /not scoped to a workspace|anthropic-workspace-id/i.test(err.message)
+    ) {
+      return "This key isn't linked to a workspace. Please generate a workspace key in the Anthropic Console and paste it here.";
+    }
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof GoogleAPIError) {
