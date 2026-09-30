@@ -39,6 +39,13 @@ create trigger on_auth_user_created
 alter table public.profiles
   add column if not exists admin_alerted_at timestamptz;
 
+-- Stamped the first time the Cardinal signup webhook is claimed for this
+-- account. The webhook is best-effort lead enrichment, not part of signup, so
+-- the service-role sender claims before the network call and never blocks
+-- dashboard access. See sendCardinalSignup in lib/cardinal-signup.
+alter table public.profiles
+  add column if not exists cardinal_signup_sent_at timestamptz;
+
 -- Free-trial usage: tokens a user has consumed against the operator's shared
 -- (trial) keys before bringing their own. Safe to re-run.
 alter table public.profiles

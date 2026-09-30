@@ -16,6 +16,11 @@ import { ThemeToggle } from "@/components/theme";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { adminAlertEmails, fireAndForget } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
+import {
+  cardinalSignupConfigured,
+  sendCardinalSignup,
+  withinCardinalSignupWindow,
+} from "@/lib/cardinal-signup";
 import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
 import { getUnseenRun } from "@/lib/results-seen";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
@@ -58,6 +63,33 @@ export default async function DashboardLayout({
       .maybeSingle();
     if (alertState && (alertState as { admin_alerted_at: string | null }).admin_alerted_at === null) {
       fireAndForget(alertNewSignup(createServiceClient(), user));
+    }
+  }
+
+  // Cardinal lead capture for new accounts. Same first-dashboard-sign-in
+  // boundary as the operator alert: it sees password and OAuth users, but not
+  // abandoned signup attempts. The webhook token stays server-side, and the
+  // service-role claim below makes the external call at most once per account.
+  //
+  // withinCardinalSignupWindow guards the query the same way withinSignupWindow
+  // does for the founder-call offer below: cardinal_signup_sent_at is NULL for
+  // every account that predates this column, not just new signups, so the age
+  // check is what actually distinguishes them.
+  if (
+    cardinalSignupConfigured() &&
+    user.email?.trim() &&
+    withinCardinalSignupWindow(user.created_at)
+  ) {
+    const { data: cardinalState } = await supabase
+      .from("profiles")
+      .select("cardinal_signup_sent_at")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (
+      cardinalState &&
+      (cardinalState as { cardinal_signup_sent_at: string | null }).cardinal_signup_sent_at === null
+    ) {
+      fireAndForget(sendCardinalSignup(createServiceClient(), user));
     }
   }
 
