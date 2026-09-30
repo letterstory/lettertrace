@@ -162,6 +162,7 @@ export default async function DashboardLayout({
                 id: p.id,
                 name: p.name,
                 brandName: p.brand_name,
+                domain: p.brand_domains[0] ?? null,
                 shared: p.user_id !== user.id,
               }))}
               activeId={project.id}
