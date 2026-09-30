@@ -79,20 +79,23 @@ export function RunAllEngines({
   }
 
   return (
-    <div className="flex min-w-0 flex-col items-start gap-1.5">
-      <Button
-        variant="secondary"
-        onClick={runAll}
-        loading={progress !== null}
-        loadingText={progress ?? "Running…"}
-        disabled={disabled || progress !== null}
-      >
-        <Layers className="h-4 w-4" /> Run on all {engines.length} engines
-      </Button>
-      <p className="text-xs text-ink-faint">
-        Keep this page open until the last engine finishes — closing it stops the ones
-        that haven&apos;t started.
-      </p>
+    <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
+      <div className="flex w-full min-w-0 items-center gap-2">
+        <Button
+          className="shrink-0"
+          variant="secondary"
+          onClick={runAll}
+          loading={progress !== null}
+          loadingText={progress ?? "Running…"}
+          disabled={disabled || progress !== null}
+        >
+          <Layers className="h-4 w-4" /> Run on all {engines.length} engines
+        </Button>
+        <p className="min-w-0 text-xs text-ink-faint">
+          Keep this page open until the last engine finishes — closing it stops the ones
+          that haven&apos;t started.
+        </p>
+      </div>
       {errors.map((e) => (
         <p key={e} className="text-xs text-terracotta">
           {e}
