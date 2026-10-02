@@ -1,9 +1,10 @@
 import { Users } from "lucide-react";
 import { Button, EmptyState, SectionHeading } from "@/components/ui";
-import { getConfiguredProviders, getProject } from "@/lib/data";
+import { getProject } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import type { Competitor } from "@/lib/types";
 import { PROVIDERS } from "@/lib/models";
+import { resolveKey } from "@/lib/trial";
 import { CompetitorsClient } from "./competitors-client";
 
 export const dynamic = "force-dynamic";
@@ -42,10 +43,12 @@ export default async function CompetitorsPage() {
 
   const competitors = (data as Competitor[] | null) ?? [];
 
-  // Suggestions run on the project's chosen engine, so the key that matters is
-  // that provider's — same rule the Topics page uses.
-  const configured = await getConfiguredProviders(supabase, user.id);
-  const hasKey = configured.includes(project.default_provider);
+  // Ask the same resolver /api/competitors/suggest uses. Checking only for a
+  // direct key on the default provider hid the button from anyone paying
+  // through a router (Concentrate, OpenRouter) or on the free trial, though the
+  // route itself would have served them.
+  const key = await resolveKey(supabase, user.id, project.default_provider, project.default_model);
+  const hasKey = key.source !== "none" && key.source !== "exhausted";
   const providerLabel = PROVIDERS[project.default_provider].label;
 
   return (

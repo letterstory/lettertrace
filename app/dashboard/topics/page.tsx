@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { getProject, getConfiguredProviders } from "@/lib/data";
+import { getProject } from "@/lib/data";
+import { resolveKey } from "@/lib/trial";
 import { PROVIDERS } from "@/lib/models";
 import type { Prompt, Topic } from "@/lib/types";
 import { SectionHeading, EmptyState, Button } from "@/components/ui";
@@ -34,7 +35,7 @@ export default async function TopicsPage() {
     );
   }
 
-  const [{ data: topicsData }, { data: promptsData }, configured] = await Promise.all([
+  const [{ data: topicsData }, { data: promptsData }, key] = await Promise.all([
     supabase
       .from("topics")
       .select("*")
@@ -45,12 +46,14 @@ export default async function TopicsPage() {
       .select("*")
       .eq("project_id", project.id)
       .order("created_at", { ascending: true }),
-    getConfiguredProviders(supabase, user.id),
+    resolveKey(supabase, user.id, project.default_provider, project.default_model),
   ]);
 
   const topics = (topicsData as Topic[] | null) ?? [];
   const prompts = (promptsData as Prompt[] | null) ?? [];
-  const hasKey = configured.includes(project.default_provider);
+  // Same resolver the generate and reanalyze routes use, so a router key or the
+  // free trial counts, not just a direct key on the default provider.
+  const hasKey = key.source !== "none" && key.source !== "exhausted";
   const providerLabel = PROVIDERS[project.default_provider].label;
 
   return (
