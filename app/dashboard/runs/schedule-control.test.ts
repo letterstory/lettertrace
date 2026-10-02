@@ -1,6 +1,6 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
@@ -12,11 +12,16 @@ Object.assign(globalThis, { React });
 const { ScheduleControl } = await import("./schedule-control");
 
 describe("ScheduleControl", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("presses no pill and disables none while scheduling is off", () => {
     const html = renderToStaticMarkup(
       React.createElement(ScheduleControl, {
         schedule: "off",
         scheduleIntervalDays: null,
+        lastRunAt: null,
         keySource: "own",
         providerLabel: "Claude",
       }),
@@ -38,6 +43,8 @@ describe("ScheduleControl", () => {
     for (const label of ["Run daily", "Run weekly", "Set a schedule"]) {
       expect(html).toContain(label);
     }
+    // Nothing is coming, so the card does not invent a date.
+    expect(html).not.toContain("Your next report is scheduled");
   });
 
   it("shows the saved day count beside an active custom schedule", () => {
@@ -45,6 +52,7 @@ describe("ScheduleControl", () => {
       React.createElement(ScheduleControl, {
         schedule: "custom",
         scheduleIntervalDays: 21,
+        lastRunAt: "2026-09-01T08:00:00Z",
         keySource: "trial",
         providerLabel: "Claude",
       }),
@@ -60,5 +68,40 @@ describe("ScheduleControl", () => {
     expect(html).toContain('value="21"');
     expect(html).toContain("every");
     expect(html).toContain("days");
+  });
+
+  it("names the next report date under an active schedule that will run", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T12:00:00Z"));
+    const html = renderToStaticMarkup(
+      React.createElement(ScheduleControl, {
+        schedule: "weekly",
+        scheduleIntervalDays: null,
+        lastRunAt: "2026-09-22T08:06:30Z",
+        keySource: "own",
+        providerLabel: "Claude",
+      }),
+    );
+
+    expect(html).toContain(
+      "Your next report is scheduled for September 29, 2026, around 8:00 UTC.",
+    );
+  });
+
+  it("does not promise a date when the cron will skip the schedule", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T12:00:00Z"));
+    const html = renderToStaticMarkup(
+      React.createElement(ScheduleControl, {
+        schedule: "weekly",
+        scheduleIntervalDays: null,
+        lastRunAt: "2026-09-22T08:06:30Z",
+        keySource: "exhausted",
+        providerLabel: "Claude",
+      }),
+    );
+
+    expect(html).toContain("your free runs are used up");
+    expect(html).not.toContain("Your next report is scheduled");
   });
 });

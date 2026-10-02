@@ -14,7 +14,7 @@ import { detectMention, brandTerms } from "@/lib/mentions";
 import { pageKey } from "@/lib/metrics";
 import { analysisModelFor, modelLabel } from "@/lib/models";
 import { spendMicros } from "@/lib/pricing";
-import { recordOps, recordOpsError } from "@/lib/ops";
+import { recordOps, recordOpsError, signatureOf } from "@/lib/ops";
 import { logActivity } from "@/lib/activity";
 import { selectAll } from "@/lib/paging";
 import { recordRun, withSpan } from "@/lib/otel";
@@ -32,11 +32,113 @@ export interface RunContext {
 }
 
 // Run at most this many queries at once. Low enough to stay under provider
-// rate limits, high enough that a full-size run finishes inside the 300s
+// rate limits, high enough that a full-size run finishes inside the
 // invocation ceiling: 60 answers with web search on a slow engine run ~20s
-// each, and at 4-wide that exact workload was killed at the cap three times,
-// seconds short of done. 8-wide it clears the ceiling with half left over.
+// each, and at 4-wide that exact workload was killed at the (then 300s) cap
+// three times, seconds short of done. 8-wide it clears the ceiling with room
+// to spare, but a run has no natural size, so the width alone cannot promise
+// that; RUN_TIME_BUDGET_MS below is what does.
 const CONCURRENCY = 8;
+
+// The ceiling on the routes that exist to run a monitor — `/api/runs`,
+// `/api/v1/projects/[id]/runs`, `/api/cron/run` — all of which declare
+// `maxDuration = 800`: the platform kills the invocation at this point,
+// mid-answer, and nothing after it runs.
+//
+// It is NOT the only ceiling a run can be started under. The onboarding
+// sweep (`/api/onboarding/complete`, `/api/v1/onboard`) and the MCP
+// `trigger_run` tool (`/api/mcp/[transport]`) declare `maxDuration = 300`,
+// and a run started there gets 300 seconds, not 800. Those callers pass
+// their own ceiling through `invocationCeilingMs`; see `runTimeBudgetFor`.
+export const INVOCATION_CEILING_MS = 800 * 1000;
+
+// Stop dispatching NEW asks this long after the run started, so the asks
+// already in flight can finish, be stored and the run settle its own row
+// before the ceiling. The margin is sized from the slowest engine's tail:
+// GPT-5.6 Luna answers in 15s at the median and 56s at p99 (8 days to
+// 2026-09-12), so the widest pool of in-flight asks plus the enrichment call
+// and the final writes fits inside two minutes with room to spare. A run that
+// went past this instead of stopping was the 09:00 UTC 2026-09-11 Luna run:
+// 208 answers planned, 201 stored, killed at 797s with seven asks in flight
+// and left reading "running" for 23 hours until the sweeper found it.
+export const TIME_BUDGET_RESERVE_MS = 120 * 1000;
+
+/**
+ * The dispatch budget for a run started under `invocationCeilingMs`. Always
+ * derive it from the CALLER'S ceiling rather than reaching for
+ * `RUN_TIME_BUDGET_MS`: a 680-second budget inside a 300-second invocation is
+ * no budget at all — the platform kill always arrives first, the run never
+ * settles its own row, and it reads "running" until a sweep or an admin page
+ * view finds it (INC-432, three onboarding sweeps stranded on 2026-09-22).
+ *
+ * Floored at a third of the ceiling so a future short-ceiling caller reserves
+ * time to settle without being left unable to dispatch anything at all.
+ */
+export function runTimeBudgetFor(invocationCeilingMs: number): number {
+  return Math.max(
+    Math.floor(invocationCeilingMs / 3),
+    invocationCeilingMs - TIME_BUDGET_RESERVE_MS,
+  );
+}
+
+export const RUN_TIME_BUDGET_MS = runTimeBudgetFor(INVOCATION_CEILING_MS);
+
+/**
+ * Time held back, out of the reserve, for the run to settle once the last ask
+ * has returned: the run row, the project row, the activity record and the ops
+ * event. Everything before that point may be spent waiting on an answer.
+ */
+export const SETTLE_MARGIN_MS = 15 * 1000;
+
+/**
+ * Whether an ask gave up on the run's deadline rather than failing outright.
+ *
+ * Matched on the name rather than with `instanceof`: a dozen test files replace
+ * `@/lib/llm` wholesale, and a class imported purely for an identity check is a
+ * class every one of those mocks has to remember to re-export. The name is part
+ * of the error's contract either way.
+ */
+function isDeadlineExceeded(err: unknown): boolean {
+  return err instanceof Error && err.name === "DeadlineExceededError";
+}
+
+/**
+ * The point at which an ask already in flight must give up.
+ *
+ * `startedMs + timeBudgetMs + TIME_BUDGET_RESERVE_MS` is the invocation's kill
+ * time for every caller: the default budget is the ceiling minus the reserve,
+ * and the cron shortens the budget by the time its tick has already spent, so
+ * the sum lands on the tick's own ceiling either way. Back off the settle
+ * margin from that and an ask dispatched at the last possible moment still
+ * hands control back with time to record what happened.
+ *
+ * Without this the budget only gates NEW asks, and a Gemini Pro ask dispatched
+ * a moment under the budget could run another 330s into the platform kill —
+ * the exact failure the budget was supposed to prevent (INC-432).
+ */
+export function askDeadlineFor(startedMs: number, timeBudgetMs: number): number {
+  return startedMs + timeBudgetMs + TIME_BUDGET_RESERVE_MS - SETTLE_MARGIN_MS;
+}
+
+/**
+ * Stop dispatching once this many asks have failed with the same error before
+ * a single answer was stored.
+ *
+ * A run's asks all share one key, one route, one model and one request shape,
+ * so when the first several fail identically the rest will too, and every one
+ * of them is still a call made. From 2026-09-23 to 2026-09-26 Concentrate
+ * rejected every forced web-search Anthropic call (see isToolChoiceMismatch),
+ * and each affected run still sent all of its asks: ~9,000 calls across 77
+ * runs for zero answers. That rejection happened not to be billed. A failure
+ * that lands after the provider has generated (a malformed reply, a parse
+ * error) would be, on every ask.
+ *
+ * Only a run that has stored nothing can trip it, and only on one repeated
+ * error: a run that has shown it can answer, or whose failures differ, is
+ * having transient trouble rather than a broken setup, and keeps going. Equal
+ * to CONCURRENCY so the whole first wave has to fail before the run gives up.
+ */
+export const FAIL_FAST_AFTER = CONCURRENCY;
 
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
@@ -70,7 +172,10 @@ export function isOwnedDomain(sourceDomain: string, ownedHost: string): boolean 
   return sourceDomain === ownedHost || sourceDomain.endsWith(`.${ownedHost}`);
 }
 
-async function mapPool<T, R>(
+/** Run `fn` over `items` at most `limit` at a time, results in input order.
+ *  Shared with the daily sweep, which pools projects the same way this pools
+ *  a run's asks. */
+export async function mapPool<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
@@ -98,6 +203,13 @@ export interface RunResult {
   /** Set when the run stopped early because the free-tier ceiling was reached:
    *  the answers stored are real, there are just fewer of them than planned. */
   budgetStopped?: boolean;
+  /** Set when the run stopped early because it was about to outlive its
+   *  serverless invocation: the answers stored are real, the rest were never
+   *  asked, and the run row says so rather than being found dead later. */
+  timeStopped?: boolean;
+  /** Set when the run stopped early because its first FAIL_FAST_AFTER asks all
+   *  failed with the same error and none succeeded: the rest were never sent. */
+  failFastStopped?: boolean;
   error?: string;
 }
 
@@ -212,6 +324,7 @@ export interface ExecuteRunParams {
    * so honestly with null rather than guess.
    */
   keySource?: "own" | "trial" | null;
+  reportGroupId?: string | null;
   /**
    * How much operator money this run may spend, in micro-dollars. Omit (or
    * null) for a run on the user's own key, where there is nothing for us to
@@ -223,6 +336,19 @@ export interface ExecuteRunParams {
    * because the cost of an answer isn't known until it arrives.
    */
   budgetMicros?: number | null;
+  /**
+   * Wall-clock allowance for dispatching asks, measured from the run's
+   * started_at. Defaults to RUN_TIME_BUDGET_MS, which is derived from the
+   * routes' invocation ceiling; only tests and a host with a different
+   * ceiling have reason to pass anything else.
+   */
+  timeBudgetMs?: number;
+  /**
+   * Wall-clock epoch ms at which an ask already in flight must give up.
+   * Defaults to `askDeadlineFor(startedMs, timeBudgetMs)`; only tests have
+   * reason to pass anything else.
+   */
+  askDeadlineMs?: number;
 }
 
 /** A run row already created and logged, plus everything the job loop needs. */
@@ -309,6 +435,7 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
       // engine that answered is what the run measured.
       route: route?.router ?? null,
       key_source: params.keySource ?? null,
+      report_group_id: params.reportGroupId ?? null,
       // Planned ANSWERS, not prompts — this is what the UI counts against.
       prompt_count: jobs.length,
       completed_count: 0,
@@ -376,6 +503,7 @@ async function resumeRunMeasured(
 ): Promise<RunResult> {
   const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
   const { runId, jobs, competitors, attribution, startedMs, startedAt } = prepared;
+  const timeBudgetMs = params.timeBudgetMs ?? RUN_TIME_BUDGET_MS;
 
   if (jobs.length === 0) {
     await supabase
@@ -413,6 +541,29 @@ async function resumeRunMeasured(
   let budgetStopped = false;
   const overBudget = () => ceiling !== null && spentMicros >= ceiling;
 
+  // The clock is the other ceiling. A run that outlives its invocation is not
+  // slow, it is killed: the asks in flight are lost, the row stays "running",
+  // and a client polling for a terminal status waits until a sweeper notices.
+  // Stopping short of that point costs the unasked answers either way; this
+  // way the run says so itself, immediately, in its own row.
+  let timeStopped = false;
+  // Asks that were dispatched but gave up on the deadline. They count towards
+  // `processed`, so without tracking them the shortfall the run reports would
+  // read zero while several answers are in fact missing.
+  let timedOutAsks = 0;
+  const outOfTime = () => Date.now() - startedMs >= timeBudgetMs;
+  // The budget gates dispatch; this gates the ask itself, so a slow provider
+  // cannot carry the run past the kill on an ask that started in time.
+  const askDeadlineMs = params.askDeadlineMs ?? askDeadlineFor(startedMs, timeBudgetMs);
+
+  // The third ceiling: a run whose first asks all fail the same way is broken,
+  // not unlucky (FAIL_FAST_AFTER). Compared by signature, so the same error with
+  // a different retry-after or request id still counts as the same error.
+  let failFastStopped = false;
+  let firstFailureSig: string | null = null;
+  let identicalFailures = 0;
+  let failuresDiffer = false;
+
   await mapPool(jobs, CONCURRENCY, async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
     // the point where in-flight answers have already reported their cost. Jobs
@@ -422,14 +573,20 @@ async function resumeRunMeasured(
       budgetStopped = true;
       return;
     }
+    if (outOfTime()) {
+      timeStopped = true;
+      return;
+    }
+    if (failFastStopped) return;
     try {
-      const { text: answer, tokens: qTokens, sources } = await runQuery({
+      const { text: answer, tokens: qTokens, sources, fallback } = await runQuery({
         provider,
         model,
         apiKey,
         route,
         prompt: prompt.text,
         webSearch: project.use_web_search,
+        deadlineMs: askDeadlineMs,
       });
       tokensUsed += qTokens;
       spentMicros += spendMicros({
@@ -438,6 +595,26 @@ async function resumeRunMeasured(
         tokens: qTokens,
         webSearch: project.use_web_search,
       });
+      if (fallback) {
+        // A distinct, own-kind signal (not folded into engine.answer, which
+        // is errors only) so "answered via fallback" is a rate we can chart
+        // and alert on rather than something buried in a span attribute. This
+        // is how a gateway breaking tool_choice (Concentrate, since
+        // 2026-09-23 — see isToolChoiceMismatch) gets measured for as long as
+        // it stays broken: every run this fires on asked for a grounded
+        // answer and got an ungrounded one instead.
+        recordOps("engine.answer.fallback", {
+          level: "warn",
+          signature: `engine.answer.fallback: ${fallback}`,
+          sample: {
+            provider,
+            model,
+            route: route?.router ?? "direct",
+            key_source: params.keySource ?? "unknown",
+            reason: fallback,
+          },
+        });
+      }
 
       const { data: respRow } = await supabase
         .from("responses")
@@ -538,6 +715,7 @@ async function resumeRunMeasured(
           question: prompt.text,
           responseText: answer,
           entities,
+          deadlineMs: askDeadlineMs,
         });
         tokensUsed += aTokens;
         // Classification runs on the provider's cheap model and never searches,
@@ -572,12 +750,40 @@ async function resumeRunMeasured(
         await supabase.from("mentions").insert(mentionRows);
       }
     } catch (err) {
+      if (isDeadlineExceeded(err)) {
+        // Not a provider failure: the run ran out of invocation while this ask
+        // was in flight. Giving up here is what buys the settle path its time,
+        // and recording it as an engine error would make a merely slow Google
+        // indistinguishable from a Google that has stopped answering.
+        timeStopped = true;
+        timedOutAsks++;
+        return;
+      }
       // A single failed ask shouldn't kill the whole run.
-      if (!hardError) hardError = humanError(err);
+      const message = humanError(err);
+      if (!hardError) hardError = message;
       // ...but every one of them is recorded. Only the FIRST becomes the run's
       // error message, so without this a run that lost 90 of 100 answers to a
       // rate limit looks identical to one that lost a single answer.
-      recordOpsError("engine.answer", err, { provider, model, route: route?.router ?? "direct" });
+      // key_source travels with the error because the alarms have to tell a
+      // customer's own exhausted key from ours. Route is not that signal: a
+      // trial run falls back to the per-provider TRIAL_*_API_KEY on the direct
+      // route whenever Concentrate cannot serve the engine, so "direct" covers
+      // both wallets and a muted-by-route rule hides the operator's own
+      // credit exhaustion behind an identical message.
+      recordOpsError("engine.answer", err, {
+        provider,
+        model,
+        route: route?.router ?? "direct",
+        key_source: params.keySource ?? "unknown",
+      });
+      // The same failure on every ask before any answer is a broken run, though.
+      if (succeeded === 0 && !failuresDiffer) {
+        const sig = signatureOf(message);
+        firstFailureSig ??= sig;
+        if (sig !== firstFailureSig) failuresDiffer = true;
+        else if (++identicalFailures >= FAIL_FAST_AFTER) failFastStopped = true;
+      }
     } finally {
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
@@ -596,11 +802,21 @@ async function resumeRunMeasured(
   // answers that were stored are as good as any other run's. But it IS a
   // shortfall, and a run that silently returns 40 of 200 answers would look
   // like the prompts stopped working. Say which it was, in the run's own row.
-  const shortfall = budgetStopped ? jobs.length - processed : 0;
+  const stoppedEarly = budgetStopped || timeStopped || failFastStopped;
+  const shortfall = stoppedEarly ? jobs.length - processed + timedOutAsks : 0;
   const budgetNote = budgetStopped
     ? `Stopped after ${succeeded} of ${jobs.length} answers: this account reached its free-usage limit. ` +
       `Add your own provider key in Settings to run the remaining ${shortfall}.`
+    : timeStopped
+      ? `Stopped after ${succeeded} of ${jobs.length} answers: the run reached its ${Math.round(timeBudgetMs / 60000)}-minute time limit. ` +
+        `Run it again to collect the remaining ${shortfall}, or split the project's prompts across fewer engines per run.`
+      : null;
+  // Appended to the provider's error rather than replacing it: the error is the
+  // diagnosis, this only says why most of the run was never asked.
+  const failFastNote = failFastStopped
+    ? `Stopped after the first ${identicalFailures} asks all failed with this same error; the other ${shortfall} were not sent.`
     : null;
+  const diagnosis = hardError && failFastNote ? `${hardError} (${failFastNote})` : hardError;
   await supabase
     .from("runs")
     .update({
@@ -609,8 +825,8 @@ async function resumeRunMeasured(
       finished_at: finishedAt,
       error:
         status === "failed"
-          ? hardError ?? budgetNote ?? "No answers were stored, every prompt failed."
-          : budgetNote,
+          ? diagnosis ?? budgetNote ?? "No answers were stored, every prompt failed."
+          : budgetNote ?? failFastNote,
     })
     .eq("id", runId);
 
@@ -628,8 +844,10 @@ async function resumeRunMeasured(
       status === "completed"
         ? budgetStopped
           ? `Run stopped at the free-usage limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
-          : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
-        : `Run failed: ${hardError ?? budgetNote ?? "no answers were stored"}`,
+          : timeStopped
+            ? `Run stopped at the time limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+            : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+        : `Run failed: ${diagnosis ?? budgetNote ?? "no answers were stored"}`,
     durationMs: Date.now() - startedMs,
     metadata: {
       provider,
@@ -639,6 +857,8 @@ async function resumeRunMeasured(
       tokens_used: tokensUsed,
       spend_micros: spentMicros,
       ...(budgetStopped ? { budget_stopped: true, unrun_prompts: shortfall } : {}),
+      ...(timeStopped ? { time_stopped: true, unrun_prompts: shortfall } : {}),
+      ...(failFastStopped ? { fail_fast_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
     },
   });
@@ -660,6 +880,8 @@ async function resumeRunMeasured(
       failed: jobs.length - succeeded,
       duration_ms: Date.now() - startedMs,
       budget_stopped: Boolean(budgetStopped),
+      time_stopped: Boolean(timeStopped),
+      fail_fast_stopped: failFastStopped,
     },
   });
 
@@ -670,6 +892,8 @@ async function resumeRunMeasured(
     tokensUsed,
     spendMicros: spentMicros,
     ...(budgetStopped ? { budgetStopped: true } : {}),
+    ...(timeStopped ? { timeStopped: true } : {}),
+    ...(failFastStopped ? { failFastStopped: true } : {}),
     error: hardError,
   };
 }

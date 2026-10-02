@@ -37,8 +37,10 @@ import { selectAll } from "@/lib/paging";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
 import {
   executeRun,
+  INVOCATION_CEILING_MS,
   prepareRun,
   resumeRun,
+  runTimeBudgetFor,
   isAbandoned,
   settleAbandonedRun,
   INTERRUPTED_RUN_ERROR,
@@ -1232,6 +1234,14 @@ export async function triggerRunForProject(
      *  response is sent (a run takes minutes — no client should hold the
      *  connection that long). Poll GET /v1/runs/:id/status to follow it. */
     background?: boolean;
+    /**
+     * The calling route's `maxDuration` in milliseconds. The MCP transport
+     * declares 300 seconds where the run routes declare 800, and the engine's
+     * dispatch budget has to be derived from whichever one actually applies —
+     * otherwise a slow engine is killed mid-answer and the run row is left
+     * reading "running". Defaults to the 800-second ceiling.
+     */
+    invocationCeilingMs?: number;
   },
 ): Promise<TriggerOutcome> {
   const project = await getAccessibleProject(supabase, userId, projectId);
@@ -1304,6 +1314,7 @@ export async function triggerRunForProject(
     keySource: key.source,
     budgetMicros: runBudgetMicros(key),
     context: options?.context,
+    timeBudgetMs: runTimeBudgetFor(options?.invocationCeilingMs ?? INVOCATION_CEILING_MS),
   };
 
   // Bill the operator's shared key once the cost is known. Tokens for

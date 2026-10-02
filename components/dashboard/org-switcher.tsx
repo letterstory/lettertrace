@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftRight, Check, ChevronsUpDown, Plus } from "lucide-react";
+import { hostOf } from "@/lib/brand-name";
 import { cn } from "@/lib/utils";
 
 export interface OrgOption {
@@ -12,10 +13,21 @@ export interface OrgOption {
   name: string;
   /** Brand being monitored (projects.brand_name). */
   brandName: string;
+  /** Primary brand domain (projects.brand_domains[0]). */
+  domain: string | null;
   /** Somebody else's organization, joined by invitation. Worth a mark in the
    *  list: which of these is YOURS decides whether a destructive setting is
    *  even offered, and finding that out by clicking is the wrong way. */
   shared?: boolean;
+}
+
+// The closed button's second line is the primary domain, not the workspace
+// name. The name repeated the brand whenever they matched, which is the usual
+// case: onboarding copies brand_name into name. An org with no domain shows
+// no second line rather than falling back to that name.
+export function orgButtonHost(domain: string | null | undefined): string | null {
+  const host = hostOf(domain ?? null);
+  return host || null;
 }
 
 // Sidebar organization switcher: pick which of the account's organizations the
@@ -38,6 +50,7 @@ export function OrgSwitcher({
   // What the button shows: the org we're switching to wins until the server
   // catches up (activeId prop updates after the refresh).
   const shown = pendingOrg ?? active;
+  const host = orgButtonHost(shown?.domain);
 
   // The switch is done once the re-rendered layout hands us the new activeId.
   useEffect(() => {
@@ -95,9 +108,9 @@ export function OrgSwitcher({
           <span className="block truncate font-serif text-sm font-semibold text-ink">
             {shown?.brandName ?? "Select organization"}
           </span>
-          <span className="mt-0.5 block truncate text-xs text-ink-faint">
-            {shown?.name}
-          </span>
+          {host && (
+            <span className="mt-0.5 block truncate text-xs text-ink-faint">{host}</span>
+          )}
         </span>
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-ink-faint" aria-hidden />
       </button>

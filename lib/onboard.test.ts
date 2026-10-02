@@ -23,7 +23,8 @@ vi.mock("@/lib/data", () => ({
   getConfiguredProviders: vi.fn(async () => []),
   getRouterKeysPublic: vi.fn(async () => []),
 }));
-vi.mock("@/lib/engine", () => ({
+vi.mock("@/lib/engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/engine")>()),
   executeRun: vi.fn(),
   prepareRun: vi.fn(),
   resumeRun: vi.fn(),
@@ -118,6 +119,8 @@ const PROJECT: Project = {
   schedule: "off",
   schedule_interval_days: null,
   use_web_search: true,
+  report_emails_enabled: false,
+  schedule_skip_alerted_at: null,
   replicates: 1,
   last_run_at: null,
   created_at: "2026-09-01T00:00:00Z",
@@ -491,6 +494,9 @@ describe("onboardFromUrl", () => {
       description: "Payroll for platform teams.",
       schedule: "off",
     });
+    // Report delivery follows the column default (on). Writing the flag here
+    // would freeze every onboarded organization at off.
+    expect(inserted(db, "projects")[0]).not.toHaveProperty("report_emails_enabled");
     expect(outcome.saved).toEqual({ topics: 1, prompts: 1, competitors: 1 });
     // Then exactly one free run for the one trial-covered engine.
     expect(m.consume).toHaveBeenCalledTimes(1);

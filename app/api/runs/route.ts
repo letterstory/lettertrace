@@ -6,6 +6,13 @@ import { executeRun } from "@/lib/engine";
 import { humanError } from "@/lib/llm";
 import { article } from "@/lib/utils";
 import { PROVIDERS, isProvider, resolveEngine } from "@/lib/models";
+import { sendSingleReportAttempt } from "@/lib/report-email-delivery";
+import {
+  finalizeGroupIfComplete,
+  loadGroup,
+  recordGroupSkip,
+  touchGroup,
+} from "@/lib/report-groups";
 import {
   resolveRunKey,
   resolveRunKeyFor,
@@ -39,10 +46,16 @@ export async function POST(request: Request) {
   }
 
   let overrideProvider: string | null = null;
+  let groupId: string | null = null;
   try {
-    const body = (await request.json()) as { provider?: unknown } | null;
+    const body = (await request.json()) as { provider?: unknown; groupId?: unknown } | null;
     if (typeof body?.provider === "string" && body.provider.length > 0) {
       overrideProvider = body.provider;
+    }
+    // Which batch this run belongs to, so N runs produce one email instead of
+    // N. The browser supplies it because the browser is what drives the batch.
+    if (typeof body?.groupId === "string" && body.groupId.length > 0) {
+      groupId = body.groupId;
     }
   } catch {
     // No/invalid body: run the project default, as this endpoint always has.
@@ -63,6 +76,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: engine.message }, { status: 400 });
   }
   const providerLabel = PROVIDERS[engine.provider].label;
+
+  // A group id arrives from the browser, so nothing about it is trusted. The
+  // database enforces the project match a second time (guard_run_report_group),
+  // but a refusal here is a 400 the caller can read instead of a 23514 from
+  // inside executeRun, after the run row already exists.
+  if (groupId !== null) {
+    const group = await loadGroup(supabase, groupId);
+    if (!group || group.project_id !== project.id) {
+      return NextResponse.json({ error: "That report batch doesn't belong to this organization." }, { status: 400 });
+    }
+    if (group.email_status !== "pending") {
+      return NextResponse.json({ error: "That report batch has already been summarised." }, { status: 409 });
+    }
+    if (!group.requested_providers.includes(engine.provider)) {
+      return NextResponse.json({ error: `${providerLabel} wasn't part of that report batch.` }, { status: 400 });
+    }
+  }
+
   // An override resolves like any run for that engine, trial included: the
   // trial funds multi-engine runs (each one atomically consumes a free run
   // below, so a 3-engine sweep costs 3 of the allowance — that's the deal the
@@ -80,6 +111,22 @@ export async function POST(request: Request) {
   // move the owner's trial meters, which is exactly the point.
   const billing = createServiceClient();
   const payer = project.user_id;
+
+  /**
+   * Account for an engine that will never produce a run, then close the batch
+   * if it was the last one outstanding. Deliberately NOT an email of its own:
+   * the caller is shown engineKeyMessage inline, and the batch's single email
+   * repeats it once at the end.
+   */
+  const recordRefusal = async (reason: string) => {
+    if (groupId === null) return;
+    try {
+      await recordGroupSkip(billing, groupId, engine.provider, reason);
+      await finalizeGroupIfComplete(billing, groupId);
+    } catch (cause) {
+      console.error(`[report-groups] could not record ${engine.provider} refusal: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  };
   const key = overrideProvider
     ? await resolveRunKeyFor(billing, payer, engine.provider, engine.model, {
         webSearch: project.use_web_search,
@@ -95,13 +142,24 @@ export async function POST(request: Request) {
     ? `Add your own ${providerLabel} key in Settings to keep monitoring.`
     : `This organization's owner needs to add ${article(providerLabel)} ${providerLabel} key to keep monitoring.`;
   const notOwnerNote = " The keys for this organization belong to its owner, not to you.";
+  // A reason stored on a batch is read later by the OWNER, in one email, so it
+  // carries the fix rather than the clicker's point of view.
+  const exhaustedReason = `All ${key.limit ?? 0} free runs are used up. Add ${article(providerLabel)} ${providerLabel} key in Settings to keep monitoring.`;
 
   // The selected engine has no key. Refusing beats running: the alternative is
   // storing another assistant's answers under this project's trend line.
   // 'unroutable' belongs here too: the user holds a credential that reaches this
   // engine, but not one that can measure it comparably. engineKeyMessage carries
   // the reason and the fix.
+  //
+  // None of these three refusals sends an email. Nothing ran, so there is no
+  // report to mail; the caller is reading the reason in the response as they
+  // click. Mailing here also put a Resend round trip in front of a reply that
+  // used to be instant, and let a user with no key generate one message per
+  // click. A DUE SCHEDULED run that cannot start is the opposite case — nobody
+  // is watching that one — and still mails, from the cron route.
   if (key.source === "none" || key.source === "mismatch" || key.source === "unroutable") {
+    await recordRefusal(engineKeyMessage(key));
     return NextResponse.json(
       {
         error: engineKeyMessage(key) + (owned ? "" : notOwnerNote),
@@ -111,6 +169,7 @@ export async function POST(request: Request) {
     );
   }
   if (key.source === "exhausted") {
+    await recordRefusal(exhaustedReason);
     return NextResponse.json(
       {
         error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,
@@ -125,6 +184,7 @@ export async function POST(request: Request) {
   // counts even if it later fails.
   // A comped account runs on the trial keys without spending its run allowance.
   if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(billing, payer))) {
+    await recordRefusal(exhaustedReason);
     return NextResponse.json(
       {
         error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,
@@ -134,6 +194,7 @@ export async function POST(request: Request) {
     );
   }
 
+  let completedRunId: string | undefined;
   try {
     const result = await executeRun({
       supabase,
@@ -144,6 +205,7 @@ export async function POST(request: Request) {
       route: key.route,
       keySource: key.source,
       budgetMicros: runBudgetMicros(key),
+      reportGroupId: groupId,
       context: {
         channel: "dashboard",
         actorType: "user",
@@ -151,6 +213,7 @@ export async function POST(request: Request) {
         actorLabel: user.email ?? "You",
       },
     });
+    completedRunId = result.runId;
 
     // Bill the operator's shared key. Tokens for visibility, dollars for the
     // ceiling — the run may already have stopped itself on that ceiling, but it
@@ -158,6 +221,16 @@ export async function POST(request: Request) {
     if (key.source === "trial") {
       await recordTrialUsageFor(billing, payer, result.tokensUsed);
       await recordTrialSpendFor(billing, payer, result.spendMicros);
+    }
+
+    // One email per batch, or one per run when there is no batch. A grouped run
+    // only nudges its batch; the batch mails once its last engine is accounted
+    // for, which may be this run or may be a later one.
+    if (groupId !== null) {
+      await touchGroup(billing, groupId);
+      await finalizeGroupIfComplete(billing, groupId);
+    } else {
+      await sendSingleReportAttempt(billing, project, { provider: key.provider, model: key.model }, result.runId);
     }
 
     // Echo the engine that actually answered. The caller asked for
@@ -172,6 +245,19 @@ export async function POST(request: Request) {
       route: key.route?.router ?? null,
     });
   } catch (e) {
+    if (groupId !== null) {
+      // A run row that exists already accounts for this engine, whatever state
+      // it settles in. A throw BEFORE the row was written leaves nothing behind
+      // to account for it, so record the reason or the batch waits for an
+      // engine that will never report.
+      if (completedRunId === undefined) await recordRefusal(humanError(e));
+      else {
+        await touchGroup(billing, groupId);
+        await finalizeGroupIfComplete(billing, groupId);
+      }
+    } else {
+      await sendSingleReportAttempt(billing, project, engine, completedRunId);
+    }
     return NextResponse.json({ error: humanError(e) }, { status: 500 });
   }
 }

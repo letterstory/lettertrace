@@ -8,6 +8,9 @@ import {
   suggestCompetitors,
   humanError,
   GoogleAPIError,
+  DeadlineExceededError,
+  attemptWindowMs,
+  retryFitsDeadline,
 } from "./index";
 import { GOOGLE_AI_OVERVIEWS_MODEL, PROVIDERS } from "@/lib/models";
 
@@ -707,5 +710,111 @@ describe("humanError for google", () => {
     expect(humanError(new Error("Gemini returned no answer (the response contained no candidates)."))).toMatch(
       /no candidates/,
     );
+  });
+});
+
+// --- The run's deadline ---------------------------------------------------
+// A Google ask is the longest thing a run can be waiting on: four attempts at
+// 60s plus up to 90s of backoff, about 330s, against a 300s invocation on the
+// onboarding and MCP routes. The dispatch budget in lib/engine cannot help —
+// it only decides whether a NEW ask may start. On 2026-09-22 that is what
+// stranded three onboarding sweeps (INC-432): the ask started in time, ran
+// past the platform kill, and the run never settled its own row.
+
+describe("an attempt window under a deadline", () => {
+  it("is the per-attempt timeout when there is no deadline", () => {
+    expect(attemptWindowMs(60_000, undefined, 0)).toBe(60_000);
+  });
+
+  it("shrinks to whatever is left when the deadline is nearer", () => {
+    expect(attemptWindowMs(60_000, 10_000, 0)).toBe(10_000);
+  });
+
+  it("is zero once the deadline has passed, so no attempt is started", () => {
+    expect(attemptWindowMs(60_000, 1_000, 5_000)).toBe(0);
+  });
+});
+
+describe("whether a retry is worth starting", () => {
+  it("allows one that can sleep and still answer in time", () => {
+    expect(retryFitsDeadline(12_000, 20_000, 100_000, 0)).toBe(true);
+  });
+
+  it("refuses one whose sleep alone runs past the deadline", () => {
+    expect(retryFitsDeadline(45_000, 20_000, 40_000, 0)).toBe(false);
+  });
+
+  // The subtle one: there is room for the sleep, but not for the request
+  // afterwards, so the retry spends the run's last seconds and dies anyway.
+  it("refuses one that leaves no room for the attempt after the sleep", () => {
+    expect(retryFitsDeadline(12_000, 20_000, 20_000, 0)).toBe(false);
+  });
+
+  it("is unbounded when the caller set no deadline", () => {
+    expect(retryFitsDeadline(45_000, 20_000, undefined, 0)).toBe(true);
+  });
+});
+
+describe("google runQuery under a deadline", () => {
+  it("does not call Google at all once the deadline has passed", async () => {
+    mockFetch(jsonResponse(ok("hi")));
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "gemini-pro-latest",
+        apiKey: KEY,
+        prompt: "q",
+        deadlineMs: Date.now() - 1,
+      }),
+    ).rejects.toBeInstanceOf(DeadlineExceededError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips a retry it cannot finish, instead of sleeping into the kill", async () => {
+    // Google asks for 12s; with only 5s left, honouring it would put the
+    // retry on the wire after the invocation is already dead.
+    mockFetch(
+      jsonResponse(
+        {
+          error: {
+            code: 429,
+            message: "Quota exceeded",
+            status: "RESOURCE_EXHAUSTED",
+            details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "12s" }],
+          },
+        },
+        429,
+      ),
+    );
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "gemini-pro-latest",
+        apiKey: KEY,
+        prompt: "q",
+        deadlineMs: Date.now() + 5_000,
+      }),
+    ).rejects.toThrow(/Quota exceeded/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on the deadline while an answer is still in flight", async () => {
+    // The Gemini Pro shape from 2026-09-22: Google is answering, just not
+    // fast enough. The ask has to hand control back so the run can settle.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    const startedMs = Date.now();
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "gemini-pro-latest",
+        apiKey: KEY,
+        prompt: "q",
+        deadlineMs: startedMs + 50,
+      }),
+    ).rejects.toBeInstanceOf(DeadlineExceededError);
+    expect(Date.now() - startedMs).toBeLessThan(5_000);
   });
 });

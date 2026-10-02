@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardBody } from "@/components/ui";
-import { scheduleLabel } from "@/lib/utils";
+import { nextReportScheduleMessage, scheduleLabel } from "@/lib/utils";
 import {
   SchedulePicker,
   type ActiveSchedule,
@@ -15,12 +15,16 @@ import type { Schedule } from "@/lib/types";
 export function ScheduleControl({
   schedule: saved,
   scheduleIntervalDays: savedIntervalDays,
+  lastRunAt,
   keySource,
   providerLabel,
 }: {
   schedule: Schedule;
   /** Days between runs when schedule is 'custom'; ignored otherwise. */
   scheduleIntervalDays: number | null;
+  /** When the project last ran. The next-report date is this day plus the
+   *  interval; null means it has never run and the next 08:00 UTC is due. */
+  lastRunAt: string | null;
   /** Whose key the next run would use. Scheduled runs are strictly self-funded
    *  (the cron skips anything but 'own'), so any other source means a schedule
    *  set here silently never fires — the exact state this control exists to
@@ -107,6 +111,12 @@ export function ScheduleControl({
           intervalDays={rememberedIntervalDays}
           disabled={saving}
           onCommit={handleCommit}
+          footer={({ enabled, cadence, intervalDays }) => {
+            if (!enabled || !cadence || !willFire) return null;
+            const message = nextReportScheduleMessage(cadence, intervalDays, lastRunAt, Date.now());
+            if (!message) return null;
+            return <p className="text-xs text-ink-faint">{message}</p>;
+          }}
           description={({ enabled, cadence, intervalDays }) => {
             // `cadence` is null only while nothing is scheduled and nothing
             // is remembered, which is exactly when the copy below reads from

@@ -58,3 +58,23 @@ export function Logo({
     </span>
   );
 }
+
+// The Letter Company glyph (from letterstory-landing-page/public), the parent
+// brand's mark. The source SVG is a single white fill, so it's used as a CSS
+// mask over bg-current: the mark takes the colour of whatever it sits on.
+export function LetterCompanyGlyph({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn("inline-block aspect-square h-6 shrink-0 bg-current", className)}
+      style={{
+        maskImage: "url(/images/lettercompany-glyph.svg)",
+        WebkitMaskImage: "url(/images/lettercompany-glyph.svg)",
+        maskRepeat: "no-repeat",
+        WebkitMaskRepeat: "no-repeat",
+        maskSize: "contain",
+        WebkitMaskSize: "contain",
+      }}
+    />
+  );
+}

@@ -151,6 +151,8 @@ export async function POST(request: Request) {
       userId: ownerId,
       meter: serviceTrialMeter(auth.supabase, ownerId),
       context: apiActor(auth, "v1"),
+      // This route's ceiling, not the run routes' 800 seconds.
+      invocationCeilingMs: maxDuration * 1000,
       input: {
         url,
         brandName: typeof body.brand_name === "string" ? body.brand_name : null,

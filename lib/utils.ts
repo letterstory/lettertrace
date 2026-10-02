@@ -256,6 +256,67 @@ export function isScheduleDue(
   return utcDay(now) - utcDay(last) >= intervalDays;
 }
 
+/** The daily sweep starts at 08:00 UTC (`0 8 * * *` in vercel.json). A
+ *  project's turn is minutes later, which is why the sentence says "around"
+ *  rather than naming the minute. */
+const SCHEDULE_CRON_HOUR_UTC = 8;
+
+const utcScheduleDate = new Intl.DateTimeFormat("en-US", {
+  timeZone: "UTC",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+});
+
+/**
+ * The next 08:00 UTC at which this schedule would be due, or null when
+ * nothing is scheduled. Same whole-UTC-day arithmetic as `isScheduleDue`:
+ * the due day is the UTC day of the last run plus the interval, and the
+ * named instant is 08:00 UTC on that day.
+ *
+ * If that 08:00 has already arrived, the next tick is the following morning.
+ * The page cannot see where a project sits in the sweep, so it does not
+ * invent a grace window after 08:00 — a run already inside today's sweep
+ * moves `last_run_at` when it starts, and the next load names the interval
+ * after that.
+ */
+export function nextScheduledReportAt(
+  schedule: Schedule,
+  intervalDays: number | null,
+  lastRunAt: string | null,
+  now: number,
+): Date | null {
+  const interval = scheduleIntervalDays(schedule, intervalDays);
+  if (!interval) return null;
+
+  const today = utcDay(now);
+  let dueDay = today;
+  if (lastRunAt) {
+    const last = new Date(lastRunAt).getTime();
+    if (Number.isNaN(last)) return null;
+    dueDay = utcDay(last) + interval;
+  }
+
+  let fireDay = Math.max(dueDay, today);
+  const at = (day: number) => day * DAY_MS + SCHEDULE_CRON_HOUR_UTC * 60 * 60 * 1000;
+  // `<=` so the instant the sweep starts, "still ahead" is tomorrow. Before
+  // 08:00 UTC the same calendar day is still ahead.
+  if (at(fireDay) <= now) fireDay += 1;
+  return new Date(at(fireDay));
+}
+
+/** The one sentence that names when the next scheduled report runs. */
+export function nextReportScheduleMessage(
+  schedule: Schedule,
+  intervalDays: number | null,
+  lastRunAt: string | null,
+  now: number,
+): string | null {
+  const at = nextScheduledReportAt(schedule, intervalDays, lastRunAt, now);
+  if (!at) return null;
+  return `Your next report is scheduled for ${utcScheduleDate.format(at)}, around 8:00 UTC.`;
+}
+
 /** SCHEDULE_LABELS plus the actual number for 'custom' (e.g. "Every 14 days"),
  *  since "Every N days" on its own names a shape, not a schedule. */
 export function scheduleLabel(schedule: Schedule, intervalDays: number | null): string {

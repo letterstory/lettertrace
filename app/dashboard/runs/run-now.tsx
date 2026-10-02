@@ -26,6 +26,13 @@ export function RunNow({
   const [error, setError] = useState<string | null>(null);
 
   const disabled = loading || !canRun || activePrompts === 0;
+  const showNote =
+    keySource === "exhausted" ||
+    keySource === "none" ||
+    keySource === "mismatch" ||
+    keySource === "unroutable" ||
+    (canRun && activePrompts === 0) ||
+    error !== null;
 
   async function run() {
     setLoading(true);
@@ -47,7 +54,7 @@ export function RunNow({
   }
 
   return (
-    <div className="flex min-w-0 flex-col items-start gap-1.5">
+    <div className="flex w-max flex-col items-start gap-1.5">
       {/* Just "Running…". The label used to read "Running… this can take a
           minute", which roughly doubled the button's width the moment it was
           clicked — the spinner already says a wait is underway. */}
@@ -60,6 +67,8 @@ export function RunNow({
         <Play className="h-4 w-4" /> Run report now
       </Button>
 
+      {showNote && (
+      <div className="flex w-0 min-w-full flex-col gap-1.5">
       {keySource === "exhausted" && (
         <p className="text-xs text-ink-faint">
           Your free runs are used up. Add your {providerLabel} key in{" "}
@@ -112,6 +121,8 @@ export function RunNow({
         </p>
       )}
       {error && <p className="text-xs text-terracotta">{error}</p>}
+      </div>
+      )}
     </div>
   );
 }

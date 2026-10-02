@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/letterprove-health",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/report-groups",
+      "schedule": "*/15 * * * *"
     }
   ]
 }
