@@ -16,7 +16,7 @@ import { ThemeToggle } from "@/components/theme";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { adminAlertEmails, fireAndForget } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
-import { getProject, getProjects, getConfiguredProviders } from "@/lib/data";
+import { getProject, getProjects, getConfiguredProviders, getRouterKeysPublic } from "@/lib/data";
 import { getUnseenRun } from "@/lib/results-seen";
 import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
 import { modelLabel } from "@/lib/models";
@@ -84,8 +84,8 @@ export default async function DashboardLayout({
   }
 
   // Trial banner state: only when a trial is offered and the account paying for
-  // this organization is relying on shared keys. Key resolution prefers an own
-  // key from EITHER provider, so any own key at all means never on the trial.
+  // this organization is relying on shared keys. Key resolution prefers any own
+  // key (direct or router) over the trial, so holding one means never on it.
   //
   // "The account paying" is the project's OWNER, not the viewer. A teammate
   // looking at a shared organization must see the owner's allowance — that is
@@ -94,10 +94,16 @@ export default async function DashboardLayout({
   // (their own project, or no project yet) this is the same query it was.
   const payer = project?.user_id ?? user.id;
   const payerClient = payer === user.id ? supabase : createServiceClient();
-  const providers = await getConfiguredProviders(payerClient, payer);
+  // A router key is an own key too: the resolvers try it before the trial, so
+  // a Concentrate or OpenRouter user is paying their own way and must not be
+  // told they're on complimentary tokens.
+  const [providers, routerKeys] = await Promise.all([
+    getConfiguredProviders(payerClient, payer),
+    getRouterKeysPublic(payerClient, payer),
+  ]);
 
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
-  if (project && trialEnabled() && providers.length === 0) {
+  if (project && trialEnabled() && providers.length === 0 && routerKeys.length === 0) {
     const used = await getTrialRunsUsed(payerClient, payer);
     const limit = trialRunLimit();
     trial = { used, limit, exhausted: used >= limit };
