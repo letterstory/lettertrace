@@ -26,7 +26,7 @@ import {
 import { MeasurementNote } from "@/components/dashboard/measurement-note";
 import { Onboarding } from "./onboarding";
 import { createClient } from "@/lib/supabase/server";
-import { getConfiguredProviders, getProject } from "@/lib/data";
+import { getConfiguredProviders, getProject, getRouterKeysPublic } from "@/lib/data";
 import {
   computeCitationStats,
   computeEntityStats,
@@ -71,6 +71,7 @@ export default async function DashboardPage() {
     activePromptsCount,
     competitorsCount,
     configuredProviders,
+    routerKeys,
     runsResult,
   ] = await Promise.all([
     supabase
@@ -87,6 +88,7 @@ export default async function DashboardPage() {
       .select("id", { count: "exact", head: true })
       .eq("project_id", project.id),
     getConfiguredProviders(supabase, user.id),
+    getRouterKeysPublic(supabase, user.id),
     supabase
       .from("runs")
       .select("*")
@@ -98,7 +100,9 @@ export default async function DashboardPage() {
   const topics = topicsCount.count ?? 0;
   const activePrompts = activePromptsCount.count ?? 0;
   const competitors = competitorsCount.count ?? 0;
-  const hasKey = configuredProviders.length > 0;
+  // A router key (Concentrate, OpenRouter, Merge) runs monitors as well as a
+  // direct one does; counting only direct keys read "None" to router users.
+  const hasKey = configuredProviders.length > 0 || routerKeys.length > 0;
   const runs = (runsResult.data as Run[] | null) ?? [];
 
   const heading = (

@@ -22,9 +22,8 @@ export function TrialBanner({
 
   // The one moment the router is worth mentioning. A trial user is the likeliest
   // person to want one — they have no provider account yet, and a router is a
-  // single signup instead of one per assistant — but the trial legitimately
-  // outranks a router key everywhere else in the resolver, so they would
-  // otherwise never see it offered. Here the choice is actually in front of them.
+  // single signup instead of one per assistant. The banner disappears once they
+  // save one, since the resolvers use a router key before the trial.
   const router = ROUTER_LIST[0];
 
   return (
