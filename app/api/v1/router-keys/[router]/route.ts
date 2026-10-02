@@ -6,7 +6,8 @@ import {
   verificationSummary,
 } from "@/lib/router-keys";
 import { parseRouterId, unknownRouterMessage } from "@/lib/routers";
-import { logApiRequest } from "@/lib/activity";
+import { deriveChannel, logApiRequest } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +64,17 @@ export async function PUT(
     });
     return NextResponse.json({ error: outcome.message }, { status });
   }
+
+  await captureServerEvent(auth.userId, "provider_key_added", {
+    billing_owner_id: auth.userId,
+    channel: deriveChannel({
+      tokenType: auth.tokenType,
+      clientId: auth.clientId,
+      surface: "v1",
+    }),
+    provider: outcome.key.router,
+    key_kind: "router",
+  }).catch(() => {});
 
   await logApiRequest(auth, request, "v1", {
     category: "router_key",

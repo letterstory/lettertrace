@@ -31,8 +31,11 @@ vi.mock("@/lib/data", () => ({
 }));
 vi.mock("@/lib/llm", () => ({ humanError: (e: unknown) => String(e) }));
 vi.mock("@/lib/activity", () => ({ logDashboard: vi.fn() }));
+vi.mock("@/lib/posthog-server", () => ({ captureServerEvent: vi.fn(async () => {}) }));
 
 const { PATCH } = await import("./route");
+import { getProject } from "@/lib/data";
+import { captureServerEvent } from "@/lib/posthog-server";
 
 function req(body: unknown) {
   return new Request("http://localhost/api/project/schedule", {
@@ -91,6 +94,47 @@ describe("PATCH /api/project/schedule — validation", () => {
         expect.objectContaining({ schedule, schedule_interval_days: null }),
       );
     }
+  });
+
+  it("emits schedule_enabled only when a schedule is turned on", async () => {
+    vi.mocked(getProject).mockResolvedValueOnce({
+      id: "proj-1",
+      user_id: "owner-1",
+      schedule: "off",
+    } as never);
+    const on = await PATCH(req({ schedule: "daily" }));
+    expect(on.status).toBe(200);
+    expect(captureServerEvent).toHaveBeenCalledWith(
+      "user-1",
+      "schedule_enabled",
+      expect.objectContaining({
+        org_id: "proj-1",
+        billing_owner_id: "owner-1",
+        schedule: "daily",
+        channel: "dashboard",
+      }),
+    );
+
+    vi.mocked(captureServerEvent).mockClear();
+    vi.mocked(getProject).mockResolvedValueOnce({
+      id: "proj-1",
+      user_id: "owner-1",
+      schedule: "daily",
+    } as never);
+    const moved = await PATCH(req({ schedule: "weekly" }));
+    expect(moved.status).toBe(200);
+    expect(captureServerEvent).not.toHaveBeenCalled();
+  });
+
+  it("still answers when analytics rejects", async () => {
+    vi.mocked(getProject).mockResolvedValueOnce({
+      id: "proj-1",
+      user_id: "user-1",
+      schedule: "off",
+    } as never);
+    vi.mocked(captureServerEvent).mockRejectedValueOnce(new Error("posthog down"));
+    const res = await PATCH(req({ schedule: "daily" }));
+    expect(res.status).toBe(200);
   });
 
   it("rejects a non-string schedule and invalid JSON the same way as before", async () => {

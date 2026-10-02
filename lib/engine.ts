@@ -16,6 +16,13 @@ import { analysisModelFor, modelLabel } from "@/lib/models";
 import { spendMicros } from "@/lib/pricing";
 import { recordOps, recordOpsError, signatureOf } from "@/lib/ops";
 import { logActivity } from "@/lib/activity";
+import {
+  analyticsDistinctId,
+  brandShareOfVoice,
+  captureServerEvent,
+  runTrigger,
+  usdFromMicros,
+} from "@/lib/posthog-server";
 import { selectAll } from "@/lib/paging";
 import { recordRun, withSpan } from "@/lib/otel";
 
@@ -29,6 +36,18 @@ export interface RunContext {
   actorType?: ActorType;
   actorId?: string | null;
   actorLabel?: string | null;
+  /**
+   * The account behind an API key or MCP token. actorId on those calls is the
+   * credential, and product analytics has to follow the person, not the key.
+   * Dashboard clicks don't need it: actorId is already the user.
+   */
+  userId?: string | null;
+  /**
+   * How the run was asked for. Absent means "manual", except a cron channel,
+   * which is "scheduled". Onboarding's first sweep sets "onboarding" because
+   * that run is neither a click nor a schedule.
+   */
+  trigger?: "manual" | "scheduled" | "onboarding";
 }
 
 // Run at most this many queries at once. Low enough to stay under provider
@@ -374,6 +393,35 @@ export interface PreparedRun {
   startedAt: string;
 }
 
+async function captureRunCompleted(
+  params: ExecuteRunParams,
+  channel: string,
+  outcome: {
+    runId: string;
+    status: string;
+    mentionsFound: boolean;
+    brandMentions: number;
+    competitorMentions: number;
+    answers: number;
+    spendMicros: number;
+  },
+): Promise<void> {
+  await captureServerEvent(analyticsDistinctId(params.project.user_id, params.context), "run_completed", {
+    org_id: params.project.id,
+    billing_owner_id: params.project.user_id,
+    channel,
+    run_id: outcome.runId,
+    status: outcome.status,
+    mentions_found: outcome.mentionsFound,
+    share_of_voice: brandShareOfVoice(outcome.brandMentions, outcome.competitorMentions),
+    answers: outcome.answers,
+    is_trial: params.keySource === "trial",
+    engine: params.provider,
+    spend_used_usd: usdFromMicros(outcome.spendMicros),
+    trigger: runTrigger(params.context),
+  }).catch(() => {});
+}
+
 /**
  * Create the run row (status "running") and log run.started without executing
  * anything. Callers that must answer immediately — a run takes minutes, and no
@@ -459,6 +507,17 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
     metadata: { provider, model, route: route?.router ?? null, prompt_count: jobs.length, replicates },
   });
 
+  await captureServerEvent(analyticsDistinctId(project.user_id, params.context), "run_triggered", {
+    org_id: project.id,
+    billing_owner_id: project.user_id,
+    channel: attribution.channel,
+    run_id: runId,
+    engine: provider,
+    model,
+    is_trial: params.keySource === "trial",
+    trigger: runTrigger(params.context),
+  }).catch(() => {});
+
   return { runId, jobs, competitors, attribution, startedMs, startedAt };
 }
 
@@ -520,6 +579,15 @@ async function resumeRunMeasured(
       durationMs: Date.now() - startedMs,
       metadata: { provider, model, total_responses: 0, tokens_used: 0 },
     });
+    await captureRunCompleted(params, attribution.channel, {
+      runId,
+      status: "completed",
+      mentionsFound: false,
+      brandMentions: 0,
+      competitorMentions: 0,
+      answers: 0,
+      spendMicros: 0,
+    });
     return { runId, status: "completed", totalResponses: 0, tokensUsed: 0, spendMicros: 0 };
   }
 
@@ -532,6 +600,11 @@ async function resumeRunMeasured(
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
   let spentMicros = 0; // what those tokens and searches cost, when we're paying
+  // Mention totals for the product-analytics event only. Not stored, and not
+  // a second detection pass: the same hits the mention rows are built from.
+  let brandMentionCount = 0;
+  let competitorMentionCount = 0;
+  let mentionsFound = false;
   let hardError: string | undefined;
 
   // A ceiling only applies when the operator is footing the bill. On the user's
@@ -680,6 +753,8 @@ async function resumeRunMeasured(
 
       const brandHit = detectMention(answer, bTerms);
       if (brandHit.mentioned) {
+        mentionsFound = true;
+        brandMentionCount += brandHit.count;
         detected.push({
           key: "brand",
           name: project.brand_name,
@@ -692,6 +767,7 @@ async function resumeRunMeasured(
       for (const c of competitors) {
         const hit = detectMention(answer, [c.name, ...c.aliases]);
         if (hit.mentioned) {
+          competitorMentionCount += hit.count;
           detected.push({
             key: c.id,
             name: c.name,
@@ -861,6 +937,16 @@ async function resumeRunMeasured(
       ...(failFastStopped ? { fail_fast_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
     },
+  });
+
+  await captureRunCompleted(params, attribution.channel, {
+    runId,
+    status,
+    mentionsFound,
+    brandMentions: brandMentionCount,
+    competitorMentions: competitorMentionCount,
+    answers: succeeded,
+    spendMicros: spentMicros,
   });
 
   recordOps(status === "completed" ? "run.completed" : "run.failed", {

@@ -15,6 +15,7 @@ import {
   consumeTrialRun,
   consumeTrialRunFor,
   engineKeyMessage,
+  isCompedUser,
   getTrialUsage,
   pickDefaultProvider,
   recordTrialSpend,
@@ -35,6 +36,7 @@ import { coveredProviders } from "@/lib/routers";
 import { defaultModelFor } from "@/lib/models";
 import { fireAndForget } from "@/lib/notify";
 import { recordOpsError } from "@/lib/ops";
+import { analyticsDistinctId, captureTrialLimit } from "@/lib/posthog-server";
 import { generateApiKey, hashApiKey, keyHint } from "@/lib/crypto";
 import { scrapeDomain } from "@/lib/scrape";
 import { brandNameFromSite } from "@/lib/brand-name";
@@ -269,6 +271,23 @@ export type SweepOutcome =
  * after the caller has responded (a sweep takes minutes) and the trial is
  * metered at the end of each run, inside the background chain.
  */
+async function reportOnboardingTrialLimit(
+  opts: { userId: string; project: Project; context: RunContext },
+  key: ResolvedKey,
+  atCap: boolean,
+): Promise<void> {
+  if (key.comped || isCompedUser(opts.userId)) return;
+  await captureTrialLimit({
+    distinctId: analyticsDistinctId(opts.userId, opts.context),
+    billingOwnerId: opts.userId,
+    orgId: opts.project.id,
+    channel: opts.context.channel ?? "system",
+    trigger: "onboarding",
+    key,
+    atCap,
+  }).catch(() => {});
+}
+
 export async function firstSweep(opts: {
   supabase: SupabaseClient;
   /** The OWNER: whose keys pay, whose trial is consumed. */
@@ -311,6 +330,9 @@ export async function firstSweep(opts: {
 
   if (keys.length === 0) {
     const key = await resolveRunKey(supabase, userId, project);
+    if (key.source === "exhausted") {
+      await reportOnboardingTrialLimit(opts, key, false);
+    }
     return {
       ran: false,
       needsKey: key.source === "own" || key.source === "trial" ? "none" : key.source,
@@ -326,6 +348,11 @@ export async function firstSweep(opts: {
   }
   if (funded.length === 0) {
     const key = await resolveRunKey(supabase, userId, project);
+    await reportOnboardingTrialLimit(
+      opts,
+      { ...key, source: "exhausted", limit: trial.limit },
+      true,
+    );
     return {
       ran: false,
       needsKey: "exhausted",
@@ -350,7 +377,9 @@ export async function firstSweep(opts: {
         route: k.route,
         keySource: k.source as "own" | "trial",
         budgetMicros: budget === null ? null : Math.floor(budget / Math.max(trialRuns, 1)),
-        context: opts.context,
+        // Every run this function starts is the automatic first sweep. Leaving
+        // the label off would make it look like the user clicked Run.
+        context: { ...opts.context, trigger: "onboarding" },
         timeBudgetMs,
       };
       const meterRun = async (result: RunResult) => {
