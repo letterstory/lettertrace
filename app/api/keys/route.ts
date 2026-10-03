@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { setProviderKey } from "@/lib/provider-keys";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 
 // Dashboard (cookie-session) path for saving a BYOK provider key. The verify →
 // encrypt → store sequence lives in lib/provider-keys so this route and the
@@ -37,6 +38,13 @@ export async function POST(request: Request) {
       outcome.code === "misconfigured" ? 503 : outcome.code === "failed" ? 500 : 400;
     return NextResponse.json({ error: outcome.message }, { status });
   }
+
+  await captureServerEvent(user.id, "provider_key_added", {
+    billing_owner_id: user.id,
+    channel: "dashboard",
+    provider: outcome.key.provider,
+    key_kind: "provider",
+  }).catch(() => {});
 
   await logDashboard(user, request, {
     category: "provider_key",

@@ -21,7 +21,9 @@ import {
   recordTrialSpendFor,
   runBudgetMicros,
   engineKeyMessage,
+  isCompedUser,
 } from "@/lib/trial";
+import { captureTrialLimit } from "@/lib/posthog-server";
 
 export const maxDuration = 800;
 export const dynamic = "force-dynamic";
@@ -170,6 +172,16 @@ export async function POST(request: Request) {
   }
   if (key.source === "exhausted") {
     await recordRefusal(exhaustedReason);
+    if (!key.comped && !isCompedUser(payer)) {
+      await captureTrialLimit({
+        distinctId: user.id,
+        billingOwnerId: payer,
+        orgId: project.id,
+        channel: "dashboard",
+        trigger: "manual",
+        key,
+      }).catch(() => {});
+    }
     return NextResponse.json(
       {
         error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,
@@ -185,6 +197,17 @@ export async function POST(request: Request) {
   // A comped account runs on the trial keys without spending its run allowance.
   if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(billing, payer))) {
     await recordRefusal(exhaustedReason);
+    if (!isCompedUser(payer)) {
+      await captureTrialLimit({
+        distinctId: user.id,
+        billingOwnerId: payer,
+        orgId: project.id,
+        channel: "dashboard",
+        trigger: "manual",
+        key,
+        atCap: true,
+      }).catch(() => {});
+    }
     return NextResponse.json(
       {
         error: `${owned ? "You've" : "This organization has"} used all ${key.limit ?? 0} free runs. ${addKeyFix}`,

@@ -32,6 +32,7 @@ vi.mock("@/lib/trial", () => ({
   recordTrialUsageFor: vi.fn(),
   recordTrialSpendFor: vi.fn(),
   trialRunLimit: () => 15,
+  isCompedUser: () => false,
   // The real arithmetic: cap minus spent for a trial key, nothing to ration
   // otherwise. Inlined so the budget a trial run is handed can be asserted.
   runBudgetMicros: (key: { source: string; capMicros?: number; spentMicros?: number }) =>
@@ -590,6 +591,11 @@ describe("triggerRunForProject", () => {
       webSearch: PROJECT.use_web_search,
     });
     expect(consumeTrialRunFor).toHaveBeenCalledWith(db, "user-1");
+    expect(executeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ userId: "user-2" }),
+      }),
+    );
   });
 
   // A background trial run is metered when it finishes, inside the chain that

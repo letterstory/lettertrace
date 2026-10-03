@@ -16,6 +16,7 @@ vi.mock("@/lib/trial", () => ({
   recordTrialUsage: vi.fn(),
   recordTrialSpend: vi.fn(),
   consumeTrialRunFor: vi.fn(),
+  isCompedUser: () => false,
   recordTrialUsageFor: vi.fn(),
   recordTrialSpendFor: vi.fn(),
 }));

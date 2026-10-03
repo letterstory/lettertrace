@@ -58,7 +58,9 @@ import {
   recordTrialUsageFor,
   runBudgetMicros,
   trialRunLimit,
+  isCompedUser,
 } from "@/lib/trial";
+import { analyticsDistinctId, captureTrialLimit, runTrigger } from "@/lib/posthog-server";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
 // Operations behind the programmatic surface, shared by the REST v1 routes and
@@ -1273,6 +1275,16 @@ export async function triggerRunForProject(
     webSearch: project.use_web_search,
   });
   if (key.source === "exhausted") {
+    if (!key.comped && !isCompedUser(payer)) {
+      await captureTrialLimit({
+        distinctId: analyticsDistinctId(payer, { ...options?.context, userId }),
+        billingOwnerId: payer,
+        orgId: project.id,
+        channel: options?.context?.channel ?? "api",
+        trigger: runTrigger(options?.context),
+        key,
+      }).catch(() => {});
+    }
     return { ok: false, code: "trial_exhausted", message: engineKeyMessage(key) };
   }
   if (key.source !== "own" && key.source !== "trial") {
@@ -1284,6 +1296,15 @@ export async function triggerRunForProject(
   // even if it later fails.
   // A comped account runs on the trial keys without spending its run allowance.
   if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(supabase, payer))) {
+    await captureTrialLimit({
+      distinctId: analyticsDistinctId(payer, { ...options?.context, userId }),
+      billingOwnerId: payer,
+      orgId: project.id,
+      channel: options?.context?.channel ?? "api",
+      trigger: runTrigger(options?.context),
+      key: { ...key, limit: key.limit ?? trialRunLimit() },
+      atCap: true,
+    }).catch(() => {});
     return {
       ok: false,
       code: "trial_exhausted",
@@ -1315,7 +1336,7 @@ export async function triggerRunForProject(
     route: key.route,
     keySource: key.source,
     budgetMicros: runBudgetMicros(key),
-    context: options?.context,
+    context: { ...options?.context, userId: options?.context?.userId ?? userId },
     timeBudgetMs: runTimeBudgetFor(options?.invocationCeilingMs ?? INVOCATION_CEILING_MS),
   };
 

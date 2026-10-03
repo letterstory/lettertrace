@@ -2,6 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import posthog from "posthog-js";
+import { reportViewedProperties } from "@/lib/posthog-client-events";
+import { ensureProductPosthog } from "@/components/posthog-browser";
 
 /**
  * Opening a run's report IS checking the results, so it clears the nudge —
@@ -10,7 +13,15 @@ import { useRouter } from "next/navigation";
  * Renders nothing. The write is fire-and-forget: a failed mark just means the
  * banner is still there next time, which is the harmless direction to fail in.
  */
-export function MarkResultsSeen({ runId }: { runId: string }) {
+export function MarkResultsSeen({
+  runId,
+  orgId,
+  billingOwnerId,
+}: {
+  runId: string;
+  orgId: string;
+  billingOwnerId: string;
+}) {
   const router = useRouter();
   // React 18 mounts effects twice in dev StrictMode, and this posts a write.
   const sent = useRef(false);
@@ -18,6 +29,13 @@ export function MarkResultsSeen({ runId }: { runId: string }) {
   useEffect(() => {
     if (sent.current) return;
     sent.current = true;
+
+    if (ensureProductPosthog()) {
+      posthog.capture(
+        "report_viewed",
+        reportViewedProperties({ orgId, billingOwnerId, runId }),
+      );
+    }
 
     let active = true;
     void (async () => {
@@ -39,7 +57,7 @@ export function MarkResultsSeen({ runId }: { runId: string }) {
     return () => {
       active = false;
     };
-  }, [runId, router]);
+  }, [runId, orgId, billingOwnerId, router]);
 
   return null;
 }

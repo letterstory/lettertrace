@@ -12,6 +12,7 @@ import {
 } from "@/lib/onboard";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 import type { Project } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -170,6 +171,21 @@ export async function POST(request: Request) {
 
   // The freshly created organization becomes the one the dashboard shows.
   await setActiveProject(supabase, user.id, project.id);
+
+  await captureServerEvent(user.id, "org_created", {
+    org_id: project.id,
+    billing_owner_id: user.id,
+    channel: "dashboard",
+    source: "onboard-url",
+  }).catch(() => {});
+  if (cadence.schedule !== "off") {
+    await captureServerEvent(user.id, "schedule_enabled", {
+      org_id: project.id,
+      billing_owner_id: user.id,
+      channel: "dashboard",
+      schedule: cadence.schedule,
+    }).catch(() => {});
+  }
 
   await logDashboard(user, request, {
     category: "onboarding",

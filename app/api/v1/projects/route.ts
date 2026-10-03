@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { requireApiAuth } from "@/lib/api-guards";
 import { getProjects } from "@/lib/data";
 import { createProject, projectSummary } from "@/lib/api-service";
-import { logApiRequest } from "@/lib/activity";
+import { deriveChannel, logApiRequest } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 import { humanError } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +64,25 @@ export async function POST(request: Request) {
       targetId: outcome.project.id,
       summary: `Created organization "${outcome.project.name}" via the API`,
     });
+    const channel = deriveChannel({
+      tokenType: auth.tokenType,
+      clientId: auth.clientId,
+      surface: "v1",
+    });
+    await captureServerEvent(auth.userId, "org_created", {
+      org_id: outcome.project.id,
+      billing_owner_id: outcome.project.user_id,
+      channel,
+      source: "manual",
+    }).catch(() => {});
+    if (outcome.project.schedule && outcome.project.schedule !== "off") {
+      await captureServerEvent(auth.userId, "schedule_enabled", {
+        org_id: outcome.project.id,
+        billing_owner_id: outcome.project.user_id,
+        channel,
+        schedule: outcome.project.schedule,
+      }).catch(() => {});
+    }
     return NextResponse.json(
       { project: projectSummary(outcome.project) },
       { status: 201 },

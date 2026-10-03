@@ -33,12 +33,15 @@ two remain product features and do not reach OnePatch:
 - **`lib/activity.ts` / `lib/logs.ts`** — the per-user activity log shown on the
   dashboard Logs screen and served by `/api/v1/logs` and MCP. A product feature
   that happens to be auditable, not an operations log.
-- **PostHog** (`components/posthog.tsx`) and **Letterprove**
-  (`lib/letterprove.ts`) — product analytics and signup/usage reporting from the
-  browser.
+- **PostHog** (`components/posthog.tsx`, `lib/posthog-server.ts`) and **Letterprove**
+  (`lib/letterprove.ts`) — optional product analytics. Both stay silent unless
+  their own key is set, so a self-hosted install reports to nobody. PostHog
+  records product actions (signup, onboarding, runs, keys, schedules). It does
+  not receive prompt text, answers, or brand names. It is not an operations
+  log: a scheduled run shows up as "a run happened", not as a trace of the
+  cron.
 
-None of these answer latency, error-rate or dependency questions, and none of
-them see the Vercel cron runs that do the actual work.
+None of these answer latency, error-rate or dependency questions.
 
 ## Service map
 

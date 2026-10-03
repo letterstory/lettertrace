@@ -24,7 +24,8 @@ export default function PrivacyPage() {
         <p><strong>Lettertrace API keys.</strong> Stored only as SHA-256 hashes. The full key is shown once at creation and cannot be recovered by us or by you afterwards.</p>
         <p><strong>Usage counters.</strong> If you use trial runs on our shared provider keys, we count the runs and tokens consumed so we can apply the free-run limit.</p>
         <p><strong>Marketing-site visitor identification.</strong> On our public marketing pages only (the homepage and legal pages, never while you are signed in to the product), we use a third-party service, RB2B, to identify the business behind a visit and, for some US-based visitors, the individual (typically name, job title, company, LinkedIn profile, and business email), inferred from network and device signals. We use this for business-to-business sales and marketing. It does not run inside the authenticated app, and it is disabled entirely on separately operated (self-hosted) deployments of the software.</p>
-        <p>We do not use advertising trackers, we do not sell your information, and we do not build behavioural profiles of you as an account holder.</p>
+        <p><strong>Product analytics.</strong> Inside the app we use PostHog to understand how the product is used: which steps people take after signing up, and whether a monitoring run was started, finished, or blocked by the free trial. Events are linked to your account id and email so we can look a specific account up. PostHog does not receive your prompts, answers, or brand names. It is disabled entirely on separately operated (self-hosted) deployments, which are built without the PostHog key.</p>
+        <p>We do not use advertising trackers and we do not sell your information.</p>
       </Section>
 
       <Section n={2} title="What we send to AI providers">
@@ -65,6 +66,7 @@ export default function PrivacyPage() {
           <li><strong>Anthropic</strong> and <strong>OpenAI</strong>: the AI models queried during runs, as described in §2.</li>
           <li><strong>Google</strong> and <strong>GitHub</strong>: optional sign-in. They tell us your email, name, and profile picture; we tell them nothing about your usage.</li>
           <li><strong>RB2B</strong>: business-visitor identification on our public marketing pages, as described in §1. It does not run within the authenticated product.</li>
+          <li><strong>PostHog</strong>: product analytics inside the signed-in app, as described in §1. It does not run on separately operated (self-hosted) deployments.</li>
         </ul>
         <p>We may also disclose information where legally required, or to protect the rights and safety of our users or the service.</p>
       </Section>
@@ -87,7 +89,7 @@ export default function PrivacyPage() {
       </Section>
 
       <Section n={9} title="Cookies">
-        <p>Within the app we use cookies only for authentication: keeping you signed in and refreshing your session. On our public marketing pages, the RB2B service described in §1 also uses cookies and similar device identifiers to recognise returning business visitors. We do not use advertising cookies. Clearing your cookies signs you out.</p>
+        <p>Within the app we use cookies to keep you signed in and to refresh your session. PostHog, described in §1, also stores an analytics cookie and local storage entry so a visit before you sign up can be linked to your account afterwards. On our public marketing pages, the RB2B service described in §1 also uses cookies and similar device identifiers to recognise returning business visitors. We do not use advertising cookies. Clearing your cookies signs you out.</p>
       </Section>
 
       <Section n={10} title="Children">

@@ -5,6 +5,7 @@ import { isProvider, resolveEngine } from "@/lib/models";
 import { pickDefaultProvider } from "@/lib/trial";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 import { customIntervalError, parseCustomInterval, SCHEDULES } from "@/lib/utils";
 import type { Provider, Schedule } from "@/lib/types";
 
@@ -188,14 +189,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
     }
     await setActiveProject(supabase, user.id, (data as { id: string }).id);
+    const created = data as { id: string; schedule?: string };
     await logDashboard(user, request, {
       category: "project",
       action: "project.created",
       summary: `Created organization "${name}"`,
-      projectId: (data as { id: string }).id,
+      projectId: created.id,
       targetType: "project",
-      targetId: (data as { id: string }).id,
+      targetId: created.id,
     });
+    await captureServerEvent(user.id, "org_created", {
+      org_id: created.id,
+      billing_owner_id: user.id,
+      channel: "dashboard",
+      source: "manual",
+    }).catch(() => {});
+    if (created.schedule && created.schedule !== "off") {
+      await captureServerEvent(user.id, "schedule_enabled", {
+        org_id: created.id,
+        billing_owner_id: user.id,
+        channel: "dashboard",
+        schedule: created.schedule,
+      }).catch(() => {});
+    }
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: humanError(e) }, { status: 500 });

@@ -8,7 +8,9 @@ import {
   recordTrialUsageFor,
   recordTrialSpendFor,
   runBudgetMicros,
+  isCompedUser,
 } from "@/lib/trial";
+import { captureTrialLimit } from "@/lib/posthog-server";
 import { withSpan } from "@/lib/otel";
 import { isScheduleDue } from "@/lib/utils";
 import { recordOps } from "@/lib/ops";
@@ -160,6 +162,16 @@ async function runDueProject(
     const usable =
       (key.source === "own" || key.source === "trial") && Boolean(key.apiKey);
     if (!usable) {
+      if (key.source === "exhausted" && !key.comped && !isCompedUser(project.user_id)) {
+        await captureTrialLimit({
+          distinctId: project.user_id,
+          billingOwnerId: project.user_id,
+          orgId: project.id,
+          channel: "cron",
+          trigger: "scheduled",
+          key,
+        }).catch(() => {});
+      }
       await alertScheduleSkip(supabase, project, key.source === "own" ? "no key" : key.source);
       return {
         projectId: project.id,
@@ -173,6 +185,17 @@ async function runDueProject(
       !key.comped &&
       !(await consumeTrialRunFor(supabase, project.user_id))
     ) {
+      if (!isCompedUser(project.user_id)) {
+        await captureTrialLimit({
+          distinctId: project.user_id,
+          billingOwnerId: project.user_id,
+          orgId: project.id,
+          channel: "cron",
+          trigger: "scheduled",
+          key,
+          atCap: true,
+        }).catch(() => {});
+      }
       await alertScheduleSkip(supabase, project, "exhausted");
       return { projectId: project.id, status: "skipped", reason: "exhausted" };
     }
@@ -192,6 +215,7 @@ async function runDueProject(
         actorType: "cron",
         actorId: "scheduler",
         actorLabel: "Scheduler",
+        trigger: "scheduled",
       },
     });
     completedRunId = result.runId;
