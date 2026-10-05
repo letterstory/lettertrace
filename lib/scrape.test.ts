@@ -269,3 +269,54 @@ describe("scrapeDomain: parsing", () => {
     expect((await scrapeDomain("acme.com")).error).toBe("Couldn't reach the site.");
   });
 });
+
+describe("scrapeDomain: names that don't resolve", () => {
+  const notFound = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+
+  // optim.media and connectrev.co both read as "for security we can't fetch
+  // that host", which is a refusal the user can do nothing about.
+  it("calls a name with no DNS a missing site, not a blocked host", async () => {
+    lookup.mockRejectedValue(notFound);
+    const res = await scrapeDomain("connectrev.co");
+    expect(res.ok).toBe(false);
+    expect(res.error).not.toBe(BLOCKED);
+    expect(res.error).toMatch(/couldn't find a website/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("tries www when only the bare domain fails to resolve", async () => {
+    lookup.mockImplementation(async (host: string) => {
+      if (host === "optim.media") throw notFound;
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
+    fetchMock.mockResolvedValue(html(PARAGRAPH, "<title>Optim</title>"));
+
+    const res = await scrapeDomain("optim.media");
+    expect(res.ok).toBe(true);
+    expect(res.url).toBe("https://www.optim.media/");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://www.optim.media/");
+  });
+
+  // The retry must not become a way around the guard.
+  it("still blocks a www host whose DNS points inward", async () => {
+    lookup.mockImplementation(async (host: string) => {
+      if (host === "evil.example") throw notFound;
+      return [{ address: "10.1.2.3", family: 4 }];
+    });
+    expect((await scrapeDomain("evil.example")).error).toBe(BLOCKED);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("doesn't retry a name that already starts with www", async () => {
+    lookup.mockRejectedValue(notFound);
+    await scrapeDomain("www.connectrev.co");
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("scrapeDomain: unreachable", () => {
+  it("reports an unreachable site rather than throwing", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    expect((await scrapeDomain("acme.com")).error).toBe("Couldn't reach the site.");
+  });
+});

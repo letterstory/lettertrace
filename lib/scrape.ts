@@ -45,6 +45,11 @@ export interface ScrapeResult {
 
 const MAX_REDIRECTS = 3;
 const BLOCKED_HOST_ERROR = "For security we can't fetch that host. Add your topics manually instead.";
+// A name that resolves to nothing is a typo or a domain with no website, not a
+// security refusal. Reporting it as BLOCKED_HOST_ERROR sent a staff user to
+// retype "optim.media" as "www.optim.media" by hand, where the site lived.
+const UNRESOLVED_HOST_ERROR =
+  "We couldn't find a website at that domain. Check the spelling, or add your topics manually instead.";
 
 function normalizeUrl(raw: string): string | null {
   const trimmed = (raw || "").trim();
@@ -99,13 +104,16 @@ function hostnameBlocked(hostname: string): boolean {
 }
 
 // Confirm the hostname resolves only to public IPs (blocks DNS pointing inward).
-async function hostIsPublic(hostname: string): Promise<boolean> {
-  if (net.isIP(hostname) !== 0) return !ipIsPrivate(hostname);
+// "unresolved" is still a refusal (nothing is fetched), just a differently
+// worded one.
+async function resolveHost(hostname: string): Promise<"public" | "private" | "unresolved"> {
+  if (net.isIP(hostname) !== 0) return ipIsPrivate(hostname) ? "private" : "public";
   try {
     const results = await dns.lookup(hostname, { all: true });
-    return results.length > 0 && results.every((r) => !ipIsPrivate(r.address));
+    if (results.length === 0) return "unresolved";
+    return results.every((r) => !ipIsPrivate(r.address)) ? "public" : "private";
   } catch {
-    return false;
+    return "unresolved";
   }
 }
 
@@ -119,9 +127,10 @@ async function assertSafe(url: string): Promise<{ ok: true } | { ok: false; erro
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { ok: false, error: "Only http and https URLs are supported." };
   }
-  if (hostnameBlocked(parsed.hostname) || !(await hostIsPublic(parsed.hostname))) {
-    return { ok: false, error: BLOCKED_HOST_ERROR };
-  }
+  if (hostnameBlocked(parsed.hostname)) return { ok: false, error: BLOCKED_HOST_ERROR };
+  const resolved = await resolveHost(parsed.hostname);
+  if (resolved === "private") return { ok: false, error: BLOCKED_HOST_ERROR };
+  if (resolved === "unresolved") return { ok: false, error: UNRESOLVED_HOST_ERROR };
   return { ok: true };
 }
 
@@ -241,7 +250,10 @@ async function fetchAndParse(url: string): Promise<ScrapeResult> {
       text,
     };
   } catch (err) {
-    if (err instanceof Error && err.message === BLOCKED_HOST_ERROR) {
+    if (
+      err instanceof Error &&
+      (err.message === BLOCKED_HOST_ERROR || err.message === UNRESOLVED_HOST_ERROR)
+    ) {
       return { ok: false, url, error: err.message };
     }
     const msg =
@@ -254,10 +266,30 @@ async function fetchAndParse(url: string): Promise<ScrapeResult> {
   }
 }
 
+/** The same URL on the www host, or null when that isn't a different host. */
+function wwwVariant(url: string): string | null {
+  const u = new URL(url);
+  if (net.isIP(u.hostname) !== 0 || u.hostname.toLowerCase().startsWith("www.")) return null;
+  u.hostname = `www.${u.hostname}`;
+  return u.toString();
+}
+
 export async function scrapeDomain(rawDomain: string): Promise<ScrapeResult> {
   const url = normalizeUrl(rawDomain);
   if (!url) return { ok: false, error: "That doesn't look like a valid domain." };
 
+  // Plenty of sites publish only www, with no record at the bare domain at all
+  // (optim.media, Oct 2026). People type the bare domain, so try www before
+  // giving up on a name that doesn't resolve.
+  const result = await scrapeUrl(url);
+  if (result.error !== UNRESOLVED_HOST_ERROR) return result;
+  const www = wwwVariant(url);
+  if (!www) return result;
+  const viaWww = await scrapeUrl(www);
+  return viaWww.error === UNRESOLVED_HOST_ERROR ? result : viaWww;
+}
+
+async function scrapeUrl(url: string): Promise<ScrapeResult> {
   if (firecrawlEnabled()) {
     // Firecrawl fetches from its own infrastructure, so our SSRF guards don't
     // apply on their side — which is exactly why the address has to clear them
