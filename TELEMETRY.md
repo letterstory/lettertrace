@@ -125,7 +125,12 @@ so ids and numbers are collapsed and no content rides along. `run.failed` and
 (`lib/engine.ts`, level `warn`) fires once per answer that came back through a
 resilience fallback rather than normally — currently only the tool_choice
 mismatch above — so how long a gateway stays broken is a rate over this kind,
-not a manual read of `llm.fallback` spans.
+not a manual read of `llm.fallback` spans. `run.continued` (`info`) fires when
+a background run reaches its time budget and starts its next leg in a fresh
+invocation instead of settling (`lib/run-continuation.ts`; sample carries
+`next_leg`, `planned`, `stored`, `unasked`), and `run.continue_failed` (`warn`)
+when a leg could not continue and settled short — so "how often do runs need
+more than one invocation" and "how often does continuing fail" are both rates.
 
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer

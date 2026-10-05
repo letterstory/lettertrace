@@ -631,6 +631,39 @@ describe("triggerRunForProject", () => {
     finish({ ...COMPLETED, runId: "run-bg" });
     await vi.waitFor(() => expect(recordTrialSpendFor).toHaveBeenCalledWith(db, "user-1", 250_000));
     expect(recordTrialUsageFor).toHaveBeenCalledWith(db, "user-1", 1234);
+    // A trial run's spend ceiling is per invocation: it never continues.
+    expect(vi.mocked(resumeRun).mock.calls[0][1].continuation).toBeUndefined();
+  });
+
+  // A background run on the user's own key continues into fresh invocations
+  // when it reaches its time budget (lib/run-continuation.ts), counted against
+  // the run's whole plan.
+  it("lets a background run on the user's own key continue past its time budget", async () => {
+    const db = fakeDb({ projects: () => ({ data: PROJECT }) });
+    vi.mocked(resolveRunKeyFor).mockResolvedValue({
+      source: "own",
+      apiKey: "sk-user-openai-key",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      requested: { provider: "openai", model: "gpt-5.6-luna" },
+    });
+    vi.mocked(prepareRun).mockResolvedValue({
+      runId: "run-own",
+      jobs: [{}, {}, {}] as never,
+      competitors: [],
+      attribution: {} as never,
+      startedMs: 0,
+      startedAt: "1970-01-01T00:00:00.000Z",
+    });
+    vi.mocked(resumeRun).mockResolvedValue({ ...COMPLETED, runId: "run-own", spendMicros: 0 });
+
+    await triggerRunForProject(db as never, "user-1", "proj-1", { background: true });
+    await vi.waitFor(() => expect(resumeRun).toHaveBeenCalled());
+    expect(vi.mocked(resumeRun).mock.calls[0][1].continuation).toMatchObject({
+      leg: 0,
+      priorStored: 0,
+      planned: 3,
+    });
   });
 
   it("resolves a caller-sent provider/model instead of the project default", async () => {
