@@ -4,11 +4,13 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
+import { resetProductPosthog } from "@/components/posthog-browser";
 
 export function SignOutButton({ className }: { className?: string }) {
   const router = useRouter();
 
   async function handleSignOut() {
+    resetProductPosthog();
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/");

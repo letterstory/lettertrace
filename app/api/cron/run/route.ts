@@ -1,6 +1,6 @@
-import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { isCronAuthorized } from "@/lib/cron-auth";
 import { executeRun, mapPool, sweepAbandonedRuns, RUN_TIME_BUDGET_MS } from "@/lib/engine";
 import {
   resolveRunKey,
@@ -8,7 +8,9 @@ import {
   recordTrialUsageFor,
   recordTrialSpendFor,
   runBudgetMicros,
+  isCompedUser,
 } from "@/lib/trial";
+import { captureTrialLimit } from "@/lib/posthog-server";
 import { withSpan } from "@/lib/otel";
 import { isScheduleDue } from "@/lib/utils";
 import { recordOps } from "@/lib/ops";
@@ -38,7 +40,9 @@ const SWEEP_CONCURRENCY = 4;
 
 interface ProjectResult {
   projectId: string;
-  status: "completed" | "failed" | "skipped";
+  // "running" is reachable only by a run that continues into another invocation,
+  // which the scheduler does not start (see RunContinuation in lib/engine.ts).
+  status: "completed" | "failed" | "skipped" | "running";
   reason?: string;
   runId?: string;
   totalResponses?: number;
@@ -47,15 +51,9 @@ interface ProjectResult {
 // Scheduler entrypoint. Runs every due project. Supports POST (manual curl)
 // and GET (Vercel Cron, which sends the Authorization: Bearer $CRON_SECRET header).
 // Constant-time comparison so the secret can't be probed via response timing.
-function authorized(header: string | null, secret: string | undefined): boolean {
-  if (!header || !secret) return false;
-  const a = Buffer.from(header);
-  const b = Buffer.from(`Bearer ${secret}`);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 
 async function handle(request: Request) {
-  if (!authorized(request.headers.get("authorization"), process.env.CRON_SECRET)) {
+  if (!isCronAuthorized(request.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -164,6 +162,16 @@ async function runDueProject(
     const usable =
       (key.source === "own" || key.source === "trial") && Boolean(key.apiKey);
     if (!usable) {
+      if (key.source === "exhausted" && !key.comped && !isCompedUser(project.user_id)) {
+        await captureTrialLimit({
+          distinctId: project.user_id,
+          billingOwnerId: project.user_id,
+          orgId: project.id,
+          channel: "cron",
+          trigger: "scheduled",
+          key,
+        }).catch(() => {});
+      }
       await alertScheduleSkip(supabase, project, key.source === "own" ? "no key" : key.source);
       return {
         projectId: project.id,
@@ -177,6 +185,17 @@ async function runDueProject(
       !key.comped &&
       !(await consumeTrialRunFor(supabase, project.user_id))
     ) {
+      if (!isCompedUser(project.user_id)) {
+        await captureTrialLimit({
+          distinctId: project.user_id,
+          billingOwnerId: project.user_id,
+          orgId: project.id,
+          channel: "cron",
+          trigger: "scheduled",
+          key,
+          atCap: true,
+        }).catch(() => {});
+      }
       await alertScheduleSkip(supabase, project, "exhausted");
       return { projectId: project.id, status: "skipped", reason: "exhausted" };
     }
@@ -196,6 +215,7 @@ async function runDueProject(
         actorType: "cron",
         actorId: "scheduler",
         actorLabel: "Scheduler",
+        trigger: "scheduled",
       },
     });
     completedRunId = result.runId;

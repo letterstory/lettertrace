@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
 import { humanError } from "@/lib/llm";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 import { customIntervalError, parseCustomInterval, SCHEDULES } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
 
@@ -72,6 +73,15 @@ export async function PATCH(request: Request) {
 
     if (error) {
       return NextResponse.json({ error: humanError(error) }, { status: 500 });
+    }
+
+    if (project.schedule === "off" && schedule !== "off") {
+      await captureServerEvent(user.id, "schedule_enabled", {
+        org_id: project.id,
+        billing_owner_id: project.user_id,
+        channel: "dashboard",
+        schedule,
+      }).catch(() => {});
     }
 
     await logDashboard(user, request, {

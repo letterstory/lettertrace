@@ -8,6 +8,8 @@ import { WhyFree } from "@/components/dashboard/why-free";
 import { ProductCta } from "@/components/dashboard/product-cta";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { LetterproveAttest } from "@/components/letterprove-attest";
+import { PostHogIdentify } from "@/components/posthog-identify";
+import { signupMethodOf } from "@/lib/posthog-client-events";
 import { isFirstSignIn } from "@/lib/letterprove";
 import { FounderCallOffer } from "@/components/dashboard/founder-call";
 import { founderCallUrl, shouldOfferFounderCall, withinSignupWindow } from "@/lib/founder-call";
@@ -146,6 +148,14 @@ export default async function DashboardLayout({
           this boundary — and because `user` is already resolved above, so it
           costs no extra query. Only the domain of the address is ever sent. */}
       <LetterproveAttest email={user.email} firstSignIn={isFirstSignIn(user)} />
+      <PostHogIdentify
+        userId={user.id}
+        email={user.email}
+        signupMethod={signupMethodOf(
+          (user.app_metadata as { provider?: unknown } | undefined)?.provider,
+        )}
+        firstSignIn={isFirstSignIn(user)}
+      />
 
       {/* Mounted in the layout, not a page, so the 30s countdown survives
           navigating between dashboard routes. */}

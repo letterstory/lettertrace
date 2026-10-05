@@ -14,6 +14,7 @@ import {
   type TopicInput,
 } from "@/lib/onboard";
 import { apiActor, logActivity, logApiRequest } from "@/lib/activity";
+import { captureServerEvent, submittedDomain } from "@/lib/posthog-server";
 import { humanError } from "@/lib/llm";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -130,6 +131,12 @@ export async function POST(request: Request) {
         statusCode: 403,
         summary: "Onboarding into another account refused: caller is not an operator",
       });
+      await captureServerEvent(auth.userId, "onboarding_url_submitted", {
+        billing_owner_id: auth.userId,
+        channel: apiActor(auth, "v1").channel,
+        domain: submittedDomain(url),
+        succeeded: false,
+      }).catch(() => {});
       return NextResponse.json(
         { error: "Only an operator may onboard a URL into another account. Omit `email` to onboard into your own." },
         { status: 403 },
@@ -150,7 +157,7 @@ export async function POST(request: Request) {
       supabase: auth.supabase,
       userId: ownerId,
       meter: serviceTrialMeter(auth.supabase, ownerId),
-      context: apiActor(auth, "v1"),
+      context: { ...apiActor(auth, "v1"), userId: auth.userId },
       // This route's ceiling, not the run routes' 800 seconds.
       invocationCeilingMs: maxDuration * 1000,
       input: {
@@ -240,6 +247,28 @@ export async function POST(request: Request) {
       });
     }
 
+    const channel = apiActor(auth, "v1").channel;
+    await captureServerEvent(auth.userId, "onboarding_url_submitted", {
+      billing_owner_id: ownerId,
+      channel,
+      domain: submittedDomain(url),
+      succeeded: true,
+    }).catch(() => {});
+    await captureServerEvent(auth.userId, "org_created", {
+      org_id: outcome.project.id,
+      billing_owner_id: ownerId,
+      channel,
+      source: "onboard-url",
+    }).catch(() => {});
+    if (cadence.schedule !== "off") {
+      await captureServerEvent(auth.userId, "schedule_enabled", {
+        org_id: outcome.project.id,
+        billing_owner_id: ownerId,
+        channel,
+        schedule: cadence.schedule,
+      }).catch(() => {});
+    }
+
     return NextResponse.json(
       {
         project: projectSummary(outcome.project),
@@ -271,6 +300,12 @@ export async function POST(request: Request) {
     );
   } catch (e) {
     const status = e instanceof OnboardError ? 400 : 500;
+    await captureServerEvent(auth.userId, "onboarding_url_submitted", {
+      billing_owner_id: ownerId,
+      channel: apiActor(auth, "v1").channel,
+      domain: submittedDomain(url),
+      succeeded: false,
+    }).catch(() => {});
     await logApiRequest(auth, request, "v1", {
       category: "onboarding",
       action: "api.onboard",

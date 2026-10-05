@@ -11,6 +11,7 @@ import {
 } from "@/lib/trial";
 import { spendMicros } from "@/lib/pricing";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent, submittedDomain } from "@/lib/posthog-server";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -52,6 +53,19 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | null> 
  * meant none of them left a trace: a broken free tier looked, from the feed,
  * exactly like nobody onboarding. Best-effort, never blocks the response.
  */
+function reportUrlSubmitted(
+  userId: string,
+  domain: string,
+  succeeded: boolean,
+): Promise<void> {
+  return captureServerEvent(userId, "onboarding_url_submitted", {
+    billing_owner_id: userId,
+    channel: "dashboard",
+    domain: submittedDomain(domain),
+    succeeded,
+  }).catch(() => {});
+}
+
 async function logSuggestFailure(
   user: { id: string; email?: string | null },
   request: Request,
@@ -109,6 +123,7 @@ export async function POST(request: Request) {
   // them at Settings when the thing they can actually fix is the URL.
   if (!scrape.ok || !scrape.text) {
     await logSuggestFailure(user, request, domain, "scrape_failed", scrape.error);
+    await reportUrlSubmitted(user.id, domain, false);
     return NextResponse.json({
       scraped: false,
       brandName: "",
@@ -138,6 +153,7 @@ export async function POST(request: Request) {
       domain,
       key.source === "exhausted" ? "trial_exhausted" : "no_key",
     );
+    await reportUrlSubmitted(user.id, domain, false);
     return NextResponse.json({
       ...identity,
       scraped: false,
@@ -164,6 +180,7 @@ export async function POST(request: Request) {
     );
     if (!suggestion) {
       await logSuggestFailure(user, request, domain, "ai_timeout", `${SUGGEST_DEADLINE_MS}ms`);
+      await reportUrlSubmitted(user.id, domain, false);
       return NextResponse.json({
         ...identity,
         scraped: false,
@@ -194,6 +211,7 @@ export async function POST(request: Request) {
         brandName,
       },
     });
+    await reportUrlSubmitted(user.id, domain, true);
     return NextResponse.json({
       ...identity,
       scraped: suggestion.topics.length > 0,
@@ -206,6 +224,7 @@ export async function POST(request: Request) {
     });
   } catch (e) {
     await logSuggestFailure(user, request, domain, "ai_failed", humanError(e));
+    await reportUrlSubmitted(user.id, domain, false);
     return NextResponse.json({
       ...identity,
       scraped: false,

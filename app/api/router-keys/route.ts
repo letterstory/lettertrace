@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { setRouterKey, toPublic, verificationSummary } from "@/lib/router-keys";
 import { logDashboard } from "@/lib/activity";
+import { captureServerEvent } from "@/lib/posthog-server";
 
 // Dashboard (cookie-session) path for saving an LLM router credential. The
 // verify → probe → encrypt → store sequence lives in lib/router-keys, alongside
@@ -36,6 +37,13 @@ export async function POST(request: Request) {
       outcome.code === "misconfigured" ? 503 : outcome.code === "failed" ? 500 : 400;
     return NextResponse.json({ error: outcome.message }, { status });
   }
+
+  await captureServerEvent(user.id, "provider_key_added", {
+    billing_owner_id: user.id,
+    channel: "dashboard",
+    provider: outcome.key.router,
+    key_kind: "router",
+  }).catch(() => {});
 
   await logDashboard(user, request, {
     category: "router_key",

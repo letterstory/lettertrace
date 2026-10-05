@@ -39,8 +39,10 @@ vi.mock("@/lib/trial", () => ({
   recordTrialSpendFor: vi.fn(),
   runBudgetMicros: () => null,
   engineKeyMessage: (key: { source: string }) => `No key saved for this engine (${key.source}). Add one in Settings.`,
+  isCompedUser: () => false,
 }));
 vi.mock("@/lib/report-email-delivery", () => ({ sendSingleReportAttempt: vi.fn(async () => "sent") }));
+vi.mock("@/lib/posthog-server", () => ({ captureTrialLimit: vi.fn(async () => {}) }));
 
 const groups = vi.hoisted(() => ({
   loadGroup: vi.fn(),
@@ -52,6 +54,8 @@ vi.mock("@/lib/report-groups", () => groups);
 
 import { POST } from "./route";
 import { sendSingleReportAttempt } from "@/lib/report-email-delivery";
+import { captureTrialLimit } from "@/lib/posthog-server";
+import { consumeTrialRunFor } from "@/lib/trial";
 
 function request(body: unknown): Request {
   return new Request("http://localhost/api/runs", { method: "POST", body: JSON.stringify(body) });
@@ -120,13 +124,77 @@ describe("POST /api/runs — refused before running", () => {
   });
 
   it("records a skip when the trial allowance is exhausted", async () => {
-    state.keyResult = { source: "exhausted", provider: "anthropic", model: "claude-haiku-4-5", limit: 5 };
+    state.userId = "teammate-1";
+    state.ownerId = "owner-1";
+    state.keyResult = {
+      source: "exhausted",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      limit: 5,
+      remaining: 0,
+      exhaustedBy: "runs",
+      spentMicros: 100_000,
+      capMicros: 5_000_000,
+    };
     const res = await POST(request({ groupId: "group-1" }));
     expect(res.status).toBe(402);
     expect(groups.recordGroupSkip).toHaveBeenCalledWith(
       expect.anything(), "group-1", "anthropic", expect.stringMatching(/free runs are used up/),
     );
     expect(sendSingleReportAttempt).not.toHaveBeenCalled();
+    expect(captureTrialLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        distinctId: "teammate-1",
+        billingOwnerId: "owner-1",
+        orgId: "project-1",
+        channel: "dashboard",
+        trigger: "manual",
+        key: expect.objectContaining({ exhaustedBy: "runs", limit: 5 }),
+      }),
+    );
+  });
+
+  it("does not emit trial_limit_reached for a comped account", async () => {
+    state.keyResult = {
+      source: "exhausted",
+      comped: true,
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      limit: 5,
+    };
+    const res = await POST(request({}));
+    expect(res.status).toBe(402);
+    expect(captureTrialLimit).not.toHaveBeenCalled();
+  });
+
+  it("still refuses when analytics itself rejects", async () => {
+    state.keyResult = { source: "exhausted", provider: "anthropic", model: "claude-haiku-4-5", limit: 1 };
+    vi.mocked(captureTrialLimit).mockRejectedValueOnce(new Error("posthog down"));
+    const res = await POST(request({}));
+    expect(res.status).toBe(402);
+  });
+
+  it("emits trial_limit_reached when the atomic take finds the allowance gone", async () => {
+    state.keyResult = {
+      source: "trial",
+      apiKey: "sk-trial",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      limit: 1,
+      remaining: 1,
+      spentMicros: 2_000_000,
+      capMicros: 1_000_000,
+    };
+    vi.mocked(consumeTrialRunFor).mockResolvedValueOnce(false);
+    const res = await POST(request({}));
+    expect(res.status).toBe(402);
+    expect(captureTrialLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        atCap: true,
+        trigger: "manual",
+        key: expect.objectContaining({ spentMicros: 2_000_000, capMicros: 1_000_000 }),
+      }),
+    );
   });
 
   it("sends no email at all for an UNGROUPED refusal (no batch to account it to)", async () => {

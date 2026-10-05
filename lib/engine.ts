@@ -16,6 +16,13 @@ import { analysisModelFor, modelLabel } from "@/lib/models";
 import { spendMicros } from "@/lib/pricing";
 import { recordOps, recordOpsError, signatureOf } from "@/lib/ops";
 import { logActivity } from "@/lib/activity";
+import {
+  analyticsDistinctId,
+  brandShareOfVoice,
+  captureServerEvent,
+  runTrigger,
+  usdFromMicros,
+} from "@/lib/posthog-server";
 import { selectAll } from "@/lib/paging";
 import { recordRun, withSpan } from "@/lib/otel";
 
@@ -29,6 +36,18 @@ export interface RunContext {
   actorType?: ActorType;
   actorId?: string | null;
   actorLabel?: string | null;
+  /**
+   * The account behind an API key or MCP token. actorId on those calls is the
+   * credential, and product analytics has to follow the person, not the key.
+   * Dashboard clicks don't need it: actorId is already the user.
+   */
+  userId?: string | null;
+  /**
+   * How the run was asked for. Absent means "manual", except a cron channel,
+   * which is "scheduled". Onboarding's first sweep sets "onboarding" because
+   * that run is neither a click nor a schedule.
+   */
+  trigger?: "manual" | "scheduled" | "onboarding";
 }
 
 // Run at most this many queries at once. Low enough to stay under provider
@@ -140,6 +159,36 @@ export function askDeadlineFor(startedMs: number, timeBudgetMs: number): number 
  */
 export const FAIL_FAST_AFTER = CONCURRENCY;
 
+/**
+ * How many extra invocations a run that reaches its time budget may continue
+ * into. Each leg gets a fresh invocation's budget (680s on the 800s routes),
+ * so a run can ask roughly four budgets' worth of answers before it settles
+ * short. A slow reasoning model answers ~20 a minute at CONCURRENCY, so the
+ * first leg tops out around 220 answers; Letterstory's runs reached 386
+ * planned answers in 2026-10 once ranking-target probes were added, and every
+ * one of those was settling with the tail of the portfolio never asked.
+ */
+export const MAX_RUN_CONTINUATIONS = 3;
+
+/**
+ * A run that continues into further invocations instead of settling when its
+ * time budget runs out. Only set for background runs on the user's own key:
+ * a trial run's spend ceiling is per invocation, so letting it continue would
+ * let one free run spend several ceilings.
+ */
+export interface RunContinuation {
+  /** 0 for the run's first leg. */
+  leg: number;
+  /** Answers earlier legs already stored on this run. */
+  priorStored: number;
+  /** The run's planned answers (runs.prompt_count). A later leg's job list only
+   *  holds what is still missing, so it can't be the denominator. */
+  planned: number;
+  /** Start leg `nextLeg` in a fresh invocation. Resolves true once it has been
+   *  accepted; false (or a throw) settles this leg the way a stop always did. */
+  schedule: (nextLeg: number) => Promise<boolean>;
+}
+
 // Flush the progress counter every few answers rather than every answer — the
 // row is a checkpoint, not a log. Fixed rather than tied to CONCURRENCY so a
 // wider pool doesn't make completed_count staler for whoever reads it mid-run.
@@ -194,7 +243,8 @@ export async function mapPool<T, R>(
 
 export interface RunResult {
   runId: string;
-  status: "completed" | "failed";
+  /** "running" only when the run continued into another invocation. */
+  status: "completed" | "failed" | "running";
   totalResponses: number;
   tokensUsed: number;
   /** What this run cost, in micro-dollars, when it ran on an operator key.
@@ -210,6 +260,9 @@ export interface RunResult {
   /** Set when the run stopped early because its first FAIL_FAST_AFTER asks all
    *  failed with the same error and none succeeded: the rest were never sent. */
   failFastStopped?: boolean;
+  /** Set when the run reached its time budget and continued into another
+   *  invocation rather than settling: the row stays "running". */
+  continued?: boolean;
   error?: string;
 }
 
@@ -349,6 +402,8 @@ export interface ExecuteRunParams {
    * reason to pass anything else.
    */
   askDeadlineMs?: number;
+  /** Continue instead of settling when the time budget runs out. */
+  continuation?: RunContinuation;
 }
 
 /** A run row already created and logged, plus everything the job loop needs. */
@@ -372,6 +427,35 @@ export interface PreparedRun {
    * cadence anchor. Keeping it once prevents run duration from shifting the
    * next due time. */
   startedAt: string;
+}
+
+async function captureRunCompleted(
+  params: ExecuteRunParams,
+  channel: string,
+  outcome: {
+    runId: string;
+    status: string;
+    mentionsFound: boolean;
+    brandMentions: number;
+    competitorMentions: number;
+    answers: number;
+    spendMicros: number;
+  },
+): Promise<void> {
+  await captureServerEvent(analyticsDistinctId(params.project.user_id, params.context), "run_completed", {
+    org_id: params.project.id,
+    billing_owner_id: params.project.user_id,
+    channel,
+    run_id: outcome.runId,
+    status: outcome.status,
+    mentions_found: outcome.mentionsFound,
+    share_of_voice: brandShareOfVoice(outcome.brandMentions, outcome.competitorMentions),
+    answers: outcome.answers,
+    is_trial: params.keySource === "trial",
+    engine: params.provider,
+    spend_used_usd: usdFromMicros(outcome.spendMicros),
+    trigger: runTrigger(params.context),
+  }).catch(() => {});
 }
 
 /**
@@ -459,6 +543,17 @@ export async function prepareRun(params: ExecuteRunParams): Promise<PreparedRun>
     metadata: { provider, model, route: route?.router ?? null, prompt_count: jobs.length, replicates },
   });
 
+  await captureServerEvent(analyticsDistinctId(project.user_id, params.context), "run_triggered", {
+    org_id: project.id,
+    billing_owner_id: project.user_id,
+    channel: attribution.channel,
+    run_id: runId,
+    engine: provider,
+    model,
+    is_trial: params.keySource === "trial",
+    trigger: runTrigger(params.context),
+  }).catch(() => {});
+
   return { runId, jobs, competitors, attribution, startedMs, startedAt };
 }
 
@@ -504,6 +599,11 @@ async function resumeRunMeasured(
   const { supabase, project, provider, model, apiKey, route, budgetMicros } = params;
   const { runId, jobs, competitors, attribution, startedMs, startedAt } = prepared;
   const timeBudgetMs = params.timeBudgetMs ?? RUN_TIME_BUDGET_MS;
+  // On a continued run the counts are the RUN's, not this leg's: earlier legs'
+  // answers are already stored, and this leg's jobs are only what is missing.
+  const continuation = params.continuation;
+  const priorStored = continuation?.priorStored ?? 0;
+  const planned = continuation?.planned ?? jobs.length;
 
   if (jobs.length === 0) {
     await supabase
@@ -520,6 +620,15 @@ async function resumeRunMeasured(
       durationMs: Date.now() - startedMs,
       metadata: { provider, model, total_responses: 0, tokens_used: 0 },
     });
+    await captureRunCompleted(params, attribution.channel, {
+      runId,
+      status: "completed",
+      mentionsFound: false,
+      brandMentions: 0,
+      competitorMentions: 0,
+      answers: 0,
+      spendMicros: 0,
+    });
     return { runId, status: "completed", totalResponses: 0, tokensUsed: 0, spendMicros: 0 };
   }
 
@@ -532,6 +641,11 @@ async function resumeRunMeasured(
   let succeeded = 0; // answers actually stored
   let tokensUsed = 0; // total provider tokens consumed (for trial metering)
   let spentMicros = 0; // what those tokens and searches cost, when we're paying
+  // Mention totals for the product-analytics event only. Not stored, and not
+  // a second detection pass: the same hits the mention rows are built from.
+  let brandMentionCount = 0;
+  let competitorMentionCount = 0;
+  let mentionsFound = false;
   let hardError: string | undefined;
 
   // A ceiling only applies when the operator is footing the bill. On the user's
@@ -680,6 +794,8 @@ async function resumeRunMeasured(
 
       const brandHit = detectMention(answer, bTerms);
       if (brandHit.mentioned) {
+        mentionsFound = true;
+        brandMentionCount += brandHit.count;
         detected.push({
           key: "brand",
           name: project.brand_name,
@@ -692,6 +808,7 @@ async function resumeRunMeasured(
       for (const c of competitors) {
         const hit = detectMention(answer, [c.name, ...c.aliases]);
         if (hit.mentioned) {
+          competitorMentionCount += hit.count;
           detected.push({
             key: c.id,
             name: c.name,
@@ -778,7 +895,7 @@ async function resumeRunMeasured(
         key_source: params.keySource ?? "unknown",
       });
       // The same failure on every ask before any answer is a broken run, though.
-      if (succeeded === 0 && !failuresDiffer) {
+      if (priorStored + succeeded === 0 && !failuresDiffer) {
         const sig = signatureOf(message);
         firstFailureSig ??= sig;
         if (sig !== firstFailureSig) failuresDiffer = true;
@@ -788,27 +905,79 @@ async function resumeRunMeasured(
       processed++;
       // Periodic progress checkpoint, completed_count reflects stored answers.
       if (processed % PROGRESS_EVERY === 0 || processed === jobs.length) {
-        await supabase.from("runs").update({ completed_count: succeeded }).eq("id", runId);
+        await supabase.from("runs").update({ completed_count: priorStored + succeeded }).eq("id", runId);
       }
     }
   });
 
+  // Reached the time budget with asks still unasked: continue in a fresh
+  // invocation rather than settling short. The row stays "running" with its
+  // progress written, and the next leg asks only what is still missing. A leg
+  // that can't be scheduled settles exactly as a stop always has.
+  const unasked = jobs.length - processed + timedOutAsks;
+  if (
+    timeStopped &&
+    !budgetStopped &&
+    !failFastStopped &&
+    continuation &&
+    continuation.leg < MAX_RUN_CONTINUATIONS &&
+    unasked > 0
+  ) {
+    // Progress first: the next leg starts the moment it is accepted and
+    // checkpoints on its own, so this write must not land after its first one.
+    // (Every ask this leg dispatched has returned by now — mapPool awaited them
+    // — so the next leg's stored-answer count already includes them.)
+    await supabase
+      .from("runs")
+      .update({ completed_count: priorStored + succeeded })
+      .eq("id", runId);
+    const scheduled = await continuation.schedule(continuation.leg + 1).catch(() => false);
+    if (scheduled) {
+      await supabase.from("projects").update({ last_run_at: startedAt }).eq("id", project.id);
+      recordOps("run.continued", {
+        level: "info",
+        signature: `run.continued:${provider}/${model}`,
+        sample: {
+          provider,
+          model,
+          route: route?.router ?? "direct",
+          key_source: params.keySource ?? "unknown",
+          next_leg: continuation.leg + 1,
+          planned,
+          stored: priorStored + succeeded,
+          unasked,
+        },
+      });
+      return {
+        runId,
+        status: "running",
+        totalResponses: priorStored + succeeded,
+        tokensUsed,
+        spendMicros: spentMicros,
+        timeStopped: true,
+        continued: true,
+        error: hardError,
+      };
+    }
+  }
+
   const finishedAt = new Date().toISOString();
+  const stored = priorStored + succeeded;
   // A run only "completed" if at least one answer was actually stored; otherwise
   // it failed and we surface the captured error rather than reporting success.
-  const status = succeeded > 0 ? "completed" : "failed";
+  const status = stored > 0 ? "completed" : "failed";
 
   // Stopping on the ceiling is not a failure and must not read as one: the
   // answers that were stored are as good as any other run's. But it IS a
   // shortfall, and a run that silently returns 40 of 200 answers would look
   // like the prompts stopped working. Say which it was, in the run's own row.
   const stoppedEarly = budgetStopped || timeStopped || failFastStopped;
-  const shortfall = stoppedEarly ? jobs.length - processed + timedOutAsks : 0;
+  const shortfall = stoppedEarly ? unasked : 0;
   const budgetNote = budgetStopped
-    ? `Stopped after ${succeeded} of ${jobs.length} answers: this account reached its free-usage limit. ` +
+    ? `Stopped after ${stored} of ${planned} answers: this account reached its free-usage limit. ` +
       `Add your own provider key in Settings to run the remaining ${shortfall}.`
     : timeStopped
-      ? `Stopped after ${succeeded} of ${jobs.length} answers: the run reached its ${Math.round(timeBudgetMs / 60000)}-minute time limit. ` +
+      ? `Stopped after ${stored} of ${planned} answers: the run reached its ${Math.round(timeBudgetMs / 60000)}-minute time limit${continuation && continuation.leg > 0 ? ` ${continuation.leg + 1} times` : ""}. ` +
         `Run it again to collect the remaining ${shortfall}, or split the project's prompts across fewer engines per run.`
       : null;
   // Appended to the provider's error rather than replacing it: the error is the
@@ -821,7 +990,7 @@ async function resumeRunMeasured(
     .from("runs")
     .update({
       status,
-      completed_count: succeeded,
+      completed_count: stored,
       finished_at: finishedAt,
       error:
         status === "failed"
@@ -843,17 +1012,18 @@ async function resumeRunMeasured(
     summary:
       status === "completed"
         ? budgetStopped
-          ? `Run stopped at the free-usage limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+          ? `Run stopped at the free-usage limit: ${stored} of ${planned} ${planned === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
           : timeStopped
-            ? `Run stopped at the time limit: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
-            : `Run completed: ${succeeded} of ${jobs.length} ${jobs.length === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+            ? `Run stopped at the time limit: ${stored} of ${planned} ${planned === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
+            : `Run completed: ${stored} of ${planned} ${planned === 1 ? "answer" : "answers"} stored on ${modelLabel(provider, model)}`
         : `Run failed: ${diagnosis ?? budgetNote ?? "no answers were stored"}`,
     durationMs: Date.now() - startedMs,
     metadata: {
       provider,
       model,
-      total_responses: succeeded,
-      prompt_count: jobs.length,
+      total_responses: stored,
+      prompt_count: planned,
+      ...(continuation && continuation.leg > 0 ? { legs: continuation.leg + 1 } : {}),
       tokens_used: tokensUsed,
       spend_micros: spentMicros,
       ...(budgetStopped ? { budget_stopped: true, unrun_prompts: shortfall } : {}),
@@ -861,6 +1031,16 @@ async function resumeRunMeasured(
       ...(failFastStopped ? { fail_fast_stopped: true, unrun_prompts: shortfall } : {}),
       ...(hardError ? { error: hardError } : {}),
     },
+  });
+
+  await captureRunCompleted(params, attribution.channel, {
+    runId,
+    status,
+    mentionsFound,
+    brandMentions: brandMentionCount,
+    competitorMentions: competitorMentionCount,
+    answers: succeeded,
+    spendMicros: spentMicros,
   });
 
   recordOps(status === "completed" ? "run.completed" : "run.failed", {
@@ -875,9 +1055,10 @@ async function resumeRunMeasured(
       // "own" = the customer's credential failed, which is theirs to fix;
       // "trial" = ours. The report demotes own-key failures to warnings.
       key_source: params.keySource ?? "unknown",
-      planned: jobs.length,
-      stored: succeeded,
-      failed: jobs.length - succeeded,
+      planned,
+      stored,
+      failed: planned - stored,
+      legs: (continuation?.leg ?? 0) + 1,
       duration_ms: Date.now() - startedMs,
       budget_stopped: Boolean(budgetStopped),
       time_stopped: Boolean(timeStopped),
@@ -888,7 +1069,7 @@ async function resumeRunMeasured(
   return {
     runId,
     status,
-    totalResponses: succeeded,
+    totalResponses: stored,
     tokensUsed,
     spendMicros: spentMicros,
     ...(budgetStopped ? { budgetStopped: true } : {}),

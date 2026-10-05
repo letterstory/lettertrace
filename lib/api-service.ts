@@ -32,6 +32,7 @@ import {
   type TopicStat,
 } from "@/lib/metrics";
 import { fireAndForget } from "@/lib/notify";
+import { scheduleRunContinuation } from "@/lib/run-continuation";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { selectAll } from "@/lib/paging";
 import { discoverCompanies, type DiscoveredCompany } from "@/lib/discover";
@@ -46,6 +47,7 @@ import {
   INTERRUPTED_RUN_ERROR,
   type RunContext,
   type RunResult,
+  type RunContinuation,
 } from "@/lib/engine";
 import {
   pickDefaultProvider,
@@ -56,7 +58,9 @@ import {
   recordTrialUsageFor,
   runBudgetMicros,
   trialRunLimit,
+  isCompedUser,
 } from "@/lib/trial";
+import { analyticsDistinctId, captureTrialLimit, runTrigger } from "@/lib/posthog-server";
 import { isProvider, resolveEngine, PROVIDERS } from "@/lib/models";
 
 // Operations behind the programmatic surface, shared by the REST v1 routes and
@@ -1271,6 +1275,16 @@ export async function triggerRunForProject(
     webSearch: project.use_web_search,
   });
   if (key.source === "exhausted") {
+    if (!key.comped && !isCompedUser(payer)) {
+      await captureTrialLimit({
+        distinctId: analyticsDistinctId(payer, { ...options?.context, userId }),
+        billingOwnerId: payer,
+        orgId: project.id,
+        channel: options?.context?.channel ?? "api",
+        trigger: runTrigger(options?.context),
+        key,
+      }).catch(() => {});
+    }
     return { ok: false, code: "trial_exhausted", message: engineKeyMessage(key) };
   }
   if (key.source !== "own" && key.source !== "trial") {
@@ -1282,6 +1296,15 @@ export async function triggerRunForProject(
   // even if it later fails.
   // A comped account runs on the trial keys without spending its run allowance.
   if (key.source === "trial" && !key.comped && !(await consumeTrialRunFor(supabase, payer))) {
+    await captureTrialLimit({
+      distinctId: analyticsDistinctId(payer, { ...options?.context, userId }),
+      billingOwnerId: payer,
+      orgId: project.id,
+      channel: options?.context?.channel ?? "api",
+      trigger: runTrigger(options?.context),
+      key: { ...key, limit: key.limit ?? trialRunLimit() },
+      atCap: true,
+    }).catch(() => {});
     return {
       ok: false,
       code: "trial_exhausted",
@@ -1313,7 +1336,7 @@ export async function triggerRunForProject(
     route: key.route,
     keySource: key.source,
     budgetMicros: runBudgetMicros(key),
-    context: options?.context,
+    context: { ...options?.context, userId: options?.context?.userId ?? userId },
     timeBudgetMs: runTimeBudgetFor(options?.invocationCeilingMs ?? INVOCATION_CEILING_MS),
   };
 
@@ -1329,6 +1352,19 @@ export async function triggerRunForProject(
 
   if (options?.background) {
     const prepared = await prepareRun(runParams);
+    // A background run on the user's own key continues into fresh invocations
+    // when it reaches its time budget, instead of settling with the tail never
+    // asked (lib/run-continuation.ts). Not a trial run: its spend ceiling is
+    // per invocation, so continuing would let one free run spend several.
+    const continuation: RunContinuation | undefined =
+      key.source === "own"
+        ? {
+            leg: 0,
+            priorStored: 0,
+            planned: prepared.jobs.length,
+            schedule: (next) => scheduleRunContinuation(prepared.runId, next),
+          }
+        : undefined;
     // Keeps the serverless invocation alive past the response; the run settles
     // its own row (completed/failed) exactly as in the sync path. Routed
     // through fireAndForget rather than calling Vercel's waitUntil directly:
@@ -1336,7 +1372,7 @@ export async function triggerRunForProject(
     // fails, and this was the one call site that would have taken background
     // runs down with it.
     fireAndForget(
-      resumeRun(prepared, runParams)
+      resumeRun(prepared, { ...runParams, continuation })
         .then(meter)
         .catch(async (err) => {
           // resumeRun never rejects for per-prompt failures, so reaching here

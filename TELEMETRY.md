@@ -33,12 +33,15 @@ two remain product features and do not reach OnePatch:
 - **`lib/activity.ts` / `lib/logs.ts`** — the per-user activity log shown on the
   dashboard Logs screen and served by `/api/v1/logs` and MCP. A product feature
   that happens to be auditable, not an operations log.
-- **PostHog** (`components/posthog.tsx`) and **Letterprove**
-  (`lib/letterprove.ts`) — product analytics and signup/usage reporting from the
-  browser.
+- **PostHog** (`components/posthog.tsx`, `lib/posthog-server.ts`) and **Letterprove**
+  (`lib/letterprove.ts`) — optional product analytics. Both stay silent unless
+  their own key is set, so a self-hosted install reports to nobody. PostHog
+  records product actions (signup, onboarding, runs, keys, schedules). It does
+  not receive prompt text, answers, or brand names. It is not an operations
+  log: a scheduled run shows up as "a run happened", not as a trace of the
+  cron.
 
-None of these answer latency, error-rate or dependency questions, and none of
-them see the Vercel cron runs that do the actual work.
+None of these answer latency, error-rate or dependency questions.
 
 ## Service map
 
@@ -122,7 +125,12 @@ so ids and numbers are collapsed and no content rides along. `run.failed` and
 (`lib/engine.ts`, level `warn`) fires once per answer that came back through a
 resilience fallback rather than normally — currently only the tool_choice
 mismatch above — so how long a gateway stays broken is a rate over this kind,
-not a manual read of `llm.fallback` spans.
+not a manual read of `llm.fallback` spans. `run.continued` (`info`) fires when
+a background run reaches its time budget and starts its next leg in a fresh
+invocation instead of settling (`lib/run-continuation.ts`; sample carries
+`next_leg`, `planned`, `stored`, `unasked`), and `run.continue_failed` (`warn`)
+when a leg could not continue and settled short — so "how often do runs need
+more than one invocation" and "how often does continuing fail" are both rates.
 
 **Content rule — carried through.** Provider, model, route, counts, durations
 and outcomes are recorded. Prompt text, answers, brand names and customer

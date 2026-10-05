@@ -211,7 +211,11 @@ export default async function RunDetailPage({ params }: { params: { id: string }
     <div className="space-y-8">
       {/* Reaching this page is what "checked the results" means, so it clears
           the dashboard nudge however the user arrived. */}
-      <MarkResultsSeen runId={run.id} />
+      <MarkResultsSeen
+        runId={run.id}
+        orgId={project.id}
+        billingOwnerId={project.user_id}
+      />
       <div className="space-y-4">
         <a
           href="/dashboard/runs"
