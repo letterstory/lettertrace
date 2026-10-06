@@ -3,11 +3,18 @@ import Link from "next/link";
 import { ArrowUpRight, Flame } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { growthReport, type EmailClass, type Lead } from "@/lib/growth";
-import { periodFrom, periodLabel, type Period } from "@/lib/periods";
+import {
+  periodFrom,
+  periodLabel,
+  previousLabel,
+  previousWindow,
+  type Period,
+} from "@/lib/periods";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { timeAgo } from "@/lib/utils";
 import { PeopleDirectory } from "../people";
 import { PeriodSelect } from "../period-select";
+import { VsPrevious } from "../vs-previous";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -112,8 +119,22 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
   // other. Defaults to 30d, matching the windows in the row above it.
   const period: Period = periodFrom(searchParams.g);
   const label = periodLabel(period);
-  const report = await growthReport(period);
+  const now = Date.now();
+  const report = await growthReport(period, now);
   const { activity, signups, retention } = report;
+  // Null on all-time, where no card gets a vs line. The rolling row compares
+  // against a snapshot taken the moment the selected window opened, so its
+  // phrase is a date; everything below compares window against window.
+  const vsPhrase = previousLabel(period, now);
+  const openedAt = previousWindow(period, now)?.end;
+  const prev =
+    report.previous && vsPhrase && openedAt !== undefined
+      ? {
+          ...report.previous,
+          phrase: vsPhrase,
+          snapshot: `as of ${new Date(openedAt).toISOString().slice(0, 10)}`,
+        }
+      : null;
   const filter = leadFilterFrom(searchParams);
   const leads = report.leads.filter(filter.pick);
   const leadCounts = new Map(LEAD_FILTERS.map((f) => [f.key, report.leads.filter(f.pick).length]));
@@ -157,18 +178,48 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
         <StatCard
           label="Daily active"
           value={activity.daily.users.toLocaleString()}
+          footer={
+            prev && (
+              <VsPrevious
+                current={activity.daily.users}
+                previous={prev.activity.daily.users}
+                display={prev.activity.daily.users.toLocaleString()}
+                phrase={prev.snapshot}
+              />
+            )
+          }
           hint={`${activity.daily.runs.toLocaleString()} runs · rolling 24h`}
           accent="mint"
         />
         <StatCard
           label="Weekly active"
           value={activity.weekly.users.toLocaleString()}
+          footer={
+            prev && (
+              <VsPrevious
+                current={activity.weekly.users}
+                previous={prev.activity.weekly.users}
+                display={prev.activity.weekly.users.toLocaleString()}
+                phrase={prev.snapshot}
+              />
+            )
+          }
           hint={`${activity.weekly.runs.toLocaleString()} runs · rolling 7d`}
           accent="teal"
         />
         <StatCard
           label="Monthly active"
           value={activity.monthly.users.toLocaleString()}
+          footer={
+            prev && (
+              <VsPrevious
+                current={activity.monthly.users}
+                previous={prev.activity.monthly.users}
+                display={prev.activity.monthly.users.toLocaleString()}
+                phrase={prev.snapshot}
+              />
+            )
+          }
           hint={`${activity.monthly.runs.toLocaleString()} runs · rolling 30d`}
           accent="butter"
         />
@@ -176,6 +227,17 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           label="Stickiness"
           value={activity.stickiness === null ? "—" : `${activity.stickiness}%`}
           hint={`DAU / MAU · ${signups.total.toLocaleString()} signups total`}
+          footer={
+            prev && (
+              <VsPrevious
+                current={activity.stickiness}
+                previous={prev.activity.stickiness}
+                display={prev.activity.stickiness === null ? "—" : `${prev.activity.stickiness}%`}
+                phrase={prev.snapshot}
+                unit="points"
+              />
+            )
+          }
           accent="sand"
         />
         </div>
@@ -194,12 +256,17 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
           <StatCard
             label="New sign-ups"
             value={signups.count.toLocaleString()}
-            hint={
-              signups.change === null
-                ? `${label} · ${signups.total.toLocaleString()} accounts all time`
-                : `${label} · ${signups.change >= 0 ? "+" : ""}${signups.change}% vs the previous ${
-                    period === "ytd" ? "equivalent span" : label.replace("last ", "")
-                  } (${signups.previous?.toLocaleString()})`
+            hint={`${label} · ${signups.total.toLocaleString()} accounts all time`}
+            footer={
+              prev &&
+              signups.previous !== null && (
+                <VsPrevious
+                  current={signups.count}
+                  previous={signups.previous}
+                  display={signups.previous.toLocaleString()}
+                  phrase={prev.phrase}
+                />
+              )
             }
             accent="terracotta"
           />
@@ -210,6 +277,17 @@ export default async function GrowthPage({ searchParams }: { searchParams: SP })
               retention.active === 0
                 ? `nobody ran in this window (${label})`
                 : `${retention.returning.toLocaleString()} of ${retention.active.toLocaleString()} active users ran on 2+ days · ${label}`
+            }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={retention.rate}
+                  previous={prev.retention.rate}
+                  display={prev.retention.rate === null ? "—" : `${prev.retention.rate}%`}
+                  phrase={prev.phrase}
+                  unit="points"
+                />
+              )
             }
             accent="mint"
           />

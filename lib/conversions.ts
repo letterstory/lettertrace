@@ -1,6 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { classifyEmail, type EmailClass, type GrowthProfileRow } from "./growth";
-import { periodStart, type Period } from "@/lib/periods";
+import { periodStart, previousWindow, type Period } from "@/lib/periods";
 import { selectAllNoted } from "./paging";
 import { scheduleIntervalDays } from "@/lib/utils";
 import type { Schedule } from "@/lib/types";
@@ -591,10 +591,68 @@ export function shapeConnectedUsers(
 // Loader
 // ---------------------------------------------------------------------------
 
+/** Rows stamped strictly before `end`, by whichever timestamp column the row
+ *  type carries. Unparseable timestamps drop, as they do in clicksSince. */
+export function rowsBefore<T>(rows: T[], stamp: (row: T) => string, end: number): T[] {
+  return rows.filter((row) => {
+    const t = Date.parse(stamp(row));
+    return Number.isFinite(t) && t < end;
+  });
+}
+
+/** The three card rows as they read at the END of the previous window, over
+ *  that window — what this page would have said if opened then. Null on
+ *  all-time, which has nothing before it. */
+export interface PreviousConversions {
+  stats: ConversionStats;
+  keyed: KeyedStats;
+  scheduled: ScheduledStats;
+}
+
+/**
+ * Every card's figure for the window before the selected one.
+ *
+ * Built by rewinding the data rather than by re-deriving each number: every
+ * row stamped after the previous window closed is dropped, and the same
+ * shapers run over what's left. So each comparison is the card's own
+ * definition, one window back — the connected rate's denominator is the signups
+ * that existed then, the activation cohort only gets credit for keys it had
+ * pasted by then, and nobody has to keep two versions of a formula in step.
+ *
+ * The one figure this can't fully rewind is the cadence row: projects.schedule
+ * holds today's cadence, so "scheduled then" means "made by then and scheduled
+ * now" — the same caveat the page already states for the line chart.
+ */
+export function shapePreviousConversions(
+  clicks: OutboundClickRow[],
+  keys: KeyRow[],
+  profiles: GrowthProfileRow[],
+  projects: ScheduleProjectRow[],
+  prior: { start: number; end: number },
+): PreviousConversions {
+  const profilesThen = rowsBefore(profiles, (p) => p.created_at, prior.end);
+  return {
+    stats: shapeConversionStats(
+      rowsBefore(clicks, (c) => c.clicked_at, prior.end),
+      profilesThen.length,
+      prior.start,
+    ),
+    keyed: shapeKeyedStats(rowsBefore(keys, (k) => k.created_at, prior.end), profilesThen, prior.start),
+    scheduled: shapeScheduledStats(
+      rowsBefore(projects, (p) => p.created_at, prior.end),
+      profilesThen,
+      prior.start,
+    ),
+  };
+}
+
 export interface ConversionsReport {
   stats: ConversionStats;
   keyed: KeyedStats;
   scheduled: ScheduledStats;
+  /** The same three rows for the window before, for the "vs" line on each
+   *  card. Null on all-time. */
+  previous: PreviousConversions | null;
   series: RatePoint[];
   scheduleSeries: SchedulePoint[];
   connected: ConnectedUser[];
@@ -667,11 +725,13 @@ export async function conversionsReport(
 
   const keys = [...providerKeys, ...routerKeys];
   const since = periodStart(period, now);
+  const prior = previousWindow(period, now);
 
   return {
     stats: shapeConversionStats(clicks, profiles.length, since),
     keyed: shapeKeyedStats(keys, profiles, since),
     scheduled: shapeScheduledStats(projects, profiles, since),
+    previous: prior && shapePreviousConversions(clicks, keys, profiles, projects, prior),
     series: shapeRateSeries(clicks, profiles, since, now),
     scheduleSeries: shapeScheduledSeries(projects, since, now),
     // The table reads through the same window: destinations, counts and

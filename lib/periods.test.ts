@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { isPeriod, periodFrom, periodLabel, periodStart } from "./periods";
+import {
+  isPeriod,
+  periodFrom,
+  periodLabel,
+  periodStart,
+  previousLabel,
+  previousWindow,
+} from "./periods";
 
 const DAY_MS = 86_400_000;
 const NOW = Date.parse("2026-09-03T17:00:00.000Z");
@@ -50,5 +57,28 @@ describe("periodLabel", () => {
   it("reads mid-sentence, lowercased", () => {
     expect(periodLabel("7d")).toBe("last 7 days");
     expect(periodLabel("all")).toBe("all time");
+  });
+});
+
+describe("previousWindow", () => {
+  it("is the same length again, ending where the period opens", () => {
+    expect(previousWindow("7d", NOW)).toEqual({
+      start: NOW - 14 * DAY_MS,
+      end: NOW - 7 * DAY_MS,
+      days: 7,
+    });
+    expect(previousLabel("30d", NOW)).toBe("the previous 30 days");
+  });
+
+  it("compares year-to-date with the equivalent span ending Jan 1", () => {
+    const jan1 = Date.parse("2026-01-01T00:00:00.000Z");
+    const prior = previousWindow("ytd", NOW);
+    expect(prior?.end).toBe(jan1);
+    expect(prior?.start).toBe(jan1 - (NOW - jan1));
+  });
+
+  it("has nothing before all-time", () => {
+    expect(previousWindow("all", NOW)).toBeNull();
+    expect(previousLabel("all", NOW)).toBeNull();
   });
 });

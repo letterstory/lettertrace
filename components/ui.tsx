@@ -344,22 +344,32 @@ export function StatCard({
   label,
   value,
   hint,
+  footer,
   accent = "terracotta",
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
+  /** A last line under the hint, set off by a rule — e.g. a comparison. */
+  footer?: ReactNode;
   accent?: BadgeTone;
 }) {
+  // With a footer the card fills its grid cell and pins the footer to the
+  // bottom, so the comparison lines in a row sit level however the hints wrap.
   return (
-    <Card>
-      <CardBody className="p-5">
+    <Card className={footer ? "flex flex-col" : undefined}>
+      <CardBody className={cn("p-5", footer ? "flex flex-1 flex-col" : undefined)}>
         <div className="flex items-center gap-2">
           <span className={cn("h-2 w-2 rounded-sm", accentDot[accent])} />
           <p className="text-sm font-medium text-ink-faint">{label}</p>
         </div>
         <p className="mt-2 font-serif text-3xl font-semibold text-ink">{value}</p>
         {hint && <p className="mt-1 text-xs text-ink-faint">{hint}</p>}
+        {footer && (
+          <div className="mt-auto pt-3">
+            <div className="border-t border-ink/5 pt-2.5">{footer}</div>
+          </div>
+        )}
       </CardBody>
     </Card>
   );

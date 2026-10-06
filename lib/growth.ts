@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { selectAllNoted } from "./paging";
 import { shapeAccounts, type AccountRow } from "./accounts";
-import { periodStart, type Period } from "@/lib/periods";
+import { periodStart, previousWindow, type Period } from "@/lib/periods";
 
 /**
  * The growth half of the operations picture: who is actually using the
@@ -601,6 +601,12 @@ export interface GrowthReport {
   activity: Activity;
   signups: Signups;
   retention: Retention;
+  /** Every card as it read when the selected window opened, for the "vs" line
+   *  under each. The rolling row is a snapshot AT that moment (daily active
+   *  then, not summed over the window); retention is measured over the
+   *  previous window. The sign-up comparison already lives on `signups`.
+   *  Null on all-time. */
+  previous: { activity: Activity; retention: Retention } | null;
   topAccounts: TopAccount[];
   recentRuns: RecentRun[];
   leads: Lead[];
@@ -628,8 +634,16 @@ export async function growthReport(
   // is the only consumer that reads past 30 days, and computing it off a 30-day
   // fetch while the card said "year to date" would be a number that quietly
   // lied about its own window.
+  //
+  // The comparison line reaches further: retention over the previous window,
+  // and the rolling row as it stood when this window opened — a monthly
+  // active at that moment needs the thirty days before it.
   const monthAgo = now - 30 * DAY_MS;
-  const fetchFrom = windowStart === null ? null : Math.min(monthAgo, windowStart);
+  const prior = previousWindow(period, now);
+  const fetchFrom =
+    windowStart === null || prior === null
+      ? null
+      : Math.min(monthAgo, windowStart, prior.start, prior.end - 30 * DAY_MS);
 
   // Every one of these reads through selectAll, because PostgREST caps a plain
   // select at 1,000 rows and says nothing about it (see lib/paging.ts). Read
@@ -703,6 +717,10 @@ export async function growthReport(
     activity: shapeActivity(runs, projectOwner, now, windowStart),
     signups: shapeSignups(profiles, windowStart, now),
     retention: shapeRetention(runs, projectOwner, windowStart, now),
+    previous: prior && {
+      activity: shapeActivity(runs, projectOwner, prior.end, prior.start),
+      retention: shapeRetention(runs, projectOwner, prior.start, prior.end),
+    },
     topAccounts: shapeTopAccounts(windowRuns, projects, profiles),
     recentRuns: shapeRecentRuns(windowRuns, projects, profiles),
     leads: shapeLeads(runs30d, projects, profiles, now),

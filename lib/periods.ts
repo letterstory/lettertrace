@@ -35,6 +35,31 @@ export function periodStart(period: Period, now: number): number | null {
   }
 }
 
+/** The window a period is compared against: the same length again, ending
+ *  where this one opens. "Last 7 days" compares with the 7 days before that;
+ *  year-to-date with the equivalent span ending Jan 1 rather than the whole of
+ *  last year, since ten months is not a fair rival for nine. All-time has
+ *  nothing before it, so null. `end` is exclusive and equals the period's own
+ *  start, so the two windows never share a row. */
+export function previousWindow(
+  period: Period,
+  now: number,
+): { start: number; end: number; days: number } | null {
+  const start = periodStart(period, now);
+  if (start === null) return null;
+  const span = now - start;
+  return { start: start - span, end: start, days: Math.round(span / DAY_MS) };
+}
+
+/** How the comparison window reads after "vs 12" in a card: "the previous 30
+ *  days". Year-to-date says its length in days too, so nobody has to guess
+ *  what "the previous year to date" would mean. */
+export function previousLabel(period: Period, now: number): string | null {
+  const prior = previousWindow(period, now);
+  if (prior === null) return null;
+  return `the previous ${prior.days} day${prior.days === 1 ? "" : "s"}`;
+}
+
 /** The dropdown's options. Order is oldest-window-last, so the list reads as
  *  widening rather than as an arbitrary set. */
 export const PERIOD_OPTIONS: { value: Period; label: string }[] = [

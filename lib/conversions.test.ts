@@ -7,6 +7,7 @@ import {
   productOf,
   median,
   shapeConversionStats,
+  shapePreviousConversions,
   shapeConnectedUsers,
   shapeKeyedStats,
   shapeRateSeries,
@@ -520,5 +521,54 @@ describe("shapeScheduledSeries", () => {
       NOW,
     );
     expect(series.at(-1)?.total).toBe(2);
+  });
+});
+
+describe("shapePreviousConversions", () => {
+  // Previous 7-day window: 14 → 7 days ago.
+  const prior = { start: NOW - 14 * DAY_MS, end: NOW - 7 * DAY_MS };
+
+  it("counts only the previous window, against the signups that existed then", () => {
+    const clicks = [
+      click({ user_id: "u1", clicked_at: iso(10) }),
+      click({ user_id: "u2", clicked_at: iso(9), url: "https://letterbrace.com" }),
+      click({ user_id: "u2", clicked_at: iso(8), url: "https://letterbrace.com" }),
+      click({ user_id: "u1", clicked_at: iso(2) }), // this window, not the previous
+      click({ user_id: "u1", clicked_at: iso(20) }), // before the previous window
+    ];
+    const { stats } = shapePreviousConversions(clicks, [], PROFILES, [], prior);
+    expect(stats.clicks).toBe(3);
+    expect(stats.connectedUsers).toBe(2);
+    // u3 signed up 3 days ago, so 7 days ago there were three accounts.
+    expect(stats.totalUsers).toBe(3);
+    expect(stats.rate).toBe(66.7);
+    expect(stats.topProduct).toEqual({ product: "letterbrace.com", clicks: 2 });
+  });
+
+  it("credits the previous cohort only with keys pasted by the window's end", () => {
+    const profiles: GrowthProfileRow[] = [
+      { id: "a", email: "a@x.io", created_at: iso(12) },
+      { id: "b", email: "b@x.io", created_at: iso(11) },
+    ];
+    const keys: KeyRow[] = [
+      { user_id: "a", created_at: iso(10) },
+      { user_id: "b", created_at: iso(1) }, // after the previous window closed
+    ];
+    const { keyed } = shapePreviousConversions([], keys, profiles, [], prior);
+    expect(keyed.cohortSize).toBe(2);
+    expect(keyed.cohortKeyed).toBe(1);
+    expect(keyed.rate).toBe(50);
+    expect(keyed.users).toBe(1);
+  });
+
+  it("counts scheduled reports made by the window's end", () => {
+    const projects: ScheduleProjectRow[] = [
+      { user_id: "u1", schedule: "weekly", schedule_interval_days: null, created_at: iso(30) },
+      { user_id: "u1", schedule: "daily", schedule_interval_days: null, created_at: iso(9) },
+      { user_id: "u2", schedule: "weekly", schedule_interval_days: null, created_at: iso(2) },
+    ];
+    const { scheduled } = shapePreviousConversions([], [], PROFILES, projects, prior);
+    expect(scheduled.reports).toBe(2);
+    expect(scheduled.newInPeriod).toBe(1);
   });
 });

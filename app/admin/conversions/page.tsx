@@ -4,12 +4,13 @@ import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { conversionsReport, type RatePoint, type SchedulePoint } from "@/lib/conversions";
-import { periodFrom, periodLabel, type Period } from "@/lib/periods";
+import { periodFrom, periodLabel, previousLabel, type Period } from "@/lib/periods";
 import type { EmailClass } from "@/lib/growth";
 import { Badge, Card, SectionHeading, StatCard } from "@/components/ui";
 import { duration, timeAgo } from "@/lib/utils";
 import { PeriodSelect } from "../period-select";
 import { DaySeriesChart } from "./day-series-chart";
+import { VsPrevious } from "../vs-previous";
 
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
@@ -97,8 +98,12 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
 
   const period: Period = periodFrom(searchParams.p);
   const label = periodLabel(period);
-  const { stats, keyed, scheduled, series, scheduleSeries, connected, degraded } =
-    await conversionsReport(period);
+  const now = Date.now();
+  const { stats, keyed, scheduled, previous, series, scheduleSeries, connected, degraded } =
+    await conversionsReport(period, now);
+  // "the previous 30 days" — null on all-time, where no card gets a vs line.
+  const vsPhrase = previousLabel(period, now);
+  const prev = previous && vsPhrase ? { ...previous, phrase: vsPhrase } : null;
   const latest = series.filter((p) => p.rate !== null).at(-1);
   const peak = series.reduce((a, b) => ((b.rate ?? -1) > (a?.rate ?? -1) ? b : a), latest);
   const today = new Date().toISOString().slice(0, 10);
@@ -136,6 +141,17 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
           label="Connected rate"
           value={stats.rate === null ? "—" : `${stats.rate}%`}
           hint={`${stats.connectedUsers.toLocaleString()} of ${stats.totalUsers.toLocaleString()} signups clicked a Letter product · ${label}`}
+          footer={
+            prev && (
+              <VsPrevious
+                current={stats.rate}
+                previous={prev.stats.rate}
+                display={prev.stats.rate === null ? "—" : `${prev.stats.rate}%`}
+                phrase={prev.phrase}
+                unit="points"
+              />
+            )
+          }
           accent="mint"
         />
         <StatCard
@@ -146,6 +162,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               ? "distinct users, all time"
               : `distinct users, ${label} · ${stats.connectedAllTime.toLocaleString()} all time`
           }
+          footer={
+            prev && (
+              <VsPrevious
+                current={stats.connectedUsers}
+                previous={prev.stats.connectedUsers}
+                display={prev.stats.connectedUsers.toLocaleString()}
+                phrase={prev.phrase}
+              />
+            )
+          }
           accent="teal"
         />
         <StatCard
@@ -155,6 +181,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
             period === "all"
               ? "all time"
               : `${label} · ${stats.clicksAllTime.toLocaleString()} all time`
+          }
+          footer={
+            prev && (
+              <VsPrevious
+                current={stats.clicks}
+                previous={prev.stats.clicks}
+                display={prev.stats.clicks.toLocaleString()}
+                phrase={prev.phrase}
+              />
+            )
           }
           accent="butter"
         />
@@ -188,6 +224,22 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
             stats.topProduct
               ? `${stats.topProduct.clicks.toLocaleString()} click${stats.topProduct.clicks === 1 ? "" : "s"} · ${label}`
               : `no clicks ${period === "all" ? "recorded yet" : "in this period"}`
+          }
+          footer={
+            prev && (
+              // A host has no arithmetic, so this one names the previous
+              // leader and its count and draws no change.
+              <VsPrevious
+                current={null}
+                previous={null}
+                display={
+                  prev.stats.topProduct
+                    ? `${prev.stats.topProduct.product} (${prev.stats.topProduct.clicks.toLocaleString()} click${prev.stats.topProduct.clicks === 1 ? "" : "s"})`
+                    : "no clicks"
+                }
+                phrase={prev.phrase}
+              />
+            )
           }
           accent="sand"
         />
@@ -239,6 +291,17 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
                 ? `nobody signed up in ${label}`
                 : `${keyed.cohortKeyed.toLocaleString()} of the ${keyed.cohortSize.toLocaleString()} accounts that signed up ${period === "all" ? "ever" : `in the ${label.replace("last ", "")}`} have connected a key`
             }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={keyed.rate}
+                  previous={prev.keyed.rate}
+                  display={prev.keyed.rate === null ? "—" : `${prev.keyed.rate}%`}
+                  phrase={`${prev.phrase}, keyed by its end`}
+                  unit="points"
+                />
+              )
+            }
             accent="terracotta"
           />
           <StatCard
@@ -248,6 +311,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               period === "all"
                 ? "accounts, counted once on their first key"
                 : `first key in ${label} · ${keyed.allTime.toLocaleString()} all time`
+            }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={keyed.users}
+                  previous={prev.keyed.users}
+                  display={prev.keyed.users.toLocaleString()}
+                  phrase={prev.phrase}
+                />
+              )
             }
             accent="teal"
           />
@@ -260,6 +333,19 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
                   ? "nobody has connected a key yet"
                   : `median signup → first key · all time (nobody activated in ${label})`
                 : `median signup → first key, ${keyed.users.toLocaleString()} account${keyed.users === 1 ? "" : "s"} · ${label} · ${duration(keyed.medianAllTimeMs)} all time`
+            }
+            footer={
+              prev && (
+                // Window medians only: the card falls back to all-time when
+                // nobody activated, and comparing a fallback would be noise.
+                <VsPrevious
+                  current={keyed.medianMs}
+                  previous={prev.keyed.medianMs}
+                  display={duration(prev.keyed.medianMs)}
+                  phrase={prev.phrase}
+                  better="down"
+                />
+              )
             }
             accent="butter"
           />
@@ -287,6 +373,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
                 ? "nothing is on a cadence yet"
                 : `across ${scheduled.accounts.toLocaleString()} account${scheduled.accounts === 1 ? "" : "s"} of ${scheduled.totalUsers.toLocaleString()} · ${(scheduled.reports / scheduled.accounts).toFixed(1)} reports each`
             }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={scheduled.reports}
+                  previous={prev.scheduled.reports}
+                  display={prev.scheduled.reports.toLocaleString()}
+                  phrase={`at the end of ${prev.phrase}`}
+                />
+              )
+            }
             accent="teal"
           />
           <StatCard
@@ -296,6 +392,16 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               period === "all"
                 ? "every scheduled report, dated by the day its project was made"
                 : `projects made in ${windowPhrase} that run on a cadence today · ${scheduled.reports.toLocaleString()} scheduled in total`
+            }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={scheduled.newInPeriod}
+                  previous={prev.scheduled.newInPeriod}
+                  display={prev.scheduled.newInPeriod.toLocaleString()}
+                  phrase={prev.phrase}
+                />
+              )
             }
             accent="mint"
           />
@@ -310,6 +416,21 @@ export default async function ConversionsPage({ searchParams }: { searchParams: 
               scheduled.avgIntervalDays === null
                 ? "nothing is scheduled yet"
                 : `mean gap between runs · ${cadence} · ≈${scheduled.runsPerDay?.toLocaleString()} scheduled run${scheduled.runsPerDay === 1 ? "" : "s"} a day`
+            }
+            footer={
+              prev && (
+                <VsPrevious
+                  current={scheduled.avgIntervalDays}
+                  previous={prev.scheduled.avgIntervalDays}
+                  display={
+                    prev.scheduled.avgIntervalDays === null
+                      ? "—"
+                      : `${prev.scheduled.avgIntervalDays} day${prev.scheduled.avgIntervalDays === 1 ? "" : "s"}`
+                  }
+                  phrase={`at the end of ${prev.phrase}`}
+                  better="neutral"
+                />
+              )
             }
             accent="butter"
           />
