@@ -936,6 +936,32 @@ async function anthropicWebSearch(
 //   the Anthropic path's retrieved-but-not-cited results. That turns a
 //   searched-but-uncited answer from a false "ungrounded" (a real, billed
 //   browse discarded) into the grounded measurement it is.
+// HTTP statuses the Responses transport retries. 5xx is the ordinary transient
+// class. 424 is here because of how Concentrate reports an upstream failure:
+// the router accepts the request, calls the provider, and when the provider
+// itself errors it answers 424 Failed Dependency with
+// `{"error":{"code":"server_error","message":"Provider '<name>' errored"}}`.
+// That is the same transient fault a direct key delivers as a 5xx, arriving
+// under 500 — so the old `status >= 500` test failed the question outright and
+// the run layer, which never re-asks, lost the answer for the day. Seen twice:
+// 83 of 208 gpt-5.6-luna answers on 2026-08-27, and 56 more on 2026-10-06
+// during a two-minute flare in which 84% of concurrent calls on the same
+// engine succeeded. A 424 through the router is never a request-shape problem
+// — the router already accepted the body — so retrying it cannot be a
+// deterministic re-bill. Everything else (auth, quota, bad request, and the
+// incomplete/empty-answer cases, which are expensive re-bills) keeps failing
+// fast exactly as before.
+function isRetryableResponsesStatus(status: number): boolean {
+  return status >= 500 || status === 424;
+}
+
+// Waits before the 2nd and 3rd attempt. The flares this absorbs last minutes,
+// not hours, and the rest of the fleet keeps answering through them, so a
+// couple of seconds is enough to land on a healthy upstream; the whole ladder
+// adds at most 2s to a call that was going to fail anyway, well inside the
+// run's invocation budget.
+const RESPONSES_RETRY_BACKOFF_MS = [500, 1500];
+
 async function openaiWebSearch(
   apiKey: string,
   model: string,
@@ -996,6 +1022,7 @@ async function openaiWebSearch(
   let j: ResponsesBody | undefined;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3 && !j; attempt++) {
+    if (attempt > 0) await sleep(RESPONSES_RETRY_BACKOFF_MS[attempt - 1] ?? 0);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -1028,14 +1055,15 @@ async function openaiWebSearch(
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const err = new OpenAI.APIError(res.status, body, undefined, undefined);
-        // Retry transient server errors; surface auth/quota immediately.
-        if (res.status >= 500) { lastErr = err; continue; }
+        // Retry transient server errors and the router's upstream-failure
+        // wrapper; surface auth/quota immediately.
+        if (isRetryableResponsesStatus(res.status)) { lastErr = err; continue; }
         throw err;
       }
       j = (await res.json()) as ResponsesBody;
     } catch (err) {
       lastErr = err;
-      if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
+      if (err instanceof OpenAI.APIError && err.status && !isRetryableResponsesStatus(err.status)) throw err;
     }
   }
   if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
