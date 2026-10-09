@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { flushSpendInBackground, spendScopeFor, withSpendScope } from "@/lib/spend";
 import type {
   ActorType,
   Competitor,
@@ -576,7 +577,21 @@ export async function resumeRun(
     let status = "failed";
     let responses = 0;
     try {
-      const result = await resumeRunMeasured(prepared, params);
+      // SPEND (lib/spend.ts): a run on Letter's own key (the free tier, or one of
+      // our accounts) files every reply's real cost on the app's spend ledger;
+      // a customer's own key records nothing. Sent after each leg.
+      const scope = spendScopeFor({
+        keySource: params.keySource,
+        userId: prepared.attribution.userId,
+        provider: params.provider,
+        route: params.route,
+        projectId: params.project.id,
+        runId: prepared.runId,
+        kind: "probe",
+      });
+      const result = await withSpendScope(scope, () => resumeRunMeasured(prepared, params)).finally(
+        flushSpendInBackground,
+      );
       status = result.status;
       responses = result.totalResponses;
       span.setAttributes({

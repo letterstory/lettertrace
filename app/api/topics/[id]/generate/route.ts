@@ -1,3 +1,4 @@
+import { spendScopeFor, withSpendScope } from "@/lib/spend";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
@@ -72,7 +73,9 @@ export async function POST(
   }
 
   try {
-    const { variations, tokens } = await generateVariations({
+    const { variations, tokens } = await withSpendScope(
+      spendScopeFor({ keySource: key.source, userId: user.id, provider: key.provider, route: key.route, projectId: project.id, kind: "suggest" }),
+      () => generateVariations({
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
@@ -86,7 +89,8 @@ export async function POST(
       // monitoring prompts" since before it was true. Now it's true.
       brandDescription: project.description,
       count,
-    });
+    }),
+    );
 
     if (key.source === "trial") {
       // Metered even though no free RUN is consumed: these endpoints spend the

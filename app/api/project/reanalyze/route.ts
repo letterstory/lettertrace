@@ -1,3 +1,4 @@
+import { spendScopeFor, withSpendScope } from "@/lib/spend";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getProject } from "@/lib/data";
@@ -78,7 +79,9 @@ export async function POST(request: Request) {
   const existingTopics = ((topicRows ?? []) as Pick<Topic, "name">[]).map((t) => t.name);
 
   try {
-    const { description, topics, tokens } = await suggestFromSite({
+    const { description, topics, tokens } = await withSpendScope(
+      spendScopeFor({ keySource: key.source, userId: user.id, provider: key.provider, route: key.route, projectId: project.id, kind: "suggest" }),
+      () => suggestFromSite({
       provider: key.provider,
       model: key.model,
       apiKey: key.apiKey!,
@@ -90,7 +93,8 @@ export async function POST(request: Request) {
       siteText,
       description: project.description,
       existingTopics,
-    });
+    }),
+    );
 
     // Metered even though no free RUN is consumed: these endpoints spend the
     // operator's key, so without this a script could call them forever.
