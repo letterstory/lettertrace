@@ -1,3 +1,4 @@
+import { spendScopeFor, withSpendScope } from "@/lib/spend";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { scrapeDomain } from "@/lib/scrape";
@@ -162,20 +163,25 @@ export async function POST(request: Request) {
       reason: key.source === "exhausted" ? "trial_exhausted" : "no_key",
     });
   }
+  const apiKey = key.apiKey;
+  const siteText = scrape.text;
 
   try {
     const suggestion = await withDeadline(
-      suggestFromSite({
+      withSpendScope(
+        spendScopeFor({ keySource: key.source, userId: user.id, provider: key.provider, route: key.route, kind: "suggest" }),
+        () => suggestFromSite({
         provider: key.provider,
         model: key.model,
-        apiKey: key.apiKey,
+        apiKey,
         // The credential may be a router key (the Concentrate-funded free tier
         // is one), and a router key sent straight to the provider is just an
         // invalid key. resolveKey says where the call has to go; pass it on.
         route: key.route,
         brandName,
-        siteText: scrape.text,
+        siteText,
       }),
+      ),
       SUGGEST_DEADLINE_MS,
     );
     if (!suggestion) {

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { spendScopeFor, withSpendScope } from "@/lib/spend";
 import { getConfiguredProviders, getRouterKeysPublic } from "@/lib/data";
 import {
   executeRun,
@@ -634,15 +635,20 @@ export async function onboardFromUrl(opts: {
       suggestionSkipped = key.source === "exhausted" ? "trial_exhausted" : "no_key";
     } else {
       try {
-        const suggested = await suggestFromSite({
-          provider: key.provider,
-          model: key.model,
-          apiKey: key.apiKey,
-          route: key.route,
-          brandName: brand_name,
-          siteText: site.scraped ? (scrape.text ?? "") : "",
-          description,
-        });
+        const apiKey = key.apiKey;
+        const suggested = await withSpendScope(
+          spendScopeFor({ keySource: key.source, userId, provider: key.provider, route: key.route, kind: "suggest" }),
+          () =>
+            suggestFromSite({
+              provider: key.provider,
+              model: key.model,
+              apiKey,
+              route: key.route,
+              brandName: brand_name,
+              siteText: site.scraped ? (scrape.text ?? "") : "",
+              description,
+            }),
+        );
         if (key.source === "trial") {
           await meter.recordUsage(suggested.tokens);
           await meter.recordSpend(

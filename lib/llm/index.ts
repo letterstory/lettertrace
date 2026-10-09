@@ -16,6 +16,7 @@ import {
 } from "@/lib/routers";
 import { normalizeCompetitorList } from "@/lib/competitors";
 import { recordProviderCall, withSpan } from "@/lib/otel";
+import { recordLlmCall } from "@/lib/spend";
 
 // ------------------------------------------------------------------
 // Provider adapters. Every call here uses the *user's own* API key (BYOK).
@@ -331,6 +332,8 @@ async function anthropicChat(
   const msg = await client.messages.create(
     params as unknown as Anthropic.MessageCreateParamsNonStreaming,
   );
+  // SPEND (lib/spend.ts): recorded only on Letter's own keys; a no-op otherwise.
+  recordLlmCall(msg, { provider: "anthropic", model: params.model, routed: !!plan });
   const text = msg.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -373,6 +376,7 @@ async function openaiChat(
   const res = await client.chat.completions.create(
     params as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
   );
+  recordLlmCall(res, { provider: "openai", model: params.model, routed: !!plan });
   return {
     text: (res.choices[0]?.message?.content ?? "").trim(),
     tokens: res.usage?.total_tokens ?? 0,
@@ -748,6 +752,7 @@ async function gatewayQuery(
     }[];
     usage?: { total_tokens?: number };
   };
+  recordLlmCall(res, { provider: "openai", model: plan.slug, routed: true });
 
   const message = res.choices?.[0]?.message;
   return {
@@ -880,6 +885,8 @@ async function anthropicWebSearch(
       { maxRetries: 0 },
     );
   }
+
+  recordLlmCall(msg, { provider: "anthropic", model: baseParams.model, routed: !!plan });
 
   // The web_search block/citation shapes aren't in older SDK types; read them
   // structurally.
@@ -1033,6 +1040,7 @@ async function openaiWebSearch(
         throw err;
       }
       j = (await res.json()) as ResponsesBody;
+      recordLlmCall(j, { provider: "openai", model: plan ? plan.slug : model, routed: !!plan });
     } catch (err) {
       lastErr = err;
       if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
@@ -1217,7 +1225,11 @@ async function googleFetch(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(windowMs),
       });
-      if (res.ok) return (await res.json()) as GoogleResponse;
+      if (res.ok) {
+        const data = (await res.json()) as GoogleResponse;
+        recordLlmCall(data, { provider: "google", model: realModel, routed: false });
+        return data;
+      }
       const errBody = (await res.json().catch(() => ({}))) as GoogleResponse;
       const gerr = new GoogleAPIError(
         res.status,
@@ -1522,7 +1534,17 @@ async function perplexityFetch(apiKey: string, body: unknown): Promise<Perplexit
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(PERPLEXITY_TIMEOUT_MS),
       });
-      if (res.ok) return (await res.json()) as PerplexityResponse;
+      if (res.ok) {
+        const data = (await res.json()) as PerplexityResponse;
+        const sent = body as { model?: unknown; disable_search?: unknown };
+        recordLlmCall(data, {
+          provider: "perplexity",
+          model: typeof sent.model === "string" ? sent.model : "sonar",
+          routed: false,
+          searched: sent.disable_search !== true,
+        });
+        return data;
+      }
       const errBody = (await res.json().catch(() => ({}))) as PerplexityResponse;
       const perr = new PerplexityAPIError(
         res.status,
