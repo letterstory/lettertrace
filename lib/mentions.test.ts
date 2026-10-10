@@ -123,3 +123,41 @@ describe("markdown link labels", () => {
     expect(detectMention(text, terms).mentioned).toBe(false);
   });
 });
+
+describe("typographic variants", () => {
+  // Assistants set apostrophes, spaces and hyphens typographically; owners type
+  // the ASCII spelling. Each of these read as no mention at all.
+  it("matches a curly apostrophe against a straight one", () => {
+    const hit = detectMention("Trader Joe’s is the best pick.", brandTerms("Trader Joe's", []));
+    expect(hit).toEqual({ mentioned: true, count: 1, firstPosition: 0 });
+    expect(detectMention("Ben & Jerry’s is good.", ["Ben & Jerry's"]).mentioned).toBe(true);
+    expect(detectMention("Ben & Jerry‘s is good.", ["Ben & Jerry's"]).mentioned).toBe(true);
+    expect(detectMention("Ben & Jerryʼs is good.", ["Ben & Jerry's"]).mentioned).toBe(true);
+  });
+
+  it("matches no-break spaces against a plain space", () => {
+    expect(detectMention("Open AI ships models.", ["Open AI"]).mentioned).toBe(true);
+    expect(detectMention("Open AI ships models.", ["Open AI"]).mentioned).toBe(true);
+  });
+
+  it("matches Unicode hyphens against a hyphen-minus", () => {
+    expect(detectMention("Rakuten‑Viki streams dramas.", ["Rakuten-Viki"]).mentioned).toBe(true);
+    expect(detectMention("Rakuten‐Viki streams dramas.", ["Rakuten-Viki"]).mentioned).toBe(true);
+  });
+
+  it("folds the terms too, so a typographic alias matches ASCII prose", () => {
+    expect(detectMention("Trader Joe's is the best pick.", ["Trader Joe’s"]).mentioned).toBe(true);
+  });
+
+  it("keeps word boundaries and counts every spelling", () => {
+    expect(detectMention("Rakuten‑Vikings won.", ["Rakuten-Viki"]).mentioned).toBe(false);
+    const hit = detectMention("Trader Joe's, then Trader Joe’s again.", ["Trader Joe's"]);
+    expect(hit.count).toBe(2);
+  });
+
+  it("leaves firstPosition where it was in the original text", () => {
+    const text = "’’  Pick Trader Joe’s.";
+    const hit = detectMention(text, ["Trader Joe's"]);
+    expect(hit.firstPosition).toBe(text.indexOf("Trader") / text.length);
+  });
+});

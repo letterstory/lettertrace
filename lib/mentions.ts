@@ -8,6 +8,32 @@ export interface MentionHit {
   firstPosition: number;
 }
 
+/**
+ * Assistants write typography; owners type ASCII. "Trader Joe's" set with a
+ * curly apostrophe (U+2019), "Open AI" with a no-break space (U+00A0) and
+ * "Rakuten-Viki" with a non-breaking hyphen (U+2011) are the same names as
+ * their ASCII spellings, but a literal regex sees different characters and
+ * reports no mention at all.
+ *
+ * Folded on both sides, text and terms, so either can carry the typography.
+ * Every replacement is one UTF-16 unit for one, so the folded text has the same
+ * length and offsets as the original and `firstPosition` stays valid.
+ */
+const TYPOGRAPHIC_VARIANTS = /[\u2018\u2019\u02BC\u00A0\u202F\u2010\u2011]/g;
+const ASCII_EQUIVALENT: Record<string, string> = {
+  "\u2018": "'",
+  "\u2019": "'",
+  "\u02BC": "'",
+  "\u00A0": " ",
+  "\u202F": " ",
+  "\u2010": "-",
+  "\u2011": "-",
+};
+
+function foldTypography(s: string): string {
+  return s.replace(TYPOGRAPHIC_VARIANTS, (c) => ASCII_EQUIVALENT[c]);
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -15,7 +41,7 @@ function escapeRegex(s: string): string {
 // Build one case-insensitive, word-boundary regex covering every term.
 function buildRegex(terms: string[]): RegExp | null {
   const cleaned = terms
-    .map((t) => t.trim())
+    .map((t) => foldTypography(t).trim())
     .filter((t) => t.length >= 2)
     .map(escapeRegex);
   if (cleaned.length === 0) return null;
@@ -93,7 +119,7 @@ export function detectMention(text: string, terms: string[]): MentionHit {
   if (!text) return absent;
   const re = buildRegex(terms);
   if (!re) return absent;
-  text = stripLinkSurfaces(text);
+  text = stripLinkSurfaces(foldTypography(text));
 
   let count = 0;
   let firstIndex = -1;
