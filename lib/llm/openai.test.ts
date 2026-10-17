@@ -185,6 +185,20 @@ describe("openai runQuery with web search — transport", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("retries the router's 424 upstream-failure wrapper and recovers the answer", async () => {
+    // Concentrate reports an upstream provider failure as 424 Failed
+    // Dependency, not a 5xx. Losing the question outright cost 83 answers on
+    // 2026-08-27 and 56 more on 2026-10-06.
+    mockFetch(
+      { status: 424, body: { error: { code: "server_error", message: "Provider 'openai' errored" } } },
+      { body: responsesOk("answer") },
+    );
+    const res = await runQuery({ provider: "openai", model: "gpt-4o", apiKey: KEY, prompt: "q", webSearch: true });
+
+    expect(res.text).toBe("answer");
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a 401 immediately as an invalid key", async () => {
     mockFetch({ status: 401, body: { error: { message: "bad key" } } });
     const err = await runQuery({
