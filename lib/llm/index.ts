@@ -1465,7 +1465,13 @@ const PERPLEXITY_RETRYABLE = new Set([429, 500, 502, 503, 504]);
 // Same shape as the Google limits, and for the same reason: a new Perplexity
 // key starts on a low usage tier, so 429s are a first-run experience, not an
 // edge case.
-const PERPLEXITY_MAX_RETRY_WAIT_MS = 45_000;
+//
+// 65s, not 45s: Perplexity's limit is per MINUTE, so a 429's Retry-After is
+// ~60s. Below that, the one wait that clears the limit was the one wait this
+// cap refused, and the loop gave up before its first sleep (every lost answer
+// a single ~3s attempt). The 90s budget below still bounds it to one honoured
+// wait per call.
+const PERPLEXITY_MAX_RETRY_WAIT_MS = 65_000;
 // Perplexity rejects anything smaller with 400 "max_tokens must be at least 16"
 // — measured. The other adapters happily take a 4-8 token probe, so the tiny
 // verifyKey budget copied from them made a VALID key look broken. Clamped here

@@ -60,6 +60,21 @@ export interface RunContext {
 // that; RUN_TIME_BUDGET_MS below is what does.
 const CONCURRENCY = 8;
 
+// Per-provider override for engines whose rate limit is tighter than 8-wide
+// traffic. Perplexity limits per minute (entry tier: 50 rpm) and a sonar answer
+// takes ~5.5s, so 8-wide offers ~87 rpm, sustained for the whole run; on
+// 2026-10-18 the 08:00 run lost 51 of 92 answers to it. 4-wide is ~44 rpm and
+// a 60-answer run still finishes in ~83s. This paces a run below the limit;
+// the Retry-After path in the Perplexity adapter covers the bursts that still
+// get through (several projects' runs share one key at 08:00).
+const PROVIDER_CONCURRENCY: Partial<Record<Provider, number>> = {
+  perplexity: 4,
+};
+
+function concurrencyFor(provider: Provider): number {
+  return PROVIDER_CONCURRENCY[provider] ?? CONCURRENCY;
+}
+
 // The ceiling on the routes that exist to run a monitor — `/api/runs`,
 // `/api/v1/projects/[id]/runs`, `/api/cron/run` — all of which declare
 // `maxDuration = 800`: the platform kills the invocation at this point,
@@ -693,7 +708,7 @@ async function resumeRunMeasured(
   let identicalFailures = 0;
   let failuresDiffer = false;
 
-  await mapPool(jobs, CONCURRENCY, async (prompt) => {
+  await mapPool(jobs, concurrencyFor(provider), async (prompt) => {
     // Checked per job rather than up front: the run is concurrent, so this is
     // the point where in-flight answers have already reported their cost. Jobs
     // already dispatched finish and are kept — a stored answer is real data,
