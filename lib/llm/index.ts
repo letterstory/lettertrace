@@ -2124,6 +2124,13 @@ export function humanError(err: unknown): string {
     ) {
       return "This key isn't linked to a workspace. Please generate a workspace key in the Anthropic Console and paste it here.";
     }
+    // An Anthropic account with no credit 400s with "Your credit balance is too
+    // low", and the SDK message is the status plus the whole JSON body. That is
+    // what a run on an exhausted own key showed as its error, every cycle. Say
+    // it in a sentence and name where the fix is, as the Perplexity 402 does.
+    if (err instanceof Anthropic.APIError && err.status === 400 && /credit balance is too low/i.test(err.message)) {
+      return "This Anthropic account is out of credit. Add credits in the Anthropic Console under Plans & Billing, then run again.";
+    }
     return err.message || `Provider error (${err.status}).`;
   }
   if (err instanceof GoogleAPIError) {

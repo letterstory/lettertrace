@@ -186,3 +186,29 @@ describe("verifyKey for an unscoped Claude key", () => {
     });
   });
 });
+
+describe("humanError for an Anthropic account out of credit", () => {
+  // Every scheduled run on an exhausted own key recorded the raw 400 body,
+  // status code and JSON included, as its error.
+  it("says the account is out of credit instead of showing the JSON body", async () => {
+    mockFetch({
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+        },
+        request_id: null,
+      },
+    });
+
+    const res = await verifyKey("anthropic", KEY);
+
+    expect(res).toEqual({
+      ok: false,
+      error: "This Anthropic account is out of credit. Add credits in the Anthropic Console under Plans & Billing, then run again.",
+    });
+  });
+});
