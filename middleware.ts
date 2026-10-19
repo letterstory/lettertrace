@@ -1,6 +1,7 @@
 import { type NextRequest, type NextFetchEvent } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { reportAccess } from "@/lib/owned-access";
+import { forwardAgentVisit, isAgentRequest, isLettervisitPath } from "@/lib/lettervisit";
 
 export async function middleware(request: NextRequest, event: NextFetchEvent) {
   // Owned-site access telemetry for the marketing blog. Middleware runs before
@@ -14,6 +15,21 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
       reportAccess({
         path: request.nextUrl.pathname,
         userAgent: request.headers.get("user-agent"),
+      })
+    );
+  }
+  // LetterVisit: forward crawler requests on public pages (lib/lettervisit.ts). Crawlers
+  // never run the script, so only the server sees them. Inert unless its key is set.
+  const userAgent = request.headers.get("user-agent");
+  const signatureAgent = request.headers.get("signature-agent");
+  if (isLettervisitPath(request.nextUrl.pathname) && isAgentRequest(userAgent, signatureAgent)) {
+    event.waitUntil(
+      forwardAgentVisit({
+        userAgent,
+        ip: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+        path: request.nextUrl.pathname,
+        host: request.nextUrl.hostname,
+        signatureAgent,
       })
     );
   }
