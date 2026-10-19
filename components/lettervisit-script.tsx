@@ -13,14 +13,16 @@ import { usePathname } from "next/navigation";
  *
  * With de-anonymization on, the script also loads a visitor-identification
  * pixel, so it follows the same consent rule as the RB2B pixel: PUBLIC
- * marketing pages only, never the authenticated product. Allowlist, not
- * denylist, and the same paths as components/rb2b-pixel.tsx.
+ * pages only, never the authenticated product. Allowlist, not denylist: the
+ * RB2B pixel's paths plus the blog, whose page traffic is the point.
  *
  * AI agents that never run JavaScript are counted server-side instead, in
  * middleware.ts (same key, same env gate).
  */
 
-const PUBLIC_PATHS = ["/privacy", "/terms"];
+// The blog is public content and the pages traffic matters most for: counted like the
+// homepage. The signed-in product (/dashboard, /login, /admin…) stays out.
+const PUBLIC_PATHS = ["/blog", "/privacy", "/terms"];
 
 function isPublicPath(pathname: string): boolean {
   return pathname === "/" || PUBLIC_PATHS.some((p) => pathname.startsWith(p));
