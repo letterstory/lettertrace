@@ -7,6 +7,7 @@ import { SignOutButton } from "@/components/dashboard/signout";
 import { WhyFree } from "@/components/dashboard/why-free";
 import { ProductCta } from "@/components/dashboard/product-cta";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
+import { TrialEndedModal } from "@/components/dashboard/trial-ended-modal";
 import { LetterproveAttest } from "@/components/letterprove-attest";
 import { PostHogIdentify } from "@/components/posthog-identify";
 import { signupMethodOf } from "@/lib/posthog-client-events";
@@ -20,7 +21,7 @@ import { adminAlertEmails, fireAndForget } from "@/lib/notify";
 import { alertNewSignup } from "@/lib/notify-signup";
 import { getProject, getProjects, getConfiguredProviders, getRouterKeysPublic } from "@/lib/data";
 import { getUnseenRun } from "@/lib/results-seen";
-import { trialEnabled, trialRunLimit, getTrialRunsUsed } from "@/lib/trial";
+import { trialEnabled, trialRunLimit, getTrialUsage } from "@/lib/trial";
 import { modelLabel } from "@/lib/models";
 import { timeAgo } from "@/lib/utils";
 import type { Run } from "@/lib/types";
@@ -106,9 +107,16 @@ export default async function DashboardLayout({
 
   let trial: { used: number; limit: number; exhausted: boolean } | null = null;
   if (project && trialEnabled() && providers.length === 0 && routerKeys.length === 0) {
-    const used = await getTrialRunsUsed(payerClient, payer);
+    const usage = await getTrialUsage(payerClient, payer);
     const limit = trialRunLimit();
-    trial = { used, limit, exhausted: used >= limit };
+    // A comped account is still inside the trial (withinTrial lifts both
+    // ceilings). `runs >= limit` alone told that account its complimentary
+    // runs were up while the resolver would still serve the next run.
+    trial = {
+      used: usage.runs,
+      limit,
+      exhausted: !usage.comped && usage.runs >= limit,
+    };
   }
 
   // A finished run the owner hasn't opened. Lives in the layout so it follows
@@ -237,6 +245,12 @@ export default async function DashboardLayout({
           )}
           {trial && (
             <TrialBanner used={trial.used} limit={trial.limit} exhausted={trial.exhausted} />
+          )}
+          {/* The owner's own credential is what unblocks a shared org. A
+              teammate posting from this dialog would save a key the runs
+              never spend. */}
+          {trial?.exhausted && project?.user_id === user.id && (
+            <TrialEndedModal userId={user.id} used={trial.used} limit={trial.limit} />
           )}
           {children}
         </div>

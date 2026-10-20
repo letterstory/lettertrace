@@ -203,7 +203,7 @@ export const ROUTERS: Record<RouterId, RouterInfo> = {
     id: "openrouter",
     label: "OpenRouter",
     blurb: "400+ models behind one key. Claude is measurable; GPT is not.",
-    keyUrl: "https://openrouter.ai/keys",
+    keyUrl: "https://openrouter.ai/settings/keys",
     docsUrl: "https://openrouter.ai/docs",
     keyPrefix: "sk-or-v1-",
     openaiBaseUrl: "https://openrouter.ai/api/v1",
