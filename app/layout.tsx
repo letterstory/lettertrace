@@ -3,6 +3,7 @@ import { DM_Sans, DM_Mono, Ibarra_Real_Nova } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme";
 import { RB2BPixel } from "@/components/rb2b-pixel";
+import { LetterVisitScript } from "@/components/lettervisit-script";
 import { PostHogAnalytics } from "@/components/posthog";
 import { publicEnvScript } from "@/lib/public-env";
 
@@ -77,6 +78,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: publicEnvScript() }} />
         {/* Applies the saved theme before first paint to avoid a flash. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* Letterstory Visitors: public marketing pages only, env-gated. */}
+        <LetterVisitScript />
       </head>
       <body>
         <ThemeProvider>{children}</ThemeProvider>
