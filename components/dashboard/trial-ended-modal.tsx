@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import posthog from "posthog-js";
 import { ChevronDown, ChevronUp, ExternalLink, Info, KeyRound, Plus } from "lucide-react";
 import { Button, Input } from "@/components/ui";
+import { ensureProductPosthog } from "@/components/posthog-browser";
 import { PROVIDERS } from "@/lib/models";
+import {
+  trialEndedKeySavedProperties,
+  trialEndedShownProperties,
+} from "@/lib/posthog-client-events";
 import { ROUTERS } from "@/lib/routers";
 import type { Provider, RouterId } from "@/lib/types";
 
@@ -231,15 +237,25 @@ export function TrialEndedModal({
   limit: number;
 }) {
   const [open, setOpen] = useState(false);
+  // StrictMode runs this effect twice in dev. The impression is one open,
+  // not two, or the conversion rate is cut in half before anyone saves.
+  const shown = useRef(false);
 
   useEffect(() => {
+    let dismissed = false;
     try {
-      if (sessionStorage.getItem(trialEndedStorageKey(userId)) !== "1") setOpen(true);
+      dismissed = sessionStorage.getItem(trialEndedStorageKey(userId)) === "1";
     } catch {
       // A private-mode throw is one extra showing, which is the lesser miss.
-      setOpen(true);
     }
-  }, [userId]);
+    if (dismissed) return;
+    setOpen(true);
+    if (shown.current) return;
+    shown.current = true;
+    if (ensureProductPosthog()) {
+      posthog.capture("trial_ended_shown", trialEndedShownProperties(used, limit));
+    }
+  }, [userId, used, limit]);
 
   function dismiss() {
     try {
@@ -363,6 +379,18 @@ export function TrialEndedDialog({
       );
       const failed = results.filter((r) => !r.ok);
       if (failed.length === 0) {
+        // The conversion is the close, which only happens when every key they
+        // typed was accepted. A partial save leaves the modal up.
+        if (ensureProductPosthog()) {
+          posthog.capture(
+            "trial_ended_key_saved",
+            trialEndedKeySavedProperties(
+              used,
+              limit,
+              requests.map((req) => req.id),
+            ),
+          );
+        }
         router.refresh();
         onSaved();
         return;

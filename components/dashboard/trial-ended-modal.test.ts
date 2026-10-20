@@ -7,6 +7,14 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
 }));
 
+vi.mock("posthog-js", () => ({
+  default: { capture: vi.fn(), __loaded: false },
+}));
+
+vi.mock("@/components/posthog-browser", () => ({
+  ensureProductPosthog: () => false,
+}));
+
 // Next injects the JSX runtime for app components; Vitest's node transform
 // does not, so provide the same global before importing the component.
 Object.assign(globalThis, { React });
