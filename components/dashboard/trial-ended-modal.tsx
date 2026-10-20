@@ -16,11 +16,11 @@ import { ROUTERS } from "@/lib/routers";
 import type { Provider, RouterId } from "@/lib/types";
 
 // Shown once the owner's complimentary runs are spent, over a dashboard they
-// can still read. Dismissal lives in sessionStorage rather than on the
-// profile: the ask comes back next visit until a key exists, and a saved key
-// is what actually ends it — the layout stops mounting this. A profile flag
-// would make "Maybe later" permanent, which is the founder-call rule and the
-// wrong one here.
+// can still read. Maybe later hides it for the rest of this sign-in, including
+// a refresh. Sign-out clears that flag, so the next sign-in shows it again
+// until they save a key — a saved key is what actually ends it, because the
+// layout stops mounting this. A profile flag would make "Maybe later"
+// permanent, which is the founder-call rule and the wrong one here.
 //
 // A router is a credential, not an answer engine, so OpenRouter, Concentrate,
 // and Merge post to /api/router-keys. Sending them to /api/keys would be
@@ -30,6 +30,16 @@ const DISMISS_PREFIX = "lettertrace:trial-ended:";
 
 export function trialEndedStorageKey(userId: string): string {
   return `${DISMISS_PREFIX}${userId}`;
+}
+
+/** Drop every Maybe-later flag. Called on sign-out so the next sign-in asks again. */
+export function clearTrialEndedDismiss(storage: Pick<Storage, "length" | "key" | "removeItem">): void {
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key?.startsWith(DISMISS_PREFIX)) keys.push(key);
+  }
+  for (const key of keys) storage.removeItem(key);
 }
 
 export type TrialEndedEntry =

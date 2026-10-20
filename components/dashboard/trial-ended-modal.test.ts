@@ -18,7 +18,8 @@ vi.mock("@/components/posthog-browser", () => ({
 // Next injects the JSX runtime for app components; Vitest's node transform
 // does not, so provide the same global before importing the component.
 Object.assign(globalThis, { React });
-const { TrialEndedDialog, trialEndedRequests } = await import("./trial-ended-modal");
+const { TrialEndedDialog, clearTrialEndedDismiss, trialEndedRequests, trialEndedStorageKey } =
+  await import("./trial-ended-modal");
 
 function openingTag(html: string, controls: string): string {
   const marker = `aria-controls="${controls}"`;
@@ -60,6 +61,29 @@ describe("TrialEndedDialog", () => {
     expect(html).toContain("https://openrouter.ai/settings/keys");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noreferrer"');
+  });
+});
+
+describe("clearTrialEndedDismiss", () => {
+  it("drops the Maybe-later flag so the next sign-in shows the modal", () => {
+    const values = new Map<string, string>([
+      [trialEndedStorageKey("user-1"), "1"],
+      ["unrelated", "keep"],
+    ]);
+    const storage = {
+      get length() {
+        return values.size;
+      },
+      key: (index: number) => [...values.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    };
+
+    clearTrialEndedDismiss(storage);
+
+    expect(values.has(trialEndedStorageKey("user-1"))).toBe(false);
+    expect(values.get("unrelated")).toBe("keep");
   });
 });
 
