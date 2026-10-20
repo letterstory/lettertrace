@@ -295,17 +295,12 @@ function TrialEndedPortal({
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDismiss();
-    };
-    document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [onDismiss]);
+  }, []);
 
   if (!mounted) return null;
 
@@ -316,7 +311,7 @@ function TrialEndedPortal({
       aria-modal="true"
       aria-labelledby="trial-ended-title"
     >
-      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" onClick={onDismiss} />
+      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" />
       <TrialEndedDialog used={used} limit={limit} onDismiss={onDismiss} onSaved={onSaved} />
     </div>,
     document.body,
