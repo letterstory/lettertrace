@@ -71,3 +71,27 @@ export function reportViewedProperties(input: {
     channel: "dashboard",
   };
 }
+
+/**
+ * The trial-ended modal funnel. `shown` is the impression; `key_saved` is the
+ * conversion. Both carry the same run counts so a funnel can be cut by how
+ * spent the account was. The key material itself never belongs on an event.
+ */
+export function trialEndedShownProperties(runsUsed: number, runLimit: number) {
+  return {
+    channel: "dashboard" as const,
+    runs_used: runsUsed,
+    run_limit: runLimit,
+  };
+}
+
+export function trialEndedKeySavedProperties(
+  runsUsed: number,
+  runLimit: number,
+  keys: string[],
+) {
+  return {
+    ...trialEndedShownProperties(runsUsed, runLimit),
+    keys,
+  };
+}
