@@ -16,10 +16,13 @@ import { ROUTERS } from "@/lib/routers";
 import type { Provider, RouterId } from "@/lib/types";
 
 // Shown once the owner's complimentary runs are spent, over a dashboard they
-// can still read. Maybe later hides it for the rest of this sign-in, including
-// a refresh. Sign-out clears that flag, so the next sign-in shows it again
-// until they save a key — a saved key is what actually ends it, because the
-// layout stops mounting this. A profile flag would make "Maybe later"
+// can still read. Maybe later, and a click on the dimmed page, ask first.
+// Only "Skip for now" hides it for the rest of this sign-in, including a
+// refresh. Escape still does not close it: the dimmed page and Escape were
+// made no-ops so a mis-click could not throw the prompt away, and Escape
+// stays that way. Sign-out clears the flag, so the next sign-in shows it
+// again until they save a key — a saved key is what actually ends it, because
+// the layout stops mounting this. A profile flag would make the skip
 // permanent, which is the founder-call rule and the wrong one here.
 //
 // A router is a credential, not an answer engine, so OpenRouter, Concentrate,
@@ -292,6 +295,7 @@ function TrialEndedPortal({
   onSaved: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -309,12 +313,49 @@ function TrialEndedPortal({
       className="fixed inset-0 z-[70] flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="trial-ended-title"
+      aria-labelledby={confirming ? "trial-ended-skip-title" : "trial-ended-title"}
     >
-      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" />
-      <TrialEndedDialog used={used} limit={limit} onDismiss={onDismiss} onSaved={onSaved} />
+      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setConfirming(true)} />
+      <TrialEndedDialog
+        used={used}
+        limit={limit}
+        onDismiss={() => setConfirming(true)}
+        onSaved={onSaved}
+        suppressed={confirming}
+      />
+      {confirming && <TrialEndedSkipWarning onBack={() => setConfirming(false)} onSkip={onDismiss} />}
     </div>,
     document.body,
+  );
+}
+
+export function TrialEndedSkipWarning({ onBack, onSkip }: { onBack: () => void; onSkip: () => void }) {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center p-4">
+      <div className="absolute inset-0" onClick={onBack} />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="trial-ended-skip-title"
+        aria-describedby="trial-ended-skip-body"
+        className="relative w-full max-w-md rounded-[16px] border border-ink/10 bg-surface p-5 shadow-lift sm:p-6"
+      >
+        <h2 id="trial-ended-skip-title" className="font-serif text-2xl font-semibold tracking-tight text-ink">
+          Are you sure you don&apos;t want to add your key?
+        </h2>
+        <p id="trial-ended-skip-body" className="mt-2 text-sm leading-relaxed text-ink-soft">
+          You will no longer get any reports about your products.
+        </p>
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+          <Button type="button" variant="secondary" size="sm" onClick={onSkip}>
+            Skip for now
+          </Button>
+          <Button type="button" size="sm" onClick={onBack}>
+            Add a key
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -323,11 +364,13 @@ export function TrialEndedDialog({
   limit,
   onDismiss,
   onSaved,
+  suppressed = false,
 }: {
   used: number;
   limit: number;
   onDismiss: () => void;
   onSaved: () => void;
+  suppressed?: boolean;
 }) {
   const router = useRouter();
   const [openHelp, setOpenHelp] = useState<string>("anthropic");
@@ -418,6 +461,7 @@ export function TrialEndedDialog({
   return (
     <form
       onSubmit={handleSave}
+      aria-hidden={suppressed || undefined}
       className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-[640px] flex-col overflow-y-auto rounded-[16px] border border-ink/10 bg-surface p-5 shadow-lift sm:p-6"
     >
       <div className="flex items-start justify-between gap-3">

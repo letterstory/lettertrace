@@ -18,7 +18,7 @@ vi.mock("@/components/posthog-browser", () => ({
 // Next injects the JSX runtime for app components; Vitest's node transform
 // does not, so provide the same global before importing the component.
 Object.assign(globalThis, { React });
-const { TrialEndedDialog, clearTrialEndedDismiss, trialEndedRequests, trialEndedStorageKey } =
+const { TrialEndedDialog, TrialEndedSkipWarning, clearTrialEndedDismiss, trialEndedRequests, trialEndedStorageKey } =
   await import("./trial-ended-modal");
 
 function openingTag(html: string, controls: string): string {
@@ -61,6 +61,25 @@ describe("TrialEndedDialog", () => {
     expect(html).toContain("https://openrouter.ai/settings/keys");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noreferrer"');
+  });
+});
+
+describe("TrialEndedSkipWarning", () => {
+  it("names the cost of skipping and offers a way back", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TrialEndedSkipWarning, {
+        onBack: () => {},
+        onSkip: () => {},
+      }),
+    );
+
+    // The two sentences are the warning. A softer line would let a click on
+    // the dimmed page throw the prompt away again.
+    expect(html).toContain("Are you sure you don&#x27;t want to add your key?");
+    expect(html).toContain("You will no longer get any reports about your products.");
+    expect(html).toContain("Add a key");
+    expect(html).toContain("Skip for now");
+    expect(html).toContain('role="alertdialog"');
   });
 });
 
