@@ -180,7 +180,7 @@ export const FAIL_FAST_AFTER = CONCURRENCY;
  * into. Each leg gets a fresh invocation's budget (680s on the 800s routes),
  * so a run can ask roughly four budgets' worth of answers before it settles
  * short. A slow reasoning model answers ~20 a minute at CONCURRENCY, so the
- * first leg tops out around 220 answers; Letterstory's runs reached 386
+ * first leg tops out around 220 answers; Letter's runs reached 386
  * planned answers in 2026-10 once ranking-target probes were added, and every
  * one of those was settling with the tail of the portfolio never asked.
  */

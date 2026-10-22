@@ -1,7 +1,7 @@
-// Server-only client for Letterstory's published-content API.
+// Server-only client for Letter's published-content API.
 //
 // The marketing blog at lettertrace.com/blog is a consumer of the same
-// `/api/integrations/published` API that the Letterstory phantom fleet builds
+// `/api/integrations/published` API that the Letter phantom fleet builds
 // against: posts are authored and published inside app.letterstory.com, and
 // this pulls the frozen *published* versions. Nothing is authored in this repo.
 //
