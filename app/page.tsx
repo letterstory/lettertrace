@@ -30,6 +30,33 @@ import {
 } from "@/lib/founder-call";
 
 const GITHUB_URL = "https://github.com/letterstory/lettertrace";
+const PRODUCT_HUNT_URL = "https://www.producthunt.com/products/lettertrace";
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://lettertrace.com").replace(/\/+$/, "");
+
+// Organization + WebSite JSON-LD so search and AI engines read the name, logo
+// and profiles as facts.
+const JSON_LD = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${SITE_URL}/#organization`,
+      name: "Lettertrace",
+      url: `${SITE_URL}/`,
+      logo: { "@type": "ImageObject", url: `${SITE_URL}/icon.png` },
+      description:
+        "Open-source monitoring for how your brand shows up in AI assistant answers.",
+      sameAs: [GITHUB_URL, PRODUCT_HUNT_URL],
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${SITE_URL}/#website`,
+      name: "Lettertrace",
+      url: `${SITE_URL}/`,
+      publisher: { "@id": `${SITE_URL}/#organization` },
+    },
+  ],
+};
 
 // ------------------------------------------------------------------
 // Small presentational helpers (local to the landing page)
@@ -160,6 +187,10 @@ export default function LandingPage() {
 
   return (
     <div id="top" className="min-h-screen bg-paper text-ink">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+      />
       <LetterCoTelemetry />
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/80 backdrop-blur">
