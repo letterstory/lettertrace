@@ -1080,13 +1080,16 @@ async function openaiWebSearch(
   // max_output_tokens, so a budget spent thinking and searching ends the
   // response with status "incomplete", and what text survived is a fragment,
   // not the answer.
+  // Gemini routed through Concentrate (AI Overviews included) arrives on this
+  // OpenAI-shaped path too; name the model that actually answered.
+  const vendor = isGemini ? "Gemini" : "OpenAI";
   if (j.status === "incomplete") {
     throw new Error(
-      `OpenAI stopped before finishing the answer (${j.incomplete_details?.reason ?? "incomplete"}).`,
+      `${vendor} stopped before finishing the answer (${j.incomplete_details?.reason ?? "incomplete"}).`,
     );
   }
   if (!text.trim()) {
-    throw new Error("OpenAI returned an empty answer.");
+    throw new Error(`${vendor} returned an empty answer.`);
   }
   // Prefer inline citations (what the answer actually used); fall back to the
   // searched sources when the model browsed but attached none, so a real search

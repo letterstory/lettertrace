@@ -165,6 +165,28 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("names Gemini, not OpenAI, when routed AI Overviews runs out of budget", async () => {
+    // Routed Gemini (AI Overviews included) shares this Responses path, so the
+    // error has to say which model stopped or the alert points at the wrong vendor.
+    mockFetch({
+      body: responsesOk("truncated fragm", [], {
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+      }),
+    });
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "google-ai-overviews",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      }),
+    ).rejects.toThrow(/^Gemini stopped before finishing.*max_output_tokens/);
+    expect(calls[0].url).toBe("https://api.concentrate.ai/v1/responses");
+  });
+
   it("fails an empty answer instead of storing it, without retrying", async () => {
     mockFetch({ body: responsesOk("") });
     await expect(
