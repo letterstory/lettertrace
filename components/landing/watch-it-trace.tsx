@@ -156,7 +156,7 @@ export function WatchItTrace() {
       <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-24 lg:grid-cols-[0.85fr_1.15fr] lg:gap-16">
         {/* Steps */}
         <div>
-          <p className="mono-eyebrow">watch it trace</p>
+          <h2 className="mono-eyebrow">watch it trace</h2>
           <p className="mt-3 hidden font-serif text-lg text-ink-soft lg:block">One run, start to finish</p>
           <ol className="mt-8 space-y-6">
             {STEPS.map((s, i) => {
