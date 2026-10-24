@@ -78,7 +78,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: publicEnvScript() }} />
         {/* Applies the saved theme before first paint to avoid a flash. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        {/* Letterstory Visitors: public marketing pages only, env-gated. */}
+        {/* Letter Visitors: public marketing pages only, env-gated. */}
         <LetterVisitScript />
       </head>
       <body>

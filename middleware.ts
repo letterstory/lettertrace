@@ -2,7 +2,7 @@ import { type NextRequest, type NextFetchEvent } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { reportAccess } from "@/lib/owned-access";
 
-// AI agents and crawlers that never run JavaScript, counted by Letterstory
+// AI agents and crawlers that never run JavaScript, counted by Letter
 // Visitors (lettervisit.com). Env-gated on the same public key as the in-page
 // script (components/lettervisit-script.tsx), so forks / self-hosted
 // deployments report nothing.

@@ -14,7 +14,7 @@ import {
 import { runQuery } from "./llm";
 
 // ------------------------------------------------------------------
-// What lettertrace records on the letterstory spend ledger: only calls on
+// What lettertrace records on the Letter spend ledger: only calls on
 // Letter's own keys (the free tier, our own accounts), with the cost the
 // reply carried, sent in batches that never stand in an answer's way.
 // ------------------------------------------------------------------

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
  * Who may see the operations dashboard.
  *
  * An env allowlist rather than a database role, for two reasons. This
- * repository is public, so a hardcoded list of Letterstory addresses would be
+ * repository is public, so a hardcoded list of Letter staff addresses would be
  * both wrong and permanent — a self-hoster sets their own and nothing about
  * our team ships in the source. And it needs no migration, no admin UI to
  * manage admins, and no way to accidentally grant it through the product.

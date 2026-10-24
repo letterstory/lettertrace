@@ -3,7 +3,7 @@
 //
 // A slow reasoning model answers ~20 a minute, so one invocation's budget tops
 // out around 220 answers, and every bigger run used to settle with the tail of
-// its portfolio never asked (Letterstory 2026-10-02: 25 of 33 ChatGPT runs).
+// its portfolio never asked (Letter 2026-10-02: 25 of 33 ChatGPT runs).
 // These cases pin the fix: a background run on the user's own key continues
 // into fresh invocations instead of settling, each leg asks only what is
 // missing, the counts on the row are the RUN's, and anything that can't
