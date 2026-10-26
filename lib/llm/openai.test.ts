@@ -200,11 +200,52 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
 
 describe("openai runQuery with web search — transport", () => {
   it("retries a 5xx and succeeds on the next attempt", async () => {
-    mockFetch({ status: 502, body: { error: { message: "bad gateway" } } }, { body: responsesOk("answer") });
-    const res = await runQuery({ provider: "openai", model: "gpt-4o", apiKey: KEY, prompt: "q", webSearch: true });
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      mockFetch({ status: 502, body: { error: { message: "bad gateway" } } }, { body: responsesOk("answer") });
+      const pending = runQuery({ provider: "openai", model: "gpt-4o", apiKey: KEY, prompt: "q", webSearch: true });
+      await vi.runAllTimersAsync();
+      const res = await pending;
 
-    expect(res.text).toBe("answer");
-    expect(calls).toHaveLength(2);
+      expect(res.text).toBe("answer");
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Seen live 2026-10-26: Concentrate 502'd every routed request for about 30
+  // seconds. Three back-to-back attempts all landed inside that window, so the
+  // retries have to wait long enough to outlast it, not fire within ~300ms.
+  it("spaces its 5xx retries far enough apart to outlast a gateway blip", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      const blipEndsAt = Date.now() + 30_000;
+      calls = [];
+      currentFetch = async (url, init) => {
+        calls.push({ url: String(url), body: JSON.parse((init as { body: string }).body) });
+        const down = Date.now() < blipEndsAt;
+        return new Response(JSON.stringify(down ? { error: { message: "Bad Gateway" } } : responsesOk("answer")), {
+          status: down ? 502 : 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const pending = runQuery({
+        provider: "google",
+        model: "gemini-flash-latest",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      });
+      await vi.runAllTimersAsync();
+      const res = await pending;
+
+      expect(res.text).toBe("answer");
+      expect(calls.length).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces a 401 immediately as an invalid key", async () => {
