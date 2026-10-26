@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 
 /**
- * Letterstory Visitors script (lettervisit.com).
+ * Letter Visitors script (lettervisit.com).
  *
  * Rendered inside <head> by the root layout. Renders nothing unless
  * NEXT_PUBLIC_LETTERVISIT_KEY is set, so a self-hosted deployment ships zero

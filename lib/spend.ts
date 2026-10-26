@@ -3,7 +3,7 @@ import type { Provider, RouteInfo } from "@/lib/types";
 
 // ==================================================================
 // What every model call on LETTER'S OWN keys really cost, sent to the
-// letterstory app's spend ledger (spending.letter.dev).
+// Letter app's spend ledger (spending.letter.dev).
 //
 // Lettertrace is bring-your-own-key: a customer's calls run on the customer's
 // credential and are none of our spend. Two kinds of call are ours, and only
@@ -11,7 +11,7 @@ import type { Provider, RouteInfo } from "@/lib/types";
 //   - the free tier: the operator's shared trial keys (TRIAL_CONCENTRATE_API_KEY,
 //     or a per-provider TRIAL_*_API_KEY where Concentrate can't serve the engine),
 //     filed as `trial-probe` on "Lettertrace Free Tier";
-//   - Letter's own accounts (the ops account the Letterstory app probes through,
+//   - Letter's own accounts (the ops account the Letter app probes through,
 //     whose stored Concentrate key is "Lettertrace Probes"), named by user id in
 //     LETTERSTORY_SPEND_USER_IDS, filed as `probe`.
 // Who pays is decided once, where the run (or the utility call) resolves its key,
@@ -37,7 +37,7 @@ export interface SpendScope {
   keyLabel: string;
   projectId?: string | null;
   runId?: string | null;
-  /** The letterstory org, when known; the app resolves it from the project otherwise. */
+  /** The org in Letter, when known; the app resolves it from the project otherwise. */
   orgId?: string | null;
 }
 
@@ -113,7 +113,7 @@ export function spendScopeFor(
 // One reply → one event
 // ------------------------------------------------------------------
 
-/** The event the app's ingest takes (letterstory src/lib/validations/spend.ts spendUsageEventSchema). */
+/** The event the app's ingest takes (Letter's src/lib/validations/spend.ts spendUsageEventSchema). */
 export interface SpendEvent {
   event_id: string;
   occurred_at: string;

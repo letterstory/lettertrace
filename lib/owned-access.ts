@@ -2,7 +2,7 @@
 //
 // The blog has no Lettersprite proxy, so we capture our own access signal and
 // forward it to app.letterstory.com's owned-access ingest — the same telemetry
-// the Letterstory phantom fleet collects (which AI agents fetch a page, which
+// the Letter phantom fleet collects (which AI agents fetch a page, which
 // crawlers index it, which humans read it), surfaced alongside GSC + AI
 // visibility.
 //

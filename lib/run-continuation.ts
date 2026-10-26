@@ -14,7 +14,7 @@ import { recordOps } from "@/lib/ops";
  * the end: the run settled "completed" with the tail of the portfolio never
  * asked, and nothing ever asked it. For a slow reasoning model that ceiling is
  * ~220 answers, so every bigger run measured a different, tail-less question set
- * from the one it planned (Letterstory, 2026-10-02: 25 of 33 ChatGPT runs).
+ * from the one it planned (Letter, 2026-10-02: 25 of 33 ChatGPT runs).
  *
  * Now a background run on the user's own key continues instead: its last act is
  * to start the next LEG in a fresh invocation (POST /api/internal/runs/:id/
