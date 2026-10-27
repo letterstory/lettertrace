@@ -13,7 +13,6 @@ const LETTER_KEY = process.env.NEXT_PUBLIC_LETTERVISIT_KEY ?? "";
 const LETTER_ENDPOINT = "https://lettervisit.com/api/v1/agent-visit";
 const LETTER_RULES_URL = `https://app.letterstory.com/api/visitors/snippet-rules?kind=nextjs&k=${LETTER_KEY}`;
 const LETTER_DROP = new Set(["cookie","set-cookie","authorization","proxy-authorization","x-api-key","x-auth-token","x-csrf-token","x-vercel-oidc-token","cf-access-jwt-assertion"]);
-const LETTER_RESPONSE = ["content-type","content-length","cf-cache-status","x-vercel-cache","age","x-robots-tag"];
 // Which requests to forward comes from Letter and refreshes on its own; these are the defaults
 // until the first refresh, and if it ever fails.
 let letterRules = letterCompile({"v":2,"ttl":600,"all":false,"ua":"bot|crawl|spider|agent|fetch|chatgpt|claude|perplexity|anthropic|openai|gemini|google|mistral|cohere|externalhit|-user\\b|letter-visitors-sitecheck|^curl/|^wget/|python-requests|python-urllib|python-httpx|aiohttp|^node\\b|undici|axios/|got \\(|^go-http-client|okhttp|^java/|libwww-perl|^ruby\\b|guzzlehttp|^php\\b|scrapy|^httpie","path":"(^|/)(llms(-full)?\\.txt|agents\\.md)$|\\.mdx?$","referer":"chatgpt|openai|claude|perplexity|gemini|copilot","query":"utm_source=(chatgpt|openai|claude|perplexity|gemini|copilot)","headers":["signature-agent","signature"],"skip":"\\.(png|jpe?g|gif|webp|avif|svg|ico|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3)$|^/_next/"});
