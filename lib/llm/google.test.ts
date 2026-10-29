@@ -157,7 +157,7 @@ describe("google runQuery — request shape", () => {
 
 describe("google AI Overviews pseudo-model", () => {
   it("never puts the pseudo-model id on the wire, and backs it with a catalog model", async () => {
-    mockFetch(jsonResponse(ok("overview")));
+    mockFetch(jsonResponse(ok("q")), jsonResponse(ok("overview")));
     await runQuery({
       provider: "google",
       model: GOOGLE_AI_OVERVIEWS_MODEL,
@@ -165,14 +165,16 @@ describe("google AI Overviews pseudo-model", () => {
       prompt: "q",
     });
 
-    expect(wireModel()).not.toBe(GOOGLE_AI_OVERVIEWS_MODEL);
-    // The backing model must be one we actually offer, or it rots out of sync
-    // with the catalog the same way the pinned 2.5 ids did.
-    expect(REAL_GOOGLE_MODEL_IDS).toContain(wireModel());
+    for (const call of [0, 1]) {
+      expect(wireModel(call)).not.toBe(GOOGLE_AI_OVERVIEWS_MODEL);
+      // The backing model must be one we actually offer, or it rots out of sync
+      // with the catalog the same way the pinned 2.5 ids did.
+      expect(REAL_GOOGLE_MODEL_IDS).toContain(wireModel(call));
+    }
   });
 
   it("always grounds, even when the project has web search turned off", async () => {
-    mockFetch(jsonResponse(ok("overview", { groundingChunks: [] })));
+    mockFetch(jsonResponse(ok("q")), jsonResponse(ok("overview", { groundingChunks: [] })));
     await runQuery({
       provider: "google",
       model: GOOGLE_AI_OVERVIEWS_MODEL,
@@ -182,9 +184,48 @@ describe("google AI Overviews pseudo-model", () => {
     });
 
     // An "AI Overview" that answered from memory would be a different product.
-    expect(sentBody().tools).toEqual([{ google_search: {} }]);
-    expect(sentBody().systemInstruction.parts[0].text).toMatch(/AI Overview/);
-    expect(sentBody().systemInstruction.parts[0].text).toMatch(/ALWAYS search the web/);
+    expect(sentBody(1).tools).toEqual([{ google_search: {} }]);
+    expect(sentBody(1).systemInstruction.parts[0].text).toMatch(/AI Overview/);
+    expect(sentBody(1).systemInstruction.parts[0].text).toMatch(/ALWAYS search the web/);
+  });
+
+  it("asks the search-style rewrite of the question, after an ungrounded rewrite call", async () => {
+    mockFetch(
+      jsonResponse(ok('"best ap automation software."')),
+      jsonResponse(ok("overview", { groundingChunks: [] })),
+    );
+    const res = await runQuery({
+      provider: "google",
+      model: GOOGLE_AI_OVERVIEWS_MODEL,
+      apiKey: KEY,
+      prompt: "I'm a controller at a 50-person company, which AP tools should I look at?",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(wireModel(0)).toMatch(/lite/);
+    expect(sentBody(0).tools).toBeUndefined();
+    expect(sentBody(1).contents[0].parts[0].text).toBe("best ap automation software");
+    expect(res.tokens).toBe(84);
+  });
+
+  it("asks the original question when the rewrite comes back empty", async () => {
+    mockFetch(jsonResponse(ok("")), jsonResponse(ok("overview", { groundingChunks: [] })));
+    await runQuery({ provider: "google", model: GOOGLE_AI_OVERVIEWS_MODEL, apiKey: KEY, prompt: "which ap tools?" });
+    const last = fetchMock.mock.calls.length - 1;
+    expect(sentBody(last).contents[0].parts[0].text).toBe("which ap tools?");
+  });
+
+  it("asks a plain Gemini model the question as written, in one call", async () => {
+    mockFetch(jsonResponse(ok("answer", { groundingChunks: [] })));
+    await runQuery({
+      provider: "google",
+      model: "gemini-flash-latest",
+      apiKey: KEY,
+      prompt: "which ap tools?",
+      webSearch: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentBody().contents[0].parts[0].text).toBe("which ap tools?");
   });
 
   it("resolves the pseudo-model on utility calls too, so setup works on an Overviews project", async () => {
