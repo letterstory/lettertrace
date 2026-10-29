@@ -1,4 +1,4 @@
-import { type NextRequest, type NextFetchEvent } from "next/server";
+import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { reportAccess } from "@/lib/owned-access";
 
@@ -84,7 +84,20 @@ function reportAgentVisit(request: NextRequest, event: NextFetchEvent) {
 	}
 }
 
+// Credentials that must never survive in a URL. Before the login form forced
+// POST, a submit that beat hydration sent them as a GET query string.
+const CREDENTIAL_PARAMS = ["password", "email"];
+
 export async function middleware(request: NextRequest, event: NextFetchEvent) {
+  // Strip credentials from the URL before the page renders, so they don't
+  // stay in the address bar or get captured by analytics as $current_url.
+  const leaked = CREDENTIAL_PARAMS.filter((p) => request.nextUrl.searchParams.has(p));
+  if (leaked.length > 0) {
+    const clean = request.nextUrl.clone();
+    for (const p of leaked) clean.searchParams.delete(p);
+    return NextResponse.redirect(clean, 303);
+  }
+
   // Owned-site access telemetry for the marketing blog. Middleware runs before
   // the CDN cache, so it captures AI crawlers and search bots that never execute
   // JS (the in-page beacon only sees humans). Fire-and-forget via waitUntil so
