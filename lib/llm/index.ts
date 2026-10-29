@@ -704,6 +704,55 @@ export async function runQuery(
 async function runQueryUnmeasured(
   opts: BaseCall & { prompt: string; webSearch?: boolean },
 ): Promise<QueryResult> {
+  if (opts.model === GOOGLE_AI_OVERVIEWS_MODEL && process.env.AIO_SEARCH_QUERY !== "off") {
+    const rewrite = await overviewSearchQuery(opts, opts.prompt);
+    const result = await answerQuery({ ...opts, prompt: rewrite.query });
+    return { ...result, tokens: result.tokens + rewrite.tokens };
+  }
+  return answerQuery(opts);
+}
+
+// A real AI Overview answers what someone typed into Google, not a chat
+// question: "best ap automation software", not "I'm a controller at a 50-person
+// company, which AP tools should I look at?". Asking Overviews the chat wording
+// made it the same call as Gemini (same model, same grounding), and the two
+// agreed at the ceiling two readings of ONE thing can reach. The rewrite is an
+// ungrounded flash-lite call (no grounding fee); any failure asks the original.
+// AIO_SEARCH_QUERY=off turns it off.
+const SEARCH_QUERY_SYSTEM = `Rewrite the user's question as the short query a person would type into Google Search to find the answer.
+- 2 to 8 words, lowercase, no punctuation, no quotes.
+- Keep any brand, product, category or place named in the question.
+- Reply with the query only.`;
+
+const SEARCH_QUERY_MODEL = "gemini-flash-lite-latest";
+
+export async function overviewSearchQuery(
+  opts: BaseCall,
+  prompt: string,
+): Promise<{ query: string; tokens: number }> {
+  try {
+    const { text, tokens } = await utilityChat(
+      { ...opts, model: SEARCH_QUERY_MODEL },
+      SEARCH_QUERY_MODEL,
+      SEARCH_QUERY_SYSTEM,
+      prompt,
+      40,
+    );
+    const query = text
+      .trim()
+      .split("\n")[0]
+      .replace(/^["'`]+|["'`.]+$/g, "")
+      .trim();
+    if (!query || query.length > 120) return { query: prompt, tokens };
+    return { query, tokens };
+  } catch {
+    return { query: prompt, tokens: 0 };
+  }
+}
+
+async function answerQuery(
+  opts: BaseCall & { prompt: string; webSearch?: boolean },
+): Promise<QueryResult> {
   const webSearch = opts.webSearch ?? false;
 
   // A routed answer (anthropic / openai / gemini through the router) — the

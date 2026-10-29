@@ -184,7 +184,9 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
         webSearch: true,
       }),
     ).rejects.toThrow(/^Gemini stopped before finishing.*max_output_tokens/);
-    expect(calls[0].url).toBe("https://api.concentrate.ai/v1/responses");
+    // The search-query rewrite goes first, ungrounded; the answer is the last call.
+    expect(calls[0].url).toBe("https://api.concentrate.ai/v1/chat/completions");
+    expect(calls[calls.length - 1].url).toBe("https://api.concentrate.ai/v1/responses");
   });
 
   it("fails an empty answer instead of storing it, without retrying", async () => {
