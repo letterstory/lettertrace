@@ -196,6 +196,42 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
     ).rejects.toThrow(/empty answer/);
     expect(calls).toHaveLength(1);
   });
+
+  it("asks routed Gemini once more when it completes with no text, and meters both calls", async () => {
+    // Concentrate's Gemini Flash now and then completes with an empty message,
+    // never twice on one prompt; without the second ask the prompt's answer is
+    // lost for the whole cycle while the run still reads completed.
+    mockFetch({ body: responsesOk("") }, { body: responsesOk("the answer") });
+    const res = await runQuery({
+      provider: "google",
+      model: "gemini-flash-latest",
+      apiKey: KEY,
+      route: { router: "concentrate", baseUrl: null },
+      prompt: "q",
+      webSearch: true,
+    });
+
+    expect(res.text).toBe("the answer");
+    expect(res.tokens).toBe(84);
+    const answers = calls.filter((c) => c.url === "https://api.concentrate.ai/v1/responses");
+    expect(answers).toHaveLength(2);
+  });
+
+  it("fails routed Gemini's empty answer after the one extra ask", async () => {
+    mockFetch({ body: responsesOk("") });
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "gemini-flash-latest",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      }),
+    ).rejects.toThrow(/^Gemini returned an empty answer/);
+    const answers = calls.filter((c) => c.url === "https://api.concentrate.ai/v1/responses");
+    expect(answers).toHaveLength(2);
+  });
 });
 
 // --- Grounded path — transport ----------------------------------------------
