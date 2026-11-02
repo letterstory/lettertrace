@@ -1099,8 +1099,9 @@ async function openaiWebSearch(
   // incomplete or empty is a deliverable the model produced and billed — on the
   // 5.6 models a single grounded answer runs 30-60k tokens, so retrying a
   // deterministic failure re-bills it for zero stored data (the same trap the
-  // node-fetch note on CLIENT_OPTS describes).
-  const j = await retryServerErrors(async () => {
+  // node-fetch note on CLIENT_OPTS describes). Routed Gemini's empty answer is
+  // the one exception, below.
+  const ask = () => retryServerErrors(async () => {
     const res = await fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
@@ -1139,6 +1140,31 @@ async function openaiWebSearch(
     return body;
   }, deadlineMs);
 
+  const responseText = (body: ResponsesBody) =>
+    (body.output ?? [])
+      .flatMap((item) => item.content ?? [])
+      .filter((c) => typeof c.text === "string")
+      .map((c) => c.text as string)
+      .join("\n");
+  const responseTokens = (body: ResponsesBody) =>
+    body.usage?.total_tokens ?? (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0);
+
+  let j = await ask();
+  let tokens = responseTokens(j);
+  // Gemini through Concentrate (Flash and AI Overviews) now and then completes
+  // with no text at all: seen ~20 times 2026-10-26..11-02, never twice on one
+  // prompt, so it is a blip, not the question. Unlike a 5.6 answer, a Flash
+  // answer is cheap, so it is asked once more rather than lost for the cycle.
+  if (
+    isGemini &&
+    j.status !== "incomplete" &&
+    !responseText(j).trim() &&
+    retryFitsDeadline(0, GATEWAY_MIN_RETRY_ATTEMPT_MS, deadlineMs)
+  ) {
+    j = await ask();
+    tokens += responseTokens(j);
+  }
+
   let text = "";
   const cited: CitedSource[] = [];
   const searched: CitedSource[] = [];
@@ -1160,9 +1186,6 @@ async function openaiWebSearch(
       }
     }
   }
-  const tokens =
-    j.usage?.total_tokens ??
-    (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
 
   // A 200 that carries nothing measurable must fail loudly — the same stance
   // as the Gemini and Perplexity adapters, for the same reason: a stored empty
