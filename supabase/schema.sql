@@ -811,6 +811,21 @@ create index if not exists idx_responses_run on public.responses (run_id);
 create index if not exists idx_mentions_project on public.mentions (project_id);
 create index if not exists idx_mentions_run on public.mentions (run_id);
 create index if not exists idx_mentions_response on public.mentions (response_id);
+
+-- Deleting a topic or a prompt makes Postgres enforce every foreign key that
+-- points AT the row being removed -- `responses.prompt_id`, `responses.topic_id`,
+-- `mentions.topic_id`, `mentions.competitor_id` and `web_mentions.topic_id`, all of
+-- them `on delete set null`. Without an index on the referencing column each of
+-- those checks is a sequential scan of the whole table, and a topic's delete pays
+-- that once for itself plus once per prompt it cascades into. On 2026-10-15 that
+-- pushed DELETE /api/topics/[id] past the 8s statement timeout and the route 500'd
+-- (INC-973); the same topic deleted in under a second once its prompts were gone.
+-- These indexes make each check a point lookup. They grow with the answer history,
+-- so the ceiling they lift is the one every account rises towards.
+create index if not exists idx_responses_prompt on public.responses (prompt_id);
+create index if not exists idx_responses_topic on public.responses (topic_id);
+create index if not exists idx_mentions_topic on public.mentions (topic_id);
+create index if not exists idx_mentions_competitor on public.mentions (competitor_id);
 create index if not exists idx_sources_response on public.sources (response_id);
 create index if not exists idx_sources_run on public.sources (run_id);
 create index if not exists idx_sources_project on public.sources (project_id);
@@ -1576,6 +1591,10 @@ create index if not exists idx_web_mention_runs_project on public.web_mention_ru
 -- The feed reads newest-activity-first; the summary groups by topic.
 create index if not exists idx_web_mentions_project_seen on public.web_mentions (project_id, last_seen_at desc);
 create index if not exists idx_web_mentions_project_topic on public.web_mentions (project_id, topic_id);
+-- Bare topic_id, for the foreign-key check a topic's delete runs (see the
+-- note in the indexes block above); the composite index above leads with
+-- project_id and cannot serve it.
+create index if not exists idx_web_mentions_topic on public.web_mentions (topic_id);
 -- The trend derives from first_seen_at.
 create index if not exists idx_web_mentions_project_first on public.web_mentions (project_id, first_seen_at desc);
 
