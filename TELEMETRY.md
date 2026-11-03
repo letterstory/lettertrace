@@ -1,8 +1,5 @@
 # Telemetry
 
-This codebase uses OnePatch for telemetry. Query it at app.onepatch.dev/mcp;
-manual at docs.onepatch.dev.
-
 **Since 2026-08-19 this application exports OpenTelemetry traces, metrics and
 logs over OTLP/HTTP.** `instrumentation.ts` starts the SDK; `lib/otel/` holds
 the wiring and the hand-instrumentation helpers.
@@ -21,13 +18,13 @@ nothing observable. Delete this paragraph once they are set.
 ## What monitoring also exists
 
 Three in-house surfaces. The first now feeds the exported log stream; the other
-two remain product features and do not reach OnePatch:
+two remain product features and do not reach the OTLP collector:
 
 - **`lib/ops.ts`** — operational events (provider failures, run outcomes)
   bucketed by `(kind, signature, hour)` into Supabase. Never throws, never
   blocks, never records content. Read back through `lib/ops-report.ts` and the
   admin screens. **`recordOps` now also emits an OTel log record**, so the same
-  already-scrubbed signature reaches OnePatch — see Logs below. The two
+  already-scrubbed signature reaches the collector — see Logs below. The two
   destinations are gated separately: the Supabase bucket on `OPS_TELEMETRY`,
   the log record on the exporter being configured.
 - **`lib/activity.ts` / `lib/logs.ts`** — the per-user activity log shown on the

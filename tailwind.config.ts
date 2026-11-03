@@ -59,6 +59,14 @@ const config: Config = {
           soft: "rgb(var(--c-sand-soft) / <alpha-value>)",
           tint: "rgb(var(--c-sand-tint) / <alpha-value>)",
         },
+        // Trial-ended "how do I get a key" panels. Values flip with the theme.
+        help: {
+          DEFAULT: "rgb(var(--c-help) / <alpha-value>)",
+          border: "rgb(var(--c-help-border) / <alpha-value>)",
+          ink: "rgb(var(--c-help-ink) / <alpha-value>)",
+          deep: "rgb(var(--c-help-deep) / <alpha-value>)",
+          "deep-border": "rgb(var(--c-help-deep-border) / <alpha-value>)",
+        },
         // Always-dark code/terminal surface (kept dark in both themes).
         terminal: {
           DEFAULT: "rgb(var(--c-terminal) / <alpha-value>)",

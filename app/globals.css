@@ -55,6 +55,15 @@
   --c-chart-3: 180 142 44;
   --c-chart-other: 138 134 125;
 
+  /* Trial-ended help panels. The spec orange isn't a brand token, and the
+     dark hex would be a near-black slab on the light canvas, so light mode
+     is a terracotta wash with the same roles. */
+  --c-help: 42 34 29; /* #2A221D */
+  --c-help-border: 68 51 42; /* #44332A */
+  --c-help-ink: 226 201 187; /* #E2C9BB */
+  --c-help-deep: 58 42 34; /* #3A2A22 */
+  --c-help-deep-border: 90 65 52; /* #5A4134 */
+
   /* effect tints */
   --grid-line: 255 255 255;
   --grid-alpha: 0.05;
@@ -99,6 +108,13 @@
 
   --c-terminal: 26 25 23;
   --c-terminal-ink: 245 244 240;
+
+  /* Same roles as the dark help panels, as a terracotta wash on cream. */
+  --c-help: 248 236 228;
+  --c-help-border: 224 186 166;
+  --c-help-ink: 185 85 47;
+  --c-help-deep: 241 220 206;
+  --c-help-deep-border: 206 156 132;
 
   --c-chart-1: 224 120 80;
   --c-chart-2: 7 122 102;

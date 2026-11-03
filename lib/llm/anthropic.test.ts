@@ -186,3 +186,80 @@ describe("verifyKey for an unscoped Claude key", () => {
     });
   });
 });
+
+describe("humanError for an Anthropic account out of credit", () => {
+  // Every scheduled run on an exhausted own key recorded the raw 400 body,
+  // status code and JSON included, as its error.
+  it("says the account is out of credit instead of showing the JSON body", async () => {
+    mockFetch({
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message:
+            "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+        },
+        request_id: null,
+      },
+    });
+
+    const res = await verifyKey("anthropic", KEY);
+
+    expect(res).toEqual({
+      ok: false,
+      error: "This Anthropic account is out of credit. Add credits in the Anthropic Console under Plans & Billing, then run again.",
+    });
+  });
+});
+
+// --- Gateway 5xx -------------------------------------------------------------
+//
+// Seen live 2026-10-26: Concentrate answered every routed request with a 502 in
+// ~90ms for about 30 seconds. The forced call runs with the SDK's retries off
+// (see the tool_choice fallback above), so one 502 lost the ask outright.
+
+describe("anthropic runQuery with web search — gateway 5xx", () => {
+  const BAD_GATEWAY = { status: 502, body: { error: { message: "Bad Gateway" } } };
+
+  it("waits out a gateway 502 instead of losing the ask", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      mockFetch(BAD_GATEWAY, BAD_GATEWAY, { body: textOk("answered after the blip") });
+      const pending = runQuery({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      });
+      await vi.runAllTimersAsync();
+      const res = await pending;
+
+      expect(res.text).toBe("answered after the blip");
+      expect(res.fallback).toBeUndefined();
+      expect(calls).toHaveLength(3);
+      // Every retry is still the forced, grounded request.
+      expect(calls[2].body.tool_choice).toEqual({ type: "tool", name: "web_search" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a retry that cannot land before the run's deadline", async () => {
+    mockFetch(BAD_GATEWAY, { body: textOk("never asked") });
+    const err = await runQuery({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      apiKey: KEY,
+      route: { router: "concentrate", baseUrl: null },
+      prompt: "q",
+      webSearch: true,
+      deadlineMs: Date.now() + 5_000,
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ status: 502 });
+    expect(calls).toHaveLength(1);
+  });
+});

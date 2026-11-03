@@ -152,6 +152,50 @@ async function withDeadline<T>(deadlineMs: number | undefined, work: Promise<T>)
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// How long to wait before each retry of a 5xx on a grounded answer. Seen live
+// 2026-10-26: Concentrate answered every routed request with a 502 in ~90ms
+// for about 30 seconds, across four models at once. Retries fired back-to-back
+// (or not at all, on the forced Anthropic call) all landed inside that window,
+// so 139 answers were lost to a blip. These waits sum to 37s, which outlasts
+// it. A 5xx that fast is the gateway refusing, not an answer produced and
+// billed, so waiting it out costs nothing but time.
+const GATEWAY_RETRY_WAITS_MS = [2_000, 5_000, 10_000, 20_000];
+// The least time a retried grounded answer needs to land (multi-round web
+// search answers take tens of seconds), the same floor the Google path uses.
+const GATEWAY_MIN_RETRY_ATTEMPT_MS = 20_000;
+
+/** A server error worth asking again: the gateway or provider failed, not our request. */
+function isTransientServerError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" && status >= 500;
+}
+
+/**
+ * Run `attempt`, retrying a 5xx after each wait in GATEWAY_RETRY_WAITS_MS while
+ * the retry still fits before `deadlineMs`. Anything else (a 4xx, an empty or
+ * incomplete answer, a timeout) is thrown at once: those are deterministic or
+ * already billed, and asking again would only re-bill them.
+ */
+async function retryServerErrors<T>(attempt: () => Promise<T>, deadlineMs: number | undefined): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      const waitMs = GATEWAY_RETRY_WAITS_MS[i];
+      if (
+        !isTransientServerError(err) ||
+        waitMs === undefined ||
+        !retryFitsDeadline(waitMs, GATEWAY_MIN_RETRY_ATTEMPT_MS, deadlineMs)
+      ) {
+        throw err;
+      }
+      await sleep(waitMs);
+    }
+  }
+}
+
 // Every low-level call reports its total token usage so the trial layer can
 // meter it. `tokens` is input + output tokens for the call.
 export interface ChatResult {
@@ -660,6 +704,55 @@ export async function runQuery(
 async function runQueryUnmeasured(
   opts: BaseCall & { prompt: string; webSearch?: boolean },
 ): Promise<QueryResult> {
+  if (opts.model === GOOGLE_AI_OVERVIEWS_MODEL && process.env.AIO_SEARCH_QUERY !== "off") {
+    const rewrite = await overviewSearchQuery(opts, opts.prompt);
+    const result = await answerQuery({ ...opts, prompt: rewrite.query });
+    return { ...result, tokens: result.tokens + rewrite.tokens };
+  }
+  return answerQuery(opts);
+}
+
+// A real AI Overview answers what someone typed into Google, not a chat
+// question: "best ap automation software", not "I'm a controller at a 50-person
+// company, which AP tools should I look at?". Asking Overviews the chat wording
+// made it the same call as Gemini (same model, same grounding), and the two
+// agreed at the ceiling two readings of ONE thing can reach. The rewrite is an
+// ungrounded flash-lite call (no grounding fee); any failure asks the original.
+// AIO_SEARCH_QUERY=off turns it off.
+const SEARCH_QUERY_SYSTEM = `Rewrite the user's question as the short query a person would type into Google Search to find the answer.
+- 2 to 8 words, lowercase, no punctuation, no quotes.
+- Keep any brand, product, category or place named in the question.
+- Reply with the query only.`;
+
+const SEARCH_QUERY_MODEL = "gemini-flash-lite-latest";
+
+export async function overviewSearchQuery(
+  opts: BaseCall,
+  prompt: string,
+): Promise<{ query: string; tokens: number }> {
+  try {
+    const { text, tokens } = await utilityChat(
+      { ...opts, model: SEARCH_QUERY_MODEL },
+      SEARCH_QUERY_MODEL,
+      SEARCH_QUERY_SYSTEM,
+      prompt,
+      40,
+    );
+    const query = text
+      .trim()
+      .split("\n")[0]
+      .replace(/^["'`]+|["'`.]+$/g, "")
+      .trim();
+    if (!query || query.length > 120) return { query: prompt, tokens };
+    return { query, tokens };
+  } catch {
+    return { query: prompt, tokens: 0 };
+  }
+}
+
+async function answerQuery(
+  opts: BaseCall & { prompt: string; webSearch?: boolean },
+): Promise<QueryResult> {
   const webSearch = opts.webSearch ?? false;
 
   // A routed answer (anthropic / openai / gemini through the router) — the
@@ -669,7 +762,7 @@ async function runQueryUnmeasured(
     const plan = planRoute(opts.route, opts.provider, opts.model, { webSearch });
     if (plan.shape === "anthropic") {
       return webSearch
-        ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt, plan)
+        ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt, plan, opts.deadlineMs)
         : anthropicChat(opts.apiKey, opts.model, undefined, opts.prompt, ANSWER_MAX_TOKENS, plan)
             .then((res) => ({ ...res, sources: [] }));
     }
@@ -677,7 +770,7 @@ async function runQueryUnmeasured(
     // via Concentrate (openaiWebSearch picks the right tool per slug). Same
     // forced measurement in both cases.
     if (plan.shape === "openai-responses" && webSearch) {
-      return openaiWebSearch(opts.apiKey, opts.model, opts.prompt, plan);
+      return openaiWebSearch(opts.apiKey, opts.model, opts.prompt, plan, opts.deadlineMs);
     }
     // Otherwise chat-completions: nothing was asked to be grounded, so there is
     // no forcing to preserve and the simpler endpoint is the right one.
@@ -701,8 +794,8 @@ async function runQueryUnmeasured(
     return { ...res, sources: [] };
   }
   return opts.provider === "anthropic"
-    ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt)
-    : openaiWebSearch(opts.apiKey, opts.model, opts.prompt);
+    ? anthropicWebSearch(opts.apiKey, opts.model, opts.prompt, undefined, opts.deadlineMs)
+    : openaiWebSearch(opts.apiKey, opts.model, opts.prompt, undefined, opts.deadlineMs);
 }
 
 /**
@@ -826,6 +919,7 @@ async function anthropicWebSearch(
   model: string,
   prompt: string,
   plan?: RoutePlan,
+  deadlineMs?: number,
 ): Promise<QueryResult> {
   const client = new Anthropic(anthropicOpts(apiKey, plan));
   // web_search is a server-side tool not in older SDK typings; cast the params.
@@ -850,41 +944,46 @@ async function anthropicWebSearch(
   };
 
   let fallback: QueryResult["fallback"];
-  let msg: Anthropic.Message;
-  try {
-    msg = await client.messages.create(
-      {
-        ...baseParams,
-        // Force the browse, matching the OpenAI path. Left to choose, the model
-        // answers well-known questions from memory and cites nothing — in a live
-        // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
-        // which made the two providers' mention rates measure different things.
-        // use_web_search is opt-in per project, so when it's on the user has
-        // asked us to check the live web. Costs roughly 4x the tokens of a
-        // memory answer.
-        tool_choice: { type: "tool", name: "web_search" },
-      } as unknown as Anthropic.MessageCreateParamsNonStreaming,
-      // A tool_choice mismatch is a deterministic request-shape rejection, not
-      // a transient one — retrying the identical body through the SDK's own
-      // ladder (CLIENT_OPTS.maxRetries) cannot help and only re-bills the
-      // gateway. Disabling it here makes that explicit rather than relying on
-      // Anthropic.APIError's default shouldRetry (which already excludes 4xx,
-      // but a gateway that mislabels its own error as retryable via
-      // `x-should-retry` could still override that).
-      { maxRetries: 0 },
-    );
-  } catch (err) {
-    if (!isToolChoiceMismatch(err)) throw err;
-    // Retry exactly once, unforced: still offer the tool (harmless if the
-    // gateway keeps dropping it, and lets the model use it if this call
-    // happens to get through intact) but stop mandating the browse, so the
-    // run gets an ungrounded answer instead of losing the ask outright.
-    fallback = "tool_choice_mismatch";
-    msg = await client.messages.create(
-      baseParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
-      { maxRetries: 0 },
-    );
-  }
+  // The SDK's own retry ladder is off on both calls below (see the first), so
+  // a 5xx is retried here instead, on waits long enough to outlast a gateway
+  // blip rather than the SDK's few seconds, and a 4xx never is.
+  const msg = await retryServerErrors(async () => {
+    fallback = undefined;
+    try {
+      return await client.messages.create(
+        {
+          ...baseParams,
+          // Force the browse, matching the OpenAI path. Left to choose, the model
+          // answers well-known questions from memory and cites nothing — in a live
+          // pilot it searched on only 4 of 10 prompts where OpenAI searched on 10,
+          // which made the two providers' mention rates measure different things.
+          // use_web_search is opt-in per project, so when it's on the user has
+          // asked us to check the live web. Costs roughly 4x the tokens of a
+          // memory answer.
+          tool_choice: { type: "tool", name: "web_search" },
+        } as unknown as Anthropic.MessageCreateParamsNonStreaming,
+        // A tool_choice mismatch is a deterministic request-shape rejection, not
+        // a transient one — retrying the identical body through the SDK's own
+        // ladder (CLIENT_OPTS.maxRetries) cannot help and only re-bills the
+        // gateway. Disabling it here makes that explicit rather than relying on
+        // Anthropic.APIError's default shouldRetry (which already excludes 4xx,
+        // but a gateway that mislabels its own error as retryable via
+        // `x-should-retry` could still override that).
+        { maxRetries: 0 },
+      );
+    } catch (err) {
+      if (!isToolChoiceMismatch(err)) throw err;
+      // Retry exactly once, unforced: still offer the tool (harmless if the
+      // gateway keeps dropping it, and lets the model use it if this call
+      // happens to get through intact) but stop mandating the browse, so the
+      // run gets an ungrounded answer instead of losing the ask outright.
+      fallback = "tool_choice_mismatch";
+      return await client.messages.create(
+        baseParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
+        { maxRetries: 0 },
+      );
+    }
+  }, deadlineMs);
 
   recordLlmCall(msg, { provider: "anthropic", model: baseParams.model, routed: !!plan });
 
@@ -948,6 +1047,7 @@ async function openaiWebSearch(
   model: string,
   prompt: string,
   plan?: RoutePlan,
+  deadlineMs?: number,
 ): Promise<QueryResult> {
   // Serves two surfaces through the same Responses API + forced web search:
   // direct/routed OpenAI, and Gemini via Concentrate (its google/* slug). A
@@ -999,54 +1099,71 @@ async function openaiWebSearch(
   // incomplete or empty is a deliverable the model produced and billed — on the
   // 5.6 models a single grounded answer runs 30-60k tokens, so retrying a
   // deterministic failure re-bills it for zero stored data (the same trap the
-  // node-fetch note on CLIENT_OPTS describes).
-  let j: ResponsesBody | undefined;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 3 && !j; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: plan ? plan.slug : model,
-          tools: [searchTool],
-          // Force the browse; left to choose, the model answers from memory and
-          // cites nothing. Verified through Concentrate for both OpenAI and
-          // Gemini: forced returns sources even for a memory-answerable question.
-          tool_choice: searchToolChoice,
-          // Gemini-only: the ALWAYS_SEARCH nudge (see geminiSearchInstruction),
-          // since tool_choice doesn't hard-force Gemini's native search.
-          ...(geminiSearchInstruction ? { instructions: geminiSearchInstruction } : {}),
-          // Ask the Responses API to attach the searched result URLs to the
-          // web_search_call item. The 5.6 models search every time (the browse
-          // is forced) but attach inline url_citation annotations only ~70% of
-          // the time; without this include there is nothing to fall back to, so
-          // ~30% of grounded answers record ZERO sources and fail as
-          // "ungrounded" — a real, billed browse discarded. Verified via
-          // scripts/probe-router.ts + the Concentrate response shape.
-          include: ["web_search_call.action.sources"],
-          input: prompt,
-          // Big budget: reasoning + search + answer share this cap, and gpt-5.6
-          // returns "incomplete" at ANSWER_MAX_TOKENS (see the constant's note).
-          max_output_tokens: OPENAI_SEARCH_MAX_OUTPUT_TOKENS,
-          ...plan?.extraBody,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const err = new OpenAI.APIError(res.status, body, undefined, undefined);
-        // Retry transient server errors; surface auth/quota immediately.
-        if (res.status >= 500) { lastErr = err; continue; }
-        throw err;
-      }
-      j = (await res.json()) as ResponsesBody;
-      recordLlmCall(j, { provider: "openai", model: plan ? plan.slug : model, routed: !!plan });
-    } catch (err) {
-      lastErr = err;
-      if (err instanceof OpenAI.APIError && err.status && err.status < 500) throw err;
+  // node-fetch note on CLIENT_OPTS describes). Routed Gemini's empty answer is
+  // the one exception, below.
+  const ask = () => retryServerErrors(async () => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: plan ? plan.slug : model,
+        tools: [searchTool],
+        // Force the browse; left to choose, the model answers from memory and
+        // cites nothing. Verified through Concentrate for both OpenAI and
+        // Gemini: forced returns sources even for a memory-answerable question.
+        tool_choice: searchToolChoice,
+        // Gemini-only: the ALWAYS_SEARCH nudge (see geminiSearchInstruction),
+        // since tool_choice doesn't hard-force Gemini's native search.
+        ...(geminiSearchInstruction ? { instructions: geminiSearchInstruction } : {}),
+        // Ask the Responses API to attach the searched result URLs to the
+        // web_search_call item. The 5.6 models search every time (the browse
+        // is forced) but attach inline url_citation annotations only ~70% of
+        // the time; without this include there is nothing to fall back to, so
+        // ~30% of grounded answers record ZERO sources and fail as
+        // "ungrounded" — a real, billed browse discarded. Verified via
+        // scripts/probe-router.ts + the Concentrate response shape.
+        include: ["web_search_call.action.sources"],
+        input: prompt,
+        // Big budget: reasoning + search + answer share this cap, and gpt-5.6
+        // returns "incomplete" at ANSWER_MAX_TOKENS (see the constant's note).
+        max_output_tokens: OPENAI_SEARCH_MAX_OUTPUT_TOKENS,
+        ...plan?.extraBody,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      // A 5xx is retried by retryServerErrors; auth/quota surface at once.
+      throw new OpenAI.APIError(res.status, body, undefined, undefined);
     }
+    const body = (await res.json()) as ResponsesBody;
+    recordLlmCall(body, { provider: "openai", model: plan ? plan.slug : model, routed: !!plan });
+    return body;
+  }, deadlineMs);
+
+  const responseText = (body: ResponsesBody) =>
+    (body.output ?? [])
+      .flatMap((item) => item.content ?? [])
+      .filter((c) => typeof c.text === "string")
+      .map((c) => c.text as string)
+      .join("\n");
+  const responseTokens = (body: ResponsesBody) =>
+    body.usage?.total_tokens ?? (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0);
+
+  let j = await ask();
+  let tokens = responseTokens(j);
+  // Gemini through Concentrate (Flash and AI Overviews) now and then completes
+  // with no text at all: seen ~20 times 2026-10-26..11-02, never twice on one
+  // prompt, so it is a blip, not the question. Unlike a 5.6 answer, a Flash
+  // answer is cheap, so it is asked once more rather than lost for the cycle.
+  if (
+    isGemini &&
+    j.status !== "incomplete" &&
+    !responseText(j).trim() &&
+    retryFitsDeadline(0, GATEWAY_MIN_RETRY_ATTEMPT_MS, deadlineMs)
+  ) {
+    j = await ask();
+    tokens += responseTokens(j);
   }
-  if (!j) throw lastErr ?? new Error("OpenAI web search failed.");
 
   let text = "";
   const cited: CitedSource[] = [];
@@ -1069,9 +1186,6 @@ async function openaiWebSearch(
       }
     }
   }
-  const tokens =
-    j.usage?.total_tokens ??
-    (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
 
   // A 200 that carries nothing measurable must fail loudly — the same stance
   // as the Gemini and Perplexity adapters, for the same reason: a stored empty
@@ -1080,13 +1194,16 @@ async function openaiWebSearch(
   // max_output_tokens, so a budget spent thinking and searching ends the
   // response with status "incomplete", and what text survived is a fragment,
   // not the answer.
+  // Gemini routed through Concentrate (AI Overviews included) arrives on this
+  // OpenAI-shaped path too; name the model that actually answered.
+  const vendor = isGemini ? "Gemini" : "OpenAI";
   if (j.status === "incomplete") {
     throw new Error(
-      `OpenAI stopped before finishing the answer (${j.incomplete_details?.reason ?? "incomplete"}).`,
+      `${vendor} stopped before finishing the answer (${j.incomplete_details?.reason ?? "incomplete"}).`,
     );
   }
   if (!text.trim()) {
-    throw new Error("OpenAI returned an empty answer.");
+    throw new Error(`${vendor} returned an empty answer.`);
   }
   // Prefer inline citations (what the answer actually used); fall back to the
   // searched sources when the model browsed but attached none, so a real search
@@ -1194,8 +1311,6 @@ interface GoogleResponse {
     details?: { "@type"?: string; retryDelay?: string }[];
   };
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Map the "google-ai-overviews" pseudo-model onto a real Gemini model so it
 // never reaches the wire; every other id passes through untouched.
@@ -1465,7 +1580,13 @@ const PERPLEXITY_RETRYABLE = new Set([429, 500, 502, 503, 504]);
 // Same shape as the Google limits, and for the same reason: a new Perplexity
 // key starts on a low usage tier, so 429s are a first-run experience, not an
 // edge case.
-const PERPLEXITY_MAX_RETRY_WAIT_MS = 45_000;
+//
+// 65s, not 45s: Perplexity's limit is per MINUTE, so a 429's Retry-After is
+// ~60s. Below that, the one wait that clears the limit was the one wait this
+// cap refused, and the loop gave up before its first sleep (every lost answer
+// a single ~3s attempt). The 90s budget below still bounds it to one honoured
+// wait per call.
+const PERPLEXITY_MAX_RETRY_WAIT_MS = 65_000;
 // Perplexity rejects anything smaller with 400 "max_tokens must be at least 16"
 // — measured. The other adapters happily take a 4-8 token probe, so the tiny
 // verifyKey budget copied from them made a VALID key look broken. Clamped here
@@ -2123,6 +2244,13 @@ export function humanError(err: unknown): string {
       /not scoped to a workspace|anthropic-workspace-id/i.test(err.message)
     ) {
       return "This key isn't linked to a workspace. Please generate a workspace key in the Anthropic Console and paste it here.";
+    }
+    // An Anthropic account with no credit 400s with "Your credit balance is too
+    // low", and the SDK message is the status plus the whole JSON body. That is
+    // what a run on an exhausted own key showed as its error, every cycle. Say
+    // it in a sentence and name where the fix is, as the Perplexity 402 does.
+    if (err instanceof Anthropic.APIError && err.status === 400 && /credit balance is too low/i.test(err.message)) {
+      return "This Anthropic account is out of credit. Add credits in the Anthropic Console under Plans & Billing, then run again.";
     }
     return err.message || `Provider error (${err.status}).`;
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -36,6 +36,10 @@ export function AuthForm({
   const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [confirmSent, setConfirmSent] = useState(false);
+  // False in the server HTML and until React attaches handleSubmit. A submit
+  // before then is a native one, so the button stays disabled until hydration.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   const isSignup = authMode === "signup";
   const destination = safePath(next);
@@ -190,7 +194,10 @@ export function AuthForm({
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      {/* method="post" is load-bearing: a native submit (before hydration, or with
+          JS broken) must never fall back to GET, which puts the email and
+          password in the URL, browser history, server logs and analytics. */}
+      <form method="post" action="/login" onSubmit={handleSubmit} className="space-y-4">
         <div>
           <Label htmlFor="email">Email</Label>
           <Input
@@ -219,7 +226,7 @@ export function AuthForm({
           />
         </div>
 
-        <Button type="submit" size="lg" className="w-full" disabled={busy}>
+        <Button type="submit" size="lg" className="w-full" disabled={busy || !hydrated}>
           {loading ? (
             <>
               <Spinner />

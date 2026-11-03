@@ -165,6 +165,30 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("names Gemini, not OpenAI, when routed AI Overviews runs out of budget", async () => {
+    // Routed Gemini (AI Overviews included) shares this Responses path, so the
+    // error has to say which model stopped or the alert points at the wrong vendor.
+    mockFetch({
+      body: responsesOk("truncated fragm", [], {
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+      }),
+    });
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "google-ai-overviews",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      }),
+    ).rejects.toThrow(/^Gemini stopped before finishing.*max_output_tokens/);
+    // The search-query rewrite goes first, ungrounded; the answer is the last call.
+    expect(calls[0].url).toBe("https://api.concentrate.ai/v1/chat/completions");
+    expect(calls[calls.length - 1].url).toBe("https://api.concentrate.ai/v1/responses");
+  });
+
   it("fails an empty answer instead of storing it, without retrying", async () => {
     mockFetch({ body: responsesOk("") });
     await expect(
@@ -172,17 +196,94 @@ describe("openai runQuery with web search — unmeasurable answers", () => {
     ).rejects.toThrow(/empty answer/);
     expect(calls).toHaveLength(1);
   });
+
+  it("asks routed Gemini once more when it completes with no text, and meters both calls", async () => {
+    // Concentrate's Gemini Flash now and then completes with an empty message,
+    // never twice on one prompt; without the second ask the prompt's answer is
+    // lost for the whole cycle while the run still reads completed.
+    mockFetch({ body: responsesOk("") }, { body: responsesOk("the answer") });
+    const res = await runQuery({
+      provider: "google",
+      model: "gemini-flash-latest",
+      apiKey: KEY,
+      route: { router: "concentrate", baseUrl: null },
+      prompt: "q",
+      webSearch: true,
+    });
+
+    expect(res.text).toBe("the answer");
+    expect(res.tokens).toBe(84);
+    const answers = calls.filter((c) => c.url === "https://api.concentrate.ai/v1/responses");
+    expect(answers).toHaveLength(2);
+  });
+
+  it("fails routed Gemini's empty answer after the one extra ask", async () => {
+    mockFetch({ body: responsesOk("") });
+    await expect(
+      runQuery({
+        provider: "google",
+        model: "gemini-flash-latest",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      }),
+    ).rejects.toThrow(/^Gemini returned an empty answer/);
+    const answers = calls.filter((c) => c.url === "https://api.concentrate.ai/v1/responses");
+    expect(answers).toHaveLength(2);
+  });
 });
 
 // --- Grounded path — transport ----------------------------------------------
 
 describe("openai runQuery with web search — transport", () => {
   it("retries a 5xx and succeeds on the next attempt", async () => {
-    mockFetch({ status: 502, body: { error: { message: "bad gateway" } } }, { body: responsesOk("answer") });
-    const res = await runQuery({ provider: "openai", model: "gpt-4o", apiKey: KEY, prompt: "q", webSearch: true });
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      mockFetch({ status: 502, body: { error: { message: "bad gateway" } } }, { body: responsesOk("answer") });
+      const pending = runQuery({ provider: "openai", model: "gpt-4o", apiKey: KEY, prompt: "q", webSearch: true });
+      await vi.runAllTimersAsync();
+      const res = await pending;
 
-    expect(res.text).toBe("answer");
-    expect(calls).toHaveLength(2);
+      expect(res.text).toBe("answer");
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Seen live 2026-10-26: Concentrate 502'd every routed request for about 30
+  // seconds. Three back-to-back attempts all landed inside that window, so the
+  // retries have to wait long enough to outlast it, not fire within ~300ms.
+  it("spaces its 5xx retries far enough apart to outlast a gateway blip", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      const blipEndsAt = Date.now() + 30_000;
+      calls = [];
+      currentFetch = async (url, init) => {
+        calls.push({ url: String(url), body: JSON.parse((init as { body: string }).body) });
+        const down = Date.now() < blipEndsAt;
+        return new Response(JSON.stringify(down ? { error: { message: "Bad Gateway" } } : responsesOk("answer")), {
+          status: down ? 502 : 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const pending = runQuery({
+        provider: "google",
+        model: "gemini-flash-latest",
+        apiKey: KEY,
+        route: { router: "concentrate", baseUrl: null },
+        prompt: "q",
+        webSearch: true,
+      });
+      await vi.runAllTimersAsync();
+      const res = await pending;
+
+      expect(res.text).toBe("answer");
+      expect(calls.length).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces a 401 immediately as an invalid key", async () => {

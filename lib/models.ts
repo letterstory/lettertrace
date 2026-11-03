@@ -38,7 +38,7 @@ export const PROVIDERS: Record<Provider, ProviderInfo> = {
   anthropic: {
     id: "anthropic",
     label: "Anthropic (Claude)",
-    keyUrl: "https://console.anthropic.com/settings/keys",
+    keyUrl: "https://platform.claude.com/settings/keys",
     keyPrefix: "sk-ant-",
     // Ordered by capability; the FIRST entry is the provider default
     // (defaultModelFor), so reordering is a behavior change for every project
