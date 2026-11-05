@@ -36,7 +36,7 @@ export const metadata: Metadata = {
     template: "%s · Lettertrace",
   },
   description:
-    "Open-source, bring-your-own-key monitoring for how your brand shows up in AI assistant answers. Track topics, generate prompt variations, watch trends, and benchmark competitors.",
+    "Open-source, bring-your-own-key monitoring of how your brand shows up in AI assistant answers. Track topics, watch trends, and benchmark competitors.",
   openGraph: {
     title: "Lettertrace: Monitor how AI talks about your brand",
     description:
