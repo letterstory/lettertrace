@@ -60,6 +60,7 @@ export function RunNow({
           clicked — the spinner already says a wait is underway. */}
       <Button
         onClick={run}
+        data-letter-feature="Run report"
         loading={loading}
         loadingText="Running…"
         disabled={disabled}
