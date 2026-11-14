@@ -9,6 +9,7 @@ import { ProductCta } from "@/components/dashboard/product-cta";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { TrialEndedModal } from "@/components/dashboard/trial-ended-modal";
 import { LetterproveAttest } from "@/components/letterprove-attest";
+import { LetterVisitDashboard } from "@/components/lettervisit-dashboard";
 import { PostHogIdentify } from "@/components/posthog-identify";
 import { signupMethodOf } from "@/lib/posthog-client-events";
 import { isFirstSignIn } from "@/lib/letterprove";
@@ -156,6 +157,9 @@ export default async function DashboardLayout({
           this boundary — and because `user` is already resolved above, so it
           costs no extra query. Only the domain of the address is ever sent. */}
       <LetterproveAttest email={user.email} firstSignIn={isFirstSignIn(user)} />
+      {/* Which features signed-in companies use, for the proof's "features in
+          use" section. Identification stays off here; see the component. */}
+      <LetterVisitDashboard email={user.email} />
       <PostHogIdentify
         userId={user.id}
         email={user.email}
