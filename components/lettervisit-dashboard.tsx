@@ -17,7 +17,7 @@ import { useEffect } from "react";
  * Visitors site per domain), which has visitor identification on, so this tag
  * carries data-identification="off" and queues consent "denied" before it
  * loads: either one keeps the identification pixel off. ⌘L and A/B tests are
- * off too; nothing in the product is edited or tested from the page.
+ * limited to page data and off, respectively; nothing in the product is edited or tested from the page.
  *
  * Only one copy of v.js runs per page (window.__lettervisit). Arriving from a
  * public page by client-side navigation (the blog's Dashboard button) would
@@ -29,7 +29,9 @@ import { useEffect } from "react";
 
 const SCRIPT_ID = "lettervisit-dashboard";
 
-type LetterVisit = ((cmd: string, ...args: unknown[]) => void) & { q?: unknown[][] };
+type LetterVisit = ((cmd: string, ...args: unknown[]) => void) & {
+  q?: unknown[][];
+};
 
 declare global {
   interface Window {
@@ -48,7 +50,11 @@ function queue(): LetterVisit {
   return window.lettervisit;
 }
 
-export function LetterVisitDashboard({ email }: { email: string | null | undefined }) {
+export function LetterVisitDashboard({
+  email,
+}: {
+  email: string | null | undefined;
+}) {
   const key = process.env.NEXT_PUBLIC_LETTERVISIT_KEY;
 
   useEffect(() => {
@@ -67,7 +73,7 @@ export function LetterVisitDashboard({ email }: { email: string | null | undefin
         script.src = `https://lettervisit.com/v.js?k=${key}`;
         script.setAttribute("data-key", key);
         script.setAttribute("data-identification", "off");
-        script.setAttribute("data-editor", "off");
+        script.setAttribute("data-editor", "data");
         script.setAttribute("data-variationals", "off");
         document.head.appendChild(script);
       }
