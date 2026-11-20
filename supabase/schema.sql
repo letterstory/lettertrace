@@ -1578,13 +1578,17 @@ create table if not exists public.web_mentions (
 create table if not exists public.search_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null check (provider in ('brave')),
+  provider text not null check (provider in ('brave', 'keenable')),
   label text,
   encrypted_key text not null,
   key_hint text not null,
   created_at timestamptz not null default now(),
   unique (user_id, provider)
 );
+
+alter table public.search_keys drop constraint if exists search_keys_provider_check;
+alter table public.search_keys
+  add constraint search_keys_provider_check check (provider in ('brave', 'keenable'));
 
 create index if not exists idx_web_mention_watch_project on public.web_mention_watch (project_id);
 create index if not exists idx_web_mention_runs_project on public.web_mention_runs (project_id, created_at desc);

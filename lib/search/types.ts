@@ -1,7 +1,7 @@
 // Shared contracts for web-search providers. Kept apart from the registry in
 // index.ts so an adapter never has to import the module that imports it.
 
-export type SearchProviderId = "brave";
+export type SearchProviderId = "brave" | "keenable";
 
 /** One organic result, normalized across providers. */
 export interface SearchResult {

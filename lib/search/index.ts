@@ -14,6 +14,7 @@
 // ==================================================================
 
 import { braveProvider } from "./brave";
+import { keenableProvider } from "./keenable";
 import type { SearchProvider, SearchProviderId } from "./types";
 
 export type {
@@ -27,6 +28,7 @@ export { SearchRateLimitError } from "./types";
 
 export const SEARCH_PROVIDERS: Record<SearchProviderId, SearchProvider> = {
   brave: braveProvider,
+  keenable: keenableProvider,
 };
 
 export const SEARCH_PROVIDER_LIST: SearchProvider[] = Object.values(SEARCH_PROVIDERS);
