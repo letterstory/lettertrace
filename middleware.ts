@@ -1,39 +1,21 @@
-import { type NextRequest, type NextFetchEvent } from "next/server";
+import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { reportAccess } from "@/lib/owned-access";
 
-// AI agents and crawlers that never run JavaScript, counted by Letterstory
-// Visitors (lettervisit.com). Env-gated on the same public key as the in-page
-// script (components/lettervisit-script.tsx), so forks / self-hosted
-// deployments report nothing.
-const AGENT_UA =
-  /bot|crawl|spider|agent|fetch|chatgpt|claude|perplexity|anthropic|openai|gemini|google|mistral|cohere|externalhit|-user/i;
-
-function reportAgentVisit(request: NextRequest, event: NextFetchEvent) {
-  const key = process.env.NEXT_PUBLIC_LETTERVISIT_KEY;
-  if (!key) return;
-  const path = request.nextUrl.pathname;
-  if (path.startsWith("/api/")) return;
-  const ua = request.headers.get("user-agent") ?? "";
-  if (!AGENT_UA.test(ua) && !request.headers.has("signature-agent")) return;
-  // waitUntil keeps the forward alive after the response is sent, without
-  // making the visitor wait for it.
-  event.waitUntil(
-    fetch("https://lettervisit.com/api/v1/agent-visit", {
-      method: "POST",
-      body: JSON.stringify({
-        k: key,
-        ua,
-        ip: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
-        path,
-        host: request.nextUrl.hostname,
-        signature_agent: request.headers.get("signature-agent"),
-      }),
-    }).catch(() => {}),
-  );
-}
+// Credentials that must never survive in a URL. Before the login form forced
+// POST, a submit that beat hydration sent them as a GET query string.
+const CREDENTIAL_PARAMS = ["password", "email"];
 
 export async function middleware(request: NextRequest, event: NextFetchEvent) {
+  // Strip credentials from the URL before the page renders, so they don't
+  // stay in the address bar or get captured by analytics as $current_url.
+  const leaked = CREDENTIAL_PARAMS.filter((p) => request.nextUrl.searchParams.has(p));
+  if (leaked.length > 0) {
+    const clean = request.nextUrl.clone();
+    for (const p of leaked) clean.searchParams.delete(p);
+    return NextResponse.redirect(clean, 303);
+  }
+
   // Owned-site access telemetry for the marketing blog. Middleware runs before
   // the CDN cache, so it captures AI crawlers and search bots that never execute
   // JS (the in-page beacon only sees humans). Fire-and-forget via waitUntil so
@@ -48,7 +30,6 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
       })
     );
   }
-  reportAgentVisit(request, event);
   return updateSession(request);
 }
 

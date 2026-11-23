@@ -918,9 +918,12 @@ async function resumeRunMeasured(
       // route whenever Concentrate cannot serve the engine, so "direct" covers
       // both wallets and a muted-by-route rule hides the operator's own
       // credit exhaustion behind an identical message.
+      // run_id + prompt_id tie a failed ask to the answer the run is missing.
       recordOpsError("engine.answer", err, {
         provider,
         model,
+        run_id: runId,
+        prompt_id: prompt.id,
         route: route?.router ?? "direct",
         key_source: params.keySource ?? "unknown",
       });

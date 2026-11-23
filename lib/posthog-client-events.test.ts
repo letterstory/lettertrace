@@ -5,6 +5,8 @@ import {
   shouldCaptureSignup,
   signupEventProperties,
   signupMethodOf,
+  trialEndedKeySavedProperties,
+  trialEndedShownProperties,
 } from "@/lib/posthog-client-events";
 
 function memoryStorage(initial?: string) {
@@ -57,6 +59,20 @@ describe("browser analytics decisions", () => {
       signup_method: "email",
       email_type: "personal",
       channel: "dashboard",
+    });
+  });
+
+  it("counts a trial-ended impression without the key, and a save by which fields landed", () => {
+    expect(trialEndedShownProperties(15, 15)).toEqual({
+      channel: "dashboard",
+      runs_used: 15,
+      run_limit: 15,
+    });
+    expect(trialEndedKeySavedProperties(15, 15, ["anthropic", "openrouter"])).toEqual({
+      channel: "dashboard",
+      runs_used: 15,
+      run_limit: 15,
+      keys: ["anthropic", "openrouter"],
     });
   });
 
