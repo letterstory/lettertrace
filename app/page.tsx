@@ -208,9 +208,9 @@ export default function LandingPage() {
             className="group inline-flex animate-fade-up items-center gap-2.5 rounded-full border border-ink/15 bg-surface/60 py-1 pl-1 pr-3.5 text-sm text-ink-soft backdrop-blur transition hover:border-ink/30 hover:text-ink"
           >
             <span className="rounded-full bg-terracotta px-2.5 py-0.5 font-mono text-[10.5px] uppercase tracking-widest text-[#1A1917]">
-              MIT
+              MIT{" "}
             </span>
-            Open source, bring your own key
+            · Open source, bring your own key
             <ArrowRight className="h-3.5 w-3.5 text-terracotta-dark transition group-hover:translate-x-0.5" />
           </a>
           <h1
