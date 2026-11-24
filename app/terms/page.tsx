@@ -29,7 +29,7 @@ export default function TermsPage() {
       </Section>
 
       <Section n={4} title="Your provider keys and costs">
-        <p>Lettertrace is bring-your-own-key. When you add an Anthropic or OpenAI key, runs execute against your own account with that provider.</p>
+        <p>Lettertrace is bring-your-own-key. When you add an Anthropic, OpenAI, or Google key, runs execute against your own account with that provider.</p>
         <ul>
           <li><strong>You pay those providers directly.</strong> We do not mark up, resell, or reimburse provider usage, and we are not responsible for charges you incur. Monitoring runs consume tokens every time they execute, including on a schedule.</li>
           <li><strong>You must comply with your provider&apos;s terms.</strong> Using Lettertrace does not exempt you from them.</li>
