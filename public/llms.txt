@@ -1,0 +1,12 @@
+# Lettertrace
+
+> Lettertrace is open-source (MIT), bring-your-own-key monitoring for how your brand shows up in AI assistant answers. You describe your brand and a few topics; Lettertrace generates realistic prompts people ask ChatGPT, Claude, Gemini, Google AI Overviews and Perplexity, runs them with your own API keys, detects when your brand and competitors are mentioned, captures the sources the models cite, and charts visibility, sentiment and share of voice over time. Use the hosted app at lettertrace.com or self-host it.
+
+## Key pages
+
+- [Home](https://lettertrace.com/): What Lettertrace does, how a run works, and its features
+- [Blog](https://lettertrace.com/blog): Articles on AI search visibility and answer engine optimization
+- [Sign in](https://lettertrace.com/login): Create an account or sign in to the dashboard
+- [Source code on GitHub](https://github.com/letterstory/lettertrace): Self-hosting guide, docs and MIT-licensed code
+- [Privacy policy](https://lettertrace.com/privacy)
+- [Terms of service](https://lettertrace.com/terms)
