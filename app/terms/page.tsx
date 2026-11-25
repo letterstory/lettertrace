@@ -21,7 +21,7 @@ export default function TermsPage() {
       </Section>
 
       <Section n={2} title="What Lettertrace does">
-        <p>Lettertrace sends questions you configure to AI assistants such as Claude and ChatGPT, records their answers, and reports how often your brand and your competitors are named, in what tone, and how prominently. It is a measurement tool. It does not influence what those models say.</p>
+        <p>Lettertrace sends questions you configure to AI assistants such as Claude, ChatGPT, and Gemini, records their answers, and reports how often your brand and your competitors are named, in what tone, and how prominently. It is a measurement tool. It does not influence what those models say.</p>
       </Section>
 
       <Section n={3} title="Accounts">
