@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme";
+import { UsageLine } from "@/components/usage-line";
 
 // Shared chrome for the public legal pages (/privacy, /terms). Kept separate
 // from the marketing page's nav so these stay readable and link-stable — they
@@ -55,6 +56,7 @@ export function LegalPage({
               Terms of Service
             </Link>
           </p>
+          <UsageLine className="mt-2 text-xs" />
         </div>
       </main>
     </div>

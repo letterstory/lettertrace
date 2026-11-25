@@ -4,6 +4,7 @@ import { ThemeToggle } from "@/components/theme";
 import { Button } from "@/components/ui";
 import AccessBeacon from "@/components/access-beacon";
 import { isAccessReportingConfigured } from "@/lib/owned-access";
+import { UsageLine } from "@/components/usage-line";
 
 // Shared chrome for lettertrace.com/blog. Kept separate from the marketing
 // page's nav so the reading surface stays clean. The AccessBeacon only mounts
@@ -43,6 +44,7 @@ export default function BlogLayout({ children }: { children: React.ReactNode }) 
             </Link>
           </p>
         </div>
+        <UsageLine className="mx-auto max-w-3xl px-5 pb-8 text-xs text-ink-faint" />
       </footer>
 
       {isAccessReportingConfigured() ? <AccessBeacon /> : null}
