@@ -4,6 +4,7 @@ import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme";
 import { RB2BPixel } from "@/components/rb2b-pixel";
 import { PostHogAnalytics } from "@/components/posthog";
+import { LetterTag } from "@/components/letter";
 import { publicEnvScript } from "@/lib/public-env";
 
 const dmSans = DM_Sans({
@@ -77,6 +78,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: publicEnvScript() }} />
         {/* Applies the saved theme before first paint to avoid a flash. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* Letter, on every page. */}
+        <LetterTag />
       </head>
       <body>
         <ThemeProvider>{children}</ThemeProvider>
