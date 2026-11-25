@@ -30,7 +30,7 @@ export default function PrivacyPage() {
 
       <Section n={2} title="What we send to AI providers">
         <p>This is the part most worth understanding, because it is the core of what Lettertrace does.</p>
-        <p>When a monitoring run executes, we send your prompts to Anthropic and/or OpenAI. If web search is enabled for a project, those providers also run search queries derived from your prompts. The answers come back to us and are stored against your account.</p>
+        <p>When a monitoring run executes, we send your prompts to Anthropic, OpenAI, and/or Google. If web search is enabled for a project, those providers also run search queries derived from your prompts. The answers come back to us and are stored against your account.</p>
         <p><strong>Under bring-your-own-key, those requests are made with your API key, under your own account with that provider.</strong> How they handle, retain, and train on that traffic is governed by your agreement with them, not by this policy. Review Anthropic&apos;s and OpenAI&apos;s privacy terms directly.</p>
         <p>If you instead use trial runs on our shared keys, those requests are made under The Letter Company&apos;s provider accounts and are subject to our agreements with those providers.</p>
         <p>Prompts are questions about a market or category. Do not put personal data, customer information, or confidential material into a prompt. It will be transmitted to a third-party model provider.</p>
