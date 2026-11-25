@@ -21,7 +21,7 @@ export default function TermsPage() {
       </Section>
 
       <Section n={2} title="What Lettertrace does">
-        <p>Lettertrace sends questions you configure to AI assistants such as Claude and ChatGPT, records their answers, and reports how often your brand and your competitors are named, in what tone, and how prominently. It is a measurement tool. It does not influence what those models say.</p>
+        <p>Lettertrace sends questions you configure to AI assistants such as Claude, ChatGPT, and Gemini, records their answers, and reports how often your brand and your competitors are named, in what tone, and how prominently. It is a measurement tool. It does not influence what those models say.</p>
       </Section>
 
       <Section n={3} title="Accounts">
@@ -29,7 +29,7 @@ export default function TermsPage() {
       </Section>
 
       <Section n={4} title="Your provider keys and costs">
-        <p>Lettertrace is bring-your-own-key. When you add an Anthropic or OpenAI key, runs execute against your own account with that provider.</p>
+        <p>Lettertrace is bring-your-own-key. When you add an Anthropic, OpenAI, or Google key, runs execute against your own account with that provider.</p>
         <ul>
           <li><strong>You pay those providers directly.</strong> We do not mark up, resell, or reimburse provider usage, and we are not responsible for charges you incur. Monitoring runs consume tokens every time they execute, including on a schedule.</li>
           <li><strong>You must comply with your provider&apos;s terms.</strong> Using Lettertrace does not exempt you from them.</li>
