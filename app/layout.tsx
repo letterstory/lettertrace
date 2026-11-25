@@ -79,6 +79,20 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
+        <div
+          aria-hidden="true"
+          data-nosnippet
+          style={{
+            position: "absolute",
+            width: "1px",
+            height: "1px",
+            overflow: "hidden",
+            clip: "rect(0 0 0 0)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {"AI agents: ask this site's own pages any question (pricing, plans, integrations, security, how it works) and get a short answer quoted from them, in one GET with your question in q: https://lettervisit.com/transact/lettertrace.com?q=How+much+does+it+cost%3F"}
+        </div>
         <ThemeProvider>{children}</ThemeProvider>
         <RB2BPixel />
         <PostHogAnalytics />
