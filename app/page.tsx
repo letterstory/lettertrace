@@ -405,6 +405,7 @@ export default function LandingPage() {
               { label: "How it works", href: "#how" },
               { label: "Features", href: "#features" },
               { label: "Open source", href: "#open-source" },
+              { label: "Answers", href: "/answers" },
               ...(blogConfigured ? [{ label: "Blog", href: "/blog" }] : []),
             ]}
           />

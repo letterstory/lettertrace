@@ -1,6 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  async rewrites() {
+    return [
+      {
+        source: "/ask",
+        destination: "https://lettervisit.com/transact/lettertrace.com",
+      },
+    ];
+  },
   // Emits .next/standalone — a self-contained server with only the node_modules
   // it actually needs. This is what keeps the container image small enough to
   // be worth publishing. Vercel ignores it, so the hosted deploy is unaffected.
