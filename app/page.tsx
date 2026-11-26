@@ -126,12 +126,12 @@ const FEATURES = [
 ];
 
 const HEADLINE: { text: string; em?: boolean }[] = [
-  { text: "Track" },
-  { text: "your" },
+  { text: "What" },
   { text: "AI" },
-  { text: "visibility," },
-  { text: "for", em: true },
-  { text: "free.", em: true },
+  { text: "says" },
+  { text: "about" },
+  { text: "you," },
+  { text: "measured.", em: true },
 ];
 
 const ASSISTANTS = [
@@ -215,7 +215,7 @@ export default function LandingPage() {
             <ArrowRight className="h-3.5 w-3.5 text-terracotta-dark transition group-hover:translate-x-0.5" />
           </a>
           <h1
-            aria-label="Track your AI visibility, for free."
+            aria-label="What AI says about you, measured."
             className="apparition mx-auto mt-7 max-w-5xl text-[2.6rem] font-normal leading-[0.98] tracking-[-0.03em] text-ink [text-wrap:balance] sm:text-7xl lg:text-[5.5rem]"
           >
             {HEADLINE.map((w, i) => (
@@ -227,8 +227,8 @@ export default function LandingPage() {
             ))}
           </h1>
           <p className="mx-auto mt-7 max-w-2xl animate-fade-up text-lg text-ink-soft [animation-delay:500ms] sm:text-xl">
-            Lettertrace measures how often Claude, ChatGPT, and Gemini mention your company.
-            But there&apos;s a catch: it&apos;s free end-to-end, developer-first, and open source.
+            See how often, and how favorably, Claude, ChatGPT, and Gemini mention your company,
+            next to the competitors you track. Free, open source, and run on your own API keys.
           </p>
           <div className="mt-9 flex animate-fade-up flex-wrap items-center justify-center gap-3 [animation-delay:650ms]">
             <Button href="/login" size="lg">
