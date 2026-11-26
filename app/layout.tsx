@@ -6,6 +6,7 @@ import { RB2BPixel } from "@/components/rb2b-pixel";
 import { PostHogAnalytics } from "@/components/posthog";
 import { LetterTag } from "@/components/letter";
 import { publicEnvScript } from "@/lib/public-env";
+import { getUsageStats, USAGE_DATA_URL } from "@/lib/usage-stats";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -59,11 +60,22 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const usage = await getUsageStats();
+  const organizationJsonLd = usage
+    ? {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        name: "Lettertrace",
+        url: siteUrl,
+        interactionStatistic: usage.interactionStatistic,
+      }
+    : null;
+
   return (
     <html
       lang="en"
@@ -80,6 +92,22 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Letter, on every page. */}
         <LetterTag />
+        {usage ? (
+          <link
+            rel="alternate"
+            type="application/json"
+            href={USAGE_DATA_URL}
+            title="Usage statistics"
+          />
+        ) : null}
+        {organizationJsonLd ? (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{
+              __html: JSON.stringify(organizationJsonLd).replace(/</g, "\\u003c"),
+            }}
+          />
+        ) : null}
       </head>
       <body>
         <div
