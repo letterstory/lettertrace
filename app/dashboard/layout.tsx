@@ -10,6 +10,7 @@ import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { TrialEndedModal } from "@/components/dashboard/trial-ended-modal";
 import { LetterproveAttest } from "@/components/letterprove-attest";
 import { PostHogIdentify } from "@/components/posthog-identify";
+import { LetterIdentify } from "@/components/letter";
 import { signupMethodOf } from "@/lib/posthog-client-events";
 import { isFirstSignIn } from "@/lib/letterprove";
 import { FounderCallOffer } from "@/components/dashboard/founder-call";
@@ -162,6 +163,12 @@ export default async function DashboardLayout({
         signupMethod={signupMethodOf(
           (user.app_metadata as { provider?: unknown } | undefined)?.provider,
         )}
+        firstSignIn={isFirstSignIn(user)}
+      />
+      <LetterIdentify
+        userId={user.id}
+        email={user.email}
+        account={project?.name}
         firstSignIn={isFirstSignIn(user)}
       />
 
