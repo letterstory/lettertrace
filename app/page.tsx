@@ -235,6 +235,9 @@ export default function LandingPage() {
               Start monitoring: it&apos;s free
               <ArrowRight className="h-4 w-4" />
             </Button>
+            <Button href="/contact" variant="secondary" size="lg">
+              Book a demo
+            </Button>
             <InstallCli />
             <a
               href="https://letter.company"
@@ -423,7 +426,7 @@ export default function LandingPage() {
             links={[
               { label: "Privacy Policy", href: "/privacy" },
               { label: "Terms of Service", href: "/terms" },
-              { label: "Contact", href: "mailto:support@letterbrace.com" },
+              { label: "Contact", href: "/contact" },
             ]}
           />
         </div>
