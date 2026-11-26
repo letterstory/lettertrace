@@ -22,6 +22,7 @@ import { HeroMonitor } from "@/components/landing/hero-monitor";
 import { WatchItTrace } from "@/components/landing/watch-it-trace";
 import { TraceChart } from "@/components/landing/trace-chart";
 import { AssemblingGlyph } from "@/components/landing/glyph";
+import { UsageLine } from "@/components/usage-line";
 import { ProviderLogo } from "@/components/landing/provider-logo";
 import {
   FOUNDER_CALL_LANDING_SOURCE,
@@ -405,6 +406,7 @@ export default function LandingPage() {
               { label: "How it works", href: "#how" },
               { label: "Features", href: "#features" },
               { label: "Open source", href: "#open-source" },
+              { label: "Answers", href: "/answers" },
               ...(blogConfigured ? [{ label: "Blog", href: "/blog" }] : []),
             ]}
           />
@@ -429,6 +431,7 @@ export default function LandingPage() {
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-5 py-5 text-xs text-ink-faint">
             <span>© 2026 Made by the Letter Company</span>
             <span className="font-mono">built for AEO / GEO teams</span>
+            <UsageLine className="w-full" />
           </div>
         </div>
         {/* Oversized wordmark bleeding off the bottom edge: the sign-off. */}
