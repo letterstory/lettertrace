@@ -24,6 +24,7 @@ import { TraceChart } from "@/components/landing/trace-chart";
 import { AssemblingGlyph } from "@/components/landing/glyph";
 import { UsageLine } from "@/components/usage-line";
 import { ProviderLogo } from "@/components/landing/provider-logo";
+import { G2Badge } from "@/components/landing/g2-badge";
 import {
   FOUNDER_CALL_LANDING_SOURCE,
   founderCallUrl,
@@ -254,6 +255,8 @@ export default function LandingPage() {
           <HeroMonitor terminal={<Terminal />} />
         </div>
       </section>
+
+      <G2Badge />
 
       {/* The assistants it watches */}
       <section className="border-t border-ink/10">
