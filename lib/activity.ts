@@ -1,6 +1,7 @@
 import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { ApiAuthContext, ResourceAudience, TokenType } from "@/lib/api-auth";
 import type { ActorType, LogCategory, LogChannel, LogStatus } from "@/lib/types";
+import { fireAndForget } from "@/lib/notify";
 
 // Re-export for callers that build actor/channel bits without pulling types.ts.
 export type { LogCategory, LogChannel, LogStatus } from "@/lib/types";
@@ -236,13 +237,21 @@ export async function logApiRequest(
   },
 ): Promise<void> {
   const meta = requestMeta(request);
-  await logActivity({
-    userId: ctx.userId,
-    ...apiActor(ctx, surface),
-    method: meta.method,
-    path: meta.path,
-    ip: meta.ip,
-    userAgent: meta.userAgent,
-    ...event,
-  });
+  // Handed off rather than awaited: no response depends on the audit row, and
+  // on a database having a bad second this insert was the slowest leg of 5 of
+  // the 115 public-API requests that took over three seconds in the week to
+  // 2026-10-16 (worst 7.6 s). The write still runs to completion on Vercel via
+  // waitUntil; off Vercel it is a bare background promise. Stays async so the
+  // ~30 `await logApiRequest(...)` call sites need no edit.
+  fireAndForget(
+    logActivity({
+      userId: ctx.userId,
+      ...apiActor(ctx, surface),
+      method: meta.method,
+      path: meta.path,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      ...event,
+    }),
+  );
 }

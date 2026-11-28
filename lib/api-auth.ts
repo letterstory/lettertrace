@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { hashApiKey } from "@/lib/crypto";
+import { fireAndForget } from "@/lib/notify";
 
 // Bearer-token auth for the programmatic surface (/api/v1 and /api/mcp).
 // Requests carry a Lettertrace credential instead of a Supabase session, so the
@@ -77,7 +78,13 @@ export function isOAuthToken(
  *
  * Fail-closed: expiry and revocation are pushed into the SQL WHERE clause, so a
  * query error or a missing row yields null (no access), never a context.
- * Touches last_used_at so the settings pages can show stale credentials.
+ *
+ * Touches last_used_at so the settings pages can show stale credentials. That
+ * stamp is handed to `fireAndForget` rather than awaited: nothing in the
+ * response depends on it, and on a database having a bad second it was the
+ * slowest leg of 12 of the 115 public-API requests that took over three
+ * seconds in the week to 2026-10-16 (worst 11.0 s). It becomes best-effort —
+ * a stamp can be lost if the invocation is torn down early.
  */
 export async function authenticateApiKey(
   token: string | null | undefined,
@@ -93,10 +100,16 @@ export async function authenticateApiKey(
     .eq("key_hash", hash)
     .maybeSingle();
   if (apiKey) {
-    await supabase
-      .from("api_keys")
-      .update({ last_used_at: new Date().toISOString() })
-      .eq("id", apiKey.id);
+    // Promise.resolve(): a PostgREST builder is a thenable, not a Promise, and
+    // fireAndForget calls .catch() on what it is given.
+    fireAndForget(
+      Promise.resolve(
+        supabase
+          .from("api_keys")
+          .update({ last_used_at: new Date().toISOString() })
+          .eq("id", apiKey.id),
+      ),
+    );
     return {
       supabase,
       userId: apiKey.user_id as string,
@@ -122,15 +135,23 @@ export async function authenticateApiKey(
     .gt("expires_at", nowIso)
     .maybeSingle();
   if (oauth) {
-    await supabase
-      .from("oauth_access_tokens")
-      .update({ last_used_at: nowIso })
-      .eq("id", oauth.id);
+    fireAndForget(
+      Promise.resolve(
+        supabase
+          .from("oauth_access_tokens")
+          .update({ last_used_at: nowIso })
+          .eq("id", oauth.id),
+      ),
+    );
     if (oauth.authorization_id) {
-      await supabase
-        .from("oauth_authorizations")
-        .update({ last_used_at: nowIso })
-        .eq("id", oauth.authorization_id);
+      fireAndForget(
+        Promise.resolve(
+          supabase
+            .from("oauth_authorizations")
+            .update({ last_used_at: nowIso })
+            .eq("id", oauth.authorization_id),
+        ),
+      );
     }
     return {
       supabase,
